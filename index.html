@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Jeopardy Board</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+
+<div class="marquee">
+  <input id="titleInput" class="marquee-title" value="JEOPARDY" maxlength="40" disabled>
+</div>
+<div class="session-bar" id="sessionBar"></div>
+
+<div class="toolbar">
+  <button class="btn gold" id="editToggleBtn">✎ Edit Board</button>
+  <button class="btn" id="sessionsBtn">Sessions</button>
+  <button class="btn" id="resetRoundBtn">↺ Reset Round (keep content)</button>
+</div>
+<div class="edit-banner" id="editBanner"></div>
+
+<div id="boardWrap"><div id="board"></div></div>
+<div id="teamsWrap"></div>
+<div class="save-indicator" id="saveIndicator">&nbsp;</div>
+
+<!-- CLUE MODAL -->
+<div class="modal-overlay hidden" id="clueModalOverlay">
+  <div class="modal" id="clueModal">
+    <div class="clue-modal-header" id="clueModalCategory"></div>
+    <div class="clue-value-big" id="clueModalValue"></div>
+    <div class="clue-media" id="clueModalMedia"></div>
+    <div class="clue-question" id="clueModalQuestion"></div>
+    <div class="clue-answer-box" id="clueModalAnswerBox"></div>
+    <div class="clue-actions">
+      <button class="btn gold" id="revealBtn">Reveal Answer</button>
+      <button class="btn" id="closeClueBtn">Mark Complete &amp; Close</button>
+    </div>
+    <div class="score-row" id="clueScoreRow"></div>
+  </div>
+</div>
+
+<!-- EDIT CLUE MODAL -->
+<div class="modal-overlay hidden" id="editModalOverlay">
+  <div class="modal">
+    <div class="modal-title">Edit Clue</div>
+    <div class="form-row">
+      <label>Question / Prompt (shown first)</label>
+      <textarea id="editQuestion" placeholder="e.g. This 1994 Disney film features a lion cub named Simba"></textarea>
+    </div>
+    <div class="form-row">
+      <label>Answer (revealed on click)</label>
+      <textarea id="editAnswer" placeholder="e.g. What is The Lion King?"></textarea>
+    </div>
+    <div class="form-row">
+      <label>Image — paste a URL, or upload a file</label>
+      <input type="url" id="editImageUrl" placeholder="https://... .jpg / .png / .gif">
+      <div class="file-row">
+        <input type="file" id="editImageFile" accept="image/*">
+        <span class="file-status" id="editImageFileStatus"></span>
+        <button type="button" class="file-clear" id="editImageFileClear">✕ remove</button>
+      </div>
+    </div>
+    <div class="form-row">
+      <label>Video — paste a URL/YouTube link, or upload a file</label>
+      <input type="url" id="editVideoUrl" placeholder="https://... video file, or a YouTube link">
+      <div class="file-row">
+        <input type="file" id="editVideoFile" accept="video/*">
+        <span class="file-status" id="editVideoFileStatus"></span>
+        <button type="button" class="file-clear" id="editVideoFileClear">✕ remove</button>
+      </div>
+      <div class="hint">Direct video file link, YouTube URL, or an uploaded file — any of the three works.</div>
+    </div>
+    <div class="form-row">
+      <label>Audio — paste a URL, or upload a file</label>
+      <input type="url" id="editAudioUrl" placeholder="https://... .mp3 / .wav">
+      <div class="file-row">
+        <input type="file" id="editAudioFile" accept="audio/*">
+        <span class="file-status" id="editAudioFileStatus"></span>
+        <button type="button" class="file-clear" id="editAudioFileClear">✕ remove</button>
+      </div>
+    </div>
+    <div class="hint" style="text-align:center;margin-bottom:8px;">You can fill in any combination — e.g. an image AND audio on the same clue. Uploaded files stay embedded in the board itself, nothing goes to a server.</div>
+    <div class="modal-footer">
+      <button class="btn gold" id="saveClueBtn">Save Clue</button>
+      <button class="btn" id="cancelEditBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- SESSIONS MODAL -->
+<div class="modal-overlay hidden" id="sessionsModalOverlay">
+  <div class="modal">
+    <div class="modal-title">Saved Sessions</div>
+    <div class="hint" style="text-align:center;margin-bottom:14px;">Each session is a full, separate board — its own categories, clues, media and scores. Switching sessions won't touch the others.</div>
+    <div class="session-list" id="sessionList"></div>
+    <div class="modal-footer">
+      <button class="btn gold" id="createSessionInModalBtn">＋ New Session</button>
+      <button class="btn" id="closeSessionsModalBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- GENERIC DIALOG (replaces native prompt/confirm/alert, which browsers block in sandboxed previews) -->
+<div class="modal-overlay hidden" id="dialogModalOverlay">
+  <div class="modal" style="max-width:420px;">
+    <div class="modal-title" id="dialogTitle">Confirm</div>
+    <div class="hint" id="dialogMessage" style="text-align:center;font-size:14px;color:var(--text);margin-bottom:14px;"></div>
+    <div class="form-row" id="dialogInputRow" style="display:none;">
+      <input type="text" id="dialogInput">
+    </div>
+    <div class="modal-footer">
+      <button class="btn gold" id="dialogOkBtn">OK</button>
+      <button class="btn" id="dialogCancelBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<script src="storage.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
