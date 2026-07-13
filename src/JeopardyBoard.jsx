@@ -5,6 +5,8 @@ import {
   blankClue,
   blankCategory,
   migrateClueSchemaIfNeeded,
+  MediaStore,
+  isMediaRef,
 } from "./lib/storage";
 import { formatDate, isDataUrl, humanSize } from "./lib/utils";
 import ClueModal from "./components/ClueModal";
@@ -33,9 +35,9 @@ export default function JeopardyBoard() {
   const [editingTarget, setEditingTarget] = useState(null); // {catId, value}
   const [editForm, setEditForm] = useState({ question: "", answer: "" });
   const [mediaState, setMediaState] = useState({
-    image: { mode: "url", url: "", fileDataUrl: "", fileName: "" },
-    video: { mode: "url", url: "", fileDataUrl: "", fileName: "" },
-    audio: { mode: "url", url: "", fileDataUrl: "", fileName: "" },
+    image: { mode: "url", url: "", fileRef: "", fileName: "" },
+    video: { mode: "url", url: "", fileRef: "", fileName: "" },
+    audio: { mode: "url", url: "", fileRef: "", fileName: "" },
   });
 
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
@@ -289,10 +291,10 @@ export default function JeopardyBoard() {
     const next = {};
     ["image", "video", "audio"].forEach((type) => {
       const existing = clue[type + "Url"] || "";
-      if (isDataUrl(existing)) {
-        next[type] = { mode: "file", url: "", fileDataUrl: existing, fileName: "File attached (from earlier) — remove to replace" };
+      if (isMediaRef(existing) || isDataUrl(existing)) {
+        next[type] = { mode: "file", url: "", fileRef: existing, fileName: "File attached (from earlier) — remove to replace" };
       } else {
-        next[type] = { mode: "url", url: existing, fileDataUrl: "", fileName: "" };
+        next[type] = { mode: "url", url: existing, fileRef: "", fileName: "" };
       }
     });
     setMediaState(next);
@@ -302,22 +304,24 @@ export default function JeopardyBoard() {
   }
   async function handleMediaFile(type, file) {
     if (!file) return;
+    // IndexedDB comfortably handles much larger files than the old base64/localStorage
+    // approach did — this warning is now just a courtesy for very large uploads.
     const proceed =
-      file.size < 8 * 1024 * 1024 ||
-      (await appConfirm(`"${file.name}" is ${humanSize(file.size)}. Large files may be slow to save or might not persist after a refresh. Use it anyway?`));
+      file.size < 50 * 1024 * 1024 ||
+      (await appConfirm(`"${file.name}" is ${humanSize(file.size)}. That's a large file — it may take a moment to store. Use it anyway?`));
     if (!proceed) return;
-    const reader = new FileReader();
-    reader.onload = () => {
+    try {
+      const ref = await MediaStore.put(file);
       setMediaState((prev) => ({
         ...prev,
-        [type]: { mode: "file", url: "", fileDataUrl: reader.result, fileName: `📎 ${file.name} (${humanSize(file.size)})` },
+        [type]: { mode: "file", url: "", fileRef: ref, fileName: `📎 ${file.name} (${humanSize(file.size)})` },
       }));
-    };
-    reader.onerror = () => appAlert("Could not read that file.");
-    reader.readAsDataURL(file);
+    } catch (e) {
+      appAlert("Could not store that file — your browser may be blocking local storage (e.g. private browsing mode).");
+    }
   }
   function clearMediaField(type) {
-    setMediaState((prev) => ({ ...prev, [type]: { mode: "url", url: "", fileDataUrl: "", fileName: "" } }));
+    setMediaState((prev) => ({ ...prev, [type]: { mode: "url", url: "", fileRef: "", fileName: "" } }));
   }
   function saveClue() {
     if (!editingTarget) return;
@@ -329,7 +333,7 @@ export default function JeopardyBoard() {
       clue.answer = editForm.answer.trim();
       ["image", "video", "audio"].forEach((type) => {
         const m = mediaState[type];
-        clue[type + "Url"] = m.mode === "file" ? m.fileDataUrl : m.url.trim();
+        clue[type + "Url"] = m.mode === "file" ? m.fileRef : m.url.trim();
       });
       touch();
       persist();
