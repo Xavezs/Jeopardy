@@ -48,18 +48,45 @@ export default function JeopardyBoard() {
 
   const data = session ? session.data : null;
 
+  const persistTimeout = useRef(null);
+
   function touch() {
     setSession((s) => (s ? { ...s } : s));
   }
 
-  const persist = useCallback(async () => {
-    const s = sessionRef.current;
-    if (!s) return;
-    await SessionStore.saveSession(s);
-    setSaveMsg('Saved to "' + s.name + '"');
-    clearTimeout(saveMsgTimeout.current);
-    saveMsgTimeout.current = setTimeout(() => setSaveMsg(""), 1800);
+  const persist = useCallback(() => {
+    // Update the UI immediately — don't make clicks wait on a storage write.
     touch();
+    clearTimeout(persistTimeout.current);
+    persistTimeout.current = setTimeout(async () => {
+      const s = sessionRef.current;
+      if (!s) return;
+      await SessionStore.saveSession(s);
+      setSaveMsg('Saved to "' + s.name + '"');
+      clearTimeout(saveMsgTimeout.current);
+      saveMsgTimeout.current = setTimeout(() => setSaveMsg(""), 1800);
+    }, 400);
+  }, []);
+
+  const flushPersist = useCallback(async () => {
+    if (persistTimeout.current) {
+      clearTimeout(persistTimeout.current);
+      persistTimeout.current = null;
+    }
+    const s = sessionRef.current;
+    if (s) await SessionStore.saveSession(s);
+  }, []);
+
+  useEffect(() => {
+    const handleBeforeUnload = () => {
+      if (persistTimeout.current) {
+        // Best-effort — fires a synchronous-ish save attempt before the tab closes.
+        const s = sessionRef.current;
+        if (s) SessionStore.saveSession(s);
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+    return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
   function showDialog({ title, message, okLabel, showCancel }) {
@@ -97,6 +124,7 @@ export default function JeopardyBoard() {
         await SessionStore.setCurrentId(idToLoad);
       }
       migrateClueSchemaIfNeeded(loaded.data);
+      ensureClueGrid(loaded.data);
       setSession(loaded);
       setReady(true);
     })();
@@ -104,15 +132,18 @@ export default function JeopardyBoard() {
 
   /* ---------------- SESSION SWITCHING ---------------- */
   async function switchToSession(id) {
+    await flushPersist();
     const loaded = await SessionStore.loadSession(id);
     if (!loaded) return;
     migrateClueSchemaIfNeeded(loaded.data);
+    ensureClueGrid(loaded.data);
     await SessionStore.setCurrentId(id);
     setEditMode(false);
     setActiveClue(null);
     setSession(loaded);
   }
   async function createAndSwitchToNewSession(name) {
+    await flushPersist();
     const created = await SessionStore.createSession(name);
     await SessionStore.setCurrentId(created.id);
     setEditMode(true);
@@ -167,6 +198,16 @@ export default function JeopardyBoard() {
   }
 
   /* ---------------- CATEGORY / ROW ACTIONS ---------------- */
+  function ensureClueGrid(d) {
+    // Fills in any missing category×row combos. Only called after a structural
+    // change (add/remove/load) — never during render.
+    d.categories.forEach((cat) => {
+      d.values.forEach((v) => {
+        if (!cat.clues[v]) cat.clues[v] = blankClue();
+      });
+    });
+  }
+
   function renameCategory(cat, name) {
     cat.name = name || "Category";
     persist();
@@ -186,6 +227,7 @@ export default function JeopardyBoard() {
   function addCategory() {
     const d = sessionRef.current.data;
     d.categories.push(blankCategory("New Category", d.values));
+    ensureClueGrid(d);
     touch();
     persist();
   }
@@ -234,6 +276,7 @@ export default function JeopardyBoard() {
     d.categories.forEach((c) => {
       c.clues[nextVal] = blankClue();
     });
+    ensureClueGrid(d);
     touch();
     persist();
   }
@@ -398,7 +441,7 @@ export default function JeopardyBoard() {
           {editMode ? "✓ Done Editing" : "✎ Edit Board"}
         </button>
         <button className="btn" onClick={openSessionsModal}>
-          Sessions
+          ⏱ Sessions
         </button>
         <button className="btn" onClick={resetRound}>
           ↺ Reset Round (keep content)
@@ -466,8 +509,7 @@ export default function JeopardyBoard() {
                 )}
 
                 {data.categories.map((cat, catIndex) => {
-                  if (!cat.clues[v]) cat.clues[v] = blankClue();
-                  const clue = cat.clues[v];
+                  const clue = cat.clues[v] || blankClue();
                   return (
                     <div
                       key={cat.id + "-" + v}
@@ -479,7 +521,7 @@ export default function JeopardyBoard() {
                       }}
                     >
                       <div className="clue-value">${v}</div>
-                      {(clue.imageUrl || clue.videoUrl || clue.audioUrl) && <div className="media-dot">●</div>}
+                      {editMode && (clue.imageUrl || clue.videoUrl || clue.audioUrl) && <div className="media-dot">●</div>}
                     </div>
                   );
                 })}

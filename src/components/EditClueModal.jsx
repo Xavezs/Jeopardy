@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import MediaField from "./MediaField";
 
 export default function EditClueModal({
@@ -11,11 +11,18 @@ export default function EditClueModal({
   onSave,
   onClose,
 }) {
+  const [closing, setClosing] = useState(false);
+
+  const requestClose = (cb) => {
+    setClosing(true);
+    setTimeout(() => cb(), 160);
+  };
+
   return (
     <div
-      className="modal-overlay"
+      className={"modal-overlay" + (closing ? " closing" : "")}
       onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+        if (e.target === e.currentTarget) requestClose(onClose);
       }}
     >
       <div className="modal">
@@ -73,10 +80,10 @@ export default function EditClueModal({
           You can fill in any combination — e.g. an image AND audio on the same clue. Uploaded files stay embedded in the board itself, nothing goes to a server.
         </div>
         <div className="modal-footer">
-          <button className="btn gold" onClick={onSave}>
+          <button className="btn gold" onClick={() => requestClose(onSave)}>
             Save Clue
           </button>
-          <button className="btn" onClick={onClose}>
+          <button className="btn" onClick={() => requestClose(onClose)}>
             Cancel
           </button>
         </div>

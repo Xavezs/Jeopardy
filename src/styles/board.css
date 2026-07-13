@@ -69,11 +69,6 @@
     width:100%; background: rgba(0,0,0,0.25); border:1px solid var(--gold-dim); border-radius:4px;
     color:var(--text); font-family:var(--font-display); text-align:center; font-size:13px; padding:5px;
   }
-  .cat-name-input:focus{
-    outline: none;
-    box-shadow: 0 0 8px rgba(240, 185, 66, 0.4);
-    border-color: var(--gold);
-  }
   .cat-remove{
     position:absolute; top:6px; right:6px; width:22px; height:22px; border-radius:50%;
     display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:bold; line-height:1;
@@ -118,9 +113,6 @@
     color:var(--gold); font-family:var(--font-display); text-align:center; font-size:14px;
     letter-spacing:.5px; padding-bottom:4px; margin-bottom:8px;
   }
-  .team-name-input:focus{
-    outline: none;
-  }
   .team-score-row{ display:flex; align-items:center; justify-content:center; gap:8px; }
   .team-score-row button{
     width:26px; height:26px; border-radius:50%; border:1px solid rgba(240,185,66,0.3); background:#0e1550;
@@ -150,12 +142,30 @@
   }
   .team-add-card{ display:flex; align-items:center; justify-content:center; width:40px;  flex:0 0 auto; align-self: center; justify-self: center;}
 
-  .modal-overlay{ position:fixed; inset:0; background:rgba(3,4,16,0.86); display:flex; align-items:center; justify-content:center; z-index:1000; padding:20px; }
+  @keyframes overlayFadeIn{ from{ opacity:0; } to{ opacity:1; } }
+  @keyframes overlayFadeOut{ from{ opacity:1; } to{ opacity:0; } }
+  @keyframes modalPopIn{
+    from{ opacity:0; transform: scale(0.92) translateY(14px); }
+    to{ opacity:1; transform: scale(1) translateY(0); }
+  }
+  @keyframes modalPopOut{
+    from{ opacity:1; transform: scale(1) translateY(0); }
+    to{ opacity:0; transform: scale(0.94) translateY(10px); }
+  }
+
+  .modal-overlay{
+    position:fixed; inset:0; background:rgba(3,4,16,0.86); display:flex; align-items:center; justify-content:center;
+    z-index:1000; padding:20px;
+    animation: overlayFadeIn 0.18s ease both;
+  }
+  .modal-overlay.closing{ animation: overlayFadeOut 0.16s ease both; }
   .modal{
     background: linear-gradient(180deg, #141d5e, #0a0e33); border:1px solid rgba(240,185,66,0.35);
     border-radius:14px; padding:28px; max-width:820px; width:100%; max-height:88vh; overflow-y:auto;
     box-shadow: 0 20px 60px rgba(0,0,0,0.6);
+    animation: modalPopIn 0.22s cubic-bezier(0.19, 1, 0.22, 1) both;
   }
+  .modal-overlay.closing .modal{ animation: modalPopOut 0.16s ease both; }
   .clue-modal-header{ text-align:center; color:var(--gold); font-family:var(--font-display); letter-spacing:1.5px; font-size:14px; margin-bottom:14px; opacity:.85; }
   .clue-value-big{ text-align:center; font-family:var(--font-display); font-size:40px; color:var(--gold); margin-bottom:18px; text-shadow:0 0 20px rgba(240,185,66,0.3); }
   .clue-question{ font-size:22px; text-align:center; line-height:1.5; color:var(--text); margin-bottom:20px; }
@@ -189,16 +199,6 @@
   .form-row input[type=text], .form-row input[type=url], .form-row textarea{
     width:100%; padding:9px 10px; border-radius:6px; border:1px solid rgba(240,185,66,0.3);
     background:#0a0f40; color:var(--text); font-family:var(--font-body); font-size:14px;
-  }
-  .form-row textarea:focus{
-    outline: none; 
-    box-shadow: 0 0 8px rgba(240, 185, 66, 0.4);
-    border-color: var(--gold);
-  }
-  .form-row input:focus{
-    outline: none; 
-    box-shadow: 0 0 8px rgba(240, 185, 66, 0.4);
-    border-color: var(--gold);
   }
   .form-row textarea{ min-height:70px; resize:vertical; }
   .file-row{ display:flex; align-items:center; gap:10px; margin-top:6px; flex-wrap:wrap; }
@@ -322,3 +322,6 @@
     filter: brightness(0.85); transform: scale(0.93); box-shadow: 0 2px 4px rgba(0,0,0,0.2);
   }
   @media (max-width:700px){ #board{ min-width:420px; } }
+  @media (prefers-reduced-motion: reduce){
+    .modal-overlay, .modal, .modal-overlay.closing, .modal-overlay.closing .modal{ animation: none !important; }
+  }

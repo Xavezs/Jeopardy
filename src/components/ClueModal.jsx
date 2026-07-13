@@ -35,10 +35,17 @@ export default function ClueModal({ activeCat, value, clue, teams, revealed, onT
     };
   }, [clue]);
 
+  const [closing, setClosing] = useState(false);
+
+  const requestClose = (markComplete) => {
+    setClosing(true);
+    setTimeout(() => onClose(markComplete), 160);
+  };
+
   if (!activeCat || !clue) return null;
 
   return (
-    <div className="modal-overlay" onClick={(e) => { if (e.target === e.currentTarget) onClose(false); }}>
+    <div className={"modal-overlay" + (closing ? " closing" : "")} onClick={(e) => { if (e.target === e.currentTarget) requestClose(false); }}>
       <div className="modal">
         <div className="clue-modal-header">{activeCat.name}</div>
         <div className="clue-value-big">${value}</div>
@@ -65,7 +72,7 @@ export default function ClueModal({ activeCat, value, clue, teams, revealed, onT
           <button className="btn gold" onClick={onToggleReveal}>
             {revealed ? "Hide Answer" : "Reveal Answer"}
           </button>
-          <button className="btn" onClick={() => onClose(true)}>
+          <button className="btn" onClick={() => requestClose(true)}>
             Mark Complete &amp; Close
           </button>
         </div>
