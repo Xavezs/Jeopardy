@@ -67,7 +67,7 @@ export default function MediaField({ label, type, accept, placeholder, value, on
             onChange={(e) => handleFiles(e.target.files)}
           />
           <div className="dropzone-text">
-            Drop your {type || "file"} here or
+            Drop {type ? `your ${type}` : "an image, video, or audio file"} here or
           </div>
           <button
             type="button"

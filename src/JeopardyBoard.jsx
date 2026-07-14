@@ -7,6 +7,8 @@ import {
   migrateClueSchemaIfNeeded,
   MediaStore,
   isMediaRef,
+  detectMediaTypeFromFile,
+  detectMediaTypeFromUrl,
 } from "./lib/storage";
 import { formatDate, isDataUrl, humanSize } from "./lib/utils";
 import ClueModal from "./components/ClueModal";
@@ -33,11 +35,9 @@ export default function JeopardyBoard() {
   const [revealed, setRevealed] = useState(false);
 
   const [editingTarget, setEditingTarget] = useState(null); // {catId, value}
-  const [editForm, setEditForm] = useState({ question: "", answer: "" });
+  const [editForm, setEditForm] = useState({ question: "", answer: "", timerSeconds: "" });
   const [mediaState, setMediaState] = useState({
-    image: { mode: "url", url: "", fileRef: "", fileName: "" },
-    video: { mode: "url", url: "", fileRef: "", fileName: "" },
-    audio: { mode: "url", url: "", fileRef: "", fileName: "" },
+    media: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
   });
 
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
@@ -45,6 +45,21 @@ export default function JeopardyBoard() {
 
   const [dialog, setDialog] = useState(null); // {title, message, okLabel, showCancel}
   const dialogResolveRef = useRef(null);
+
+  // { [teamId]: "pulse-up" | "pulse-down" } — cleared automatically after the animation plays
+  const [scorePulse, setScorePulse] = useState({});
+  const scorePulseTimeouts = useRef({});
+  function firePulse(teamId, direction) {
+    setScorePulse((p) => ({ ...p, [teamId]: direction }));
+    clearTimeout(scorePulseTimeouts.current[teamId]);
+    scorePulseTimeouts.current[teamId] = setTimeout(() => {
+      setScorePulse((p) => {
+        const next = { ...p };
+        delete next[teamId];
+        return next;
+      });
+    }, 500);
+  }
 
   const data = session ? session.data : null;
 
@@ -288,12 +303,15 @@ export default function JeopardyBoard() {
   }
   function adjustTeamScore(team, delta) {
     team.score += delta;
+    firePulse(team.id, delta >= 0 ? "pulse-up" : "pulse-down");
     touch();
     persist();
   }
   function setTeamScore(team, rawValue) {
     const parsed = parseInt(rawValue, 10);
-    team.score = Number.isNaN(parsed) ? 0 : parsed;
+    const newScore = Number.isNaN(parsed) ? 0 : parsed;
+    if (newScore !== team.score) firePulse(team.id, newScore > team.score ? "pulse-up" : "pulse-down");
+    team.score = newScore;
     touch();
     persist();
   }
@@ -330,17 +348,17 @@ export default function JeopardyBoard() {
   function openEditModal(cat, value) {
     const clue = cat.clues[value];
     setEditingTarget({ catId: cat.id, value });
-    setEditForm({ question: clue.question || "", answer: clue.answer || "" });
-    const next = {};
-    ["image", "video", "audio"].forEach((type) => {
-      const existing = clue[type + "Url"] || "";
-      if (isMediaRef(existing) || isDataUrl(existing)) {
-        next[type] = { mode: "file", url: "", fileRef: existing, fileName: "File attached (from earlier) — remove to replace" };
-      } else {
-        next[type] = { mode: "url", url: existing, fileRef: "", fileName: "" };
-      }
+    setEditForm({
+      question: clue.question || "",
+      answer: clue.answer || "",
+      timerSeconds: clue.timerSeconds != null ? String(clue.timerSeconds) : "",
     });
-    setMediaState(next);
+    const existing = clue.mediaUrl || "";
+    const media =
+      isMediaRef(existing) || isDataUrl(existing)
+        ? { mode: "file", url: "", fileRef: existing, fileName: "File attached (from earlier) — remove to replace", fileType: clue.mediaType || "" }
+        : { mode: "url", url: existing, fileRef: "", fileName: "", fileType: "" };
+    setMediaState({ media });
   }
   function closeEditModal() {
     setEditingTarget(null);
@@ -355,16 +373,17 @@ export default function JeopardyBoard() {
     if (!proceed) return;
     try {
       const ref = await MediaStore.put(file);
+      const fileType = detectMediaTypeFromFile(file);
       setMediaState((prev) => ({
         ...prev,
-        [type]: { mode: "file", url: "", fileRef: ref, fileName: `📎 ${file.name} (${humanSize(file.size)})` },
+        [type]: { mode: "file", url: "", fileRef: ref, fileName: `📎 ${file.name} (${humanSize(file.size)})`, fileType },
       }));
     } catch (e) {
       appAlert("Could not store that file — your browser may be blocking local storage (e.g. private browsing mode).");
     }
   }
   function clearMediaField(type) {
-    setMediaState((prev) => ({ ...prev, [type]: { mode: "url", url: "", fileRef: "", fileName: "" } }));
+    setMediaState((prev) => ({ ...prev, [type]: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" } }));
   }
   function saveClue() {
     if (!editingTarget) return;
@@ -374,14 +393,36 @@ export default function JeopardyBoard() {
       const clue = cat.clues[editingTarget.value];
       clue.question = editForm.question.trim();
       clue.answer = editForm.answer.trim();
-      ["image", "video", "audio"].forEach((type) => {
-        const m = mediaState[type];
-        clue[type + "Url"] = m.mode === "file" ? m.fileRef : m.url.trim();
-      });
+      const parsedTimer = parseInt(editForm.timerSeconds, 10);
+      clue.timerSeconds = editForm.timerSeconds.trim() === "" || isNaN(parsedTimer) || parsedTimer <= 0 ? null : parsedTimer;
+      const m = mediaState.media;
+      if (m.mode === "file") {
+        clue.mediaUrl = m.fileRef;
+        clue.mediaType = m.fileType || "";
+      } else {
+        const url = m.url.trim();
+        clue.mediaUrl = url;
+        clue.mediaType = url ? detectMediaTypeFromUrl(url) : "";
+      }
       touch();
       persist();
     }
     setEditingTarget(null);
+  }
+
+  /* ---------------- TIMER SETTINGS ---------------- */
+  function toggleTimerEnabled() {
+    const d = sessionRef.current.data;
+    d.settings.timerEnabled = !d.settings.timerEnabled;
+    touch();
+    persist();
+  }
+  function setGlobalTimerDuration(rawValue) {
+    const d = sessionRef.current.data;
+    const parsed = parseInt(rawValue, 10);
+    d.settings.timerDuration = isNaN(parsed) || parsed <= 0 ? d.settings.timerDuration : parsed;
+    touch();
+    persist();
   }
 
   /* ---------------- RESET ROUND ---------------- */
@@ -451,6 +492,27 @@ export default function JeopardyBoard() {
         {editMode ? "EDIT MODE — click any cell to edit its clue, edit headers, or add/delete rows and columns" : ""}
       </div>
 
+      {editMode && (
+        <div className="timer-settings-bar">
+          <label>
+            <input type="checkbox" checked={data.settings.timerEnabled} onChange={toggleTimerEnabled} />
+            Answer timer
+          </label>
+          <label>
+            Default:
+            <input
+              type="number"
+              min="1"
+              disabled={!data.settings.timerEnabled}
+              defaultValue={data.settings.timerDuration}
+              key={"timer-default-" + session.id}
+              onBlur={(e) => setGlobalTimerDuration(e.target.value)}
+            />
+            sec
+          </label>
+        </div>
+      )}
+
       <div id="boardWrap">
         <div id="board" style={boardGridStyle}>
           {data.categories.map((cat, catIndex) => (
@@ -503,7 +565,6 @@ export default function JeopardyBoard() {
                     />
                     <button className="row-delete-btn" title="Delete this row value pattern" onClick={() => removeRow(v)}>
                       <span className="icon">✕</span>
-                      <span>Delete</span>
                     </button>
                   </div>
                 )}
@@ -521,7 +582,7 @@ export default function JeopardyBoard() {
                       }}
                     >
                       <div className="clue-value">${v}</div>
-                      {editMode && (clue.imageUrl || clue.videoUrl || clue.audioUrl) && <div className="media-dot">●</div>}
+                      {editMode && clue.mediaUrl && <div className="media-dot">●</div>}
                     </div>
                   );
                 })}
@@ -547,13 +608,17 @@ export default function JeopardyBoard() {
                 ✕
               </button>
             )}
-            <input
-              className="team-name-input"
-              disabled={!editMode}
-              defaultValue={team.name}
-              key={team.id + "-name"}
-              onBlur={(e) => renameTeam(team, e.target.value)}
-            />
+            {editMode ? (
+               <input
+                className="team-name-input"
+                disabled={!editMode}
+                defaultValue={team.name}
+                key={team.id + "-name"}
+                onBlur={(e) => renameTeam(team, e.target.value)}
+              />
+            ) : (
+              <div className="team-name-display">{team.name}</div>
+            )}
             <div className="team-score-row">
               <button className="plus" onClick={() => adjustTeamScore(team, 100)}>
                 +
@@ -568,10 +633,12 @@ export default function JeopardyBoard() {
                   onBlur={(e) => setTeamScore(team, e.target.value)}
                 />
               ) : (
-                <div className="team-score-display">{team.score}</div>
+                <div className={"team-score-display" + (scorePulse[team.id] ? " " + scorePulse[team.id] : "")}>
+                  ${team.score}
+                </div>
               )}
               <button className="minus" onClick={() => adjustTeamScore(team, -100)}>
-                −
+                -
               </button>
             </div>
           </div>
@@ -597,6 +664,8 @@ export default function JeopardyBoard() {
           onToggleReveal={() => setRevealed((r) => !r)}
           onClose={closeClueModal}
           onAdjustTeamScore={adjustTeamScore}
+          timerEnabled={data.settings.timerEnabled}
+          timerSeconds={activeClueObj.timerSeconds != null ? activeClueObj.timerSeconds : data.settings.timerDuration}
         />
       )}
 
@@ -610,6 +679,7 @@ export default function JeopardyBoard() {
           onClearMedia={clearMediaField}
           onSave={saveClue}
           onClose={closeEditModal}
+          defaultTimerSeconds={data.settings.timerDuration}
         />
       )}
 

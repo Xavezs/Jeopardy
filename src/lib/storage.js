@@ -118,6 +118,40 @@ export function isMediaRef(value) {
   return typeof value === "string" && value.startsWith(MEDIA_REF_PREFIX);
 }
 
+/* =========================================================================
+   MEDIA TYPE DETECTION
+   The clue's editor now has a single media field (paste a URL or upload a
+   file) instead of separate image/video/audio inputs, so we need to guess
+   which kind of media something is.
+   - Uploaded files: trust the browser-supplied MIME type (reliable).
+   - Pasted URLs: guess from the file extension / YouTube domain.
+   Returns "image" | "video" | "audio" | "" (unknown — caller should fall
+   back to trying each element type until one works).
+   ========================================================================= */
+const EXT_MAP = {
+  image: ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "avif"],
+  video: ["mp4", "webm", "ogv", "mov", "m4v"],
+  audio: ["mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "weba"],
+};
+
+export function detectMediaTypeFromFile(file) {
+  if (!file) return "";
+  const mime = (file.type || "").split("/")[0];
+  if (mime === "image" || mime === "video" || mime === "audio") return mime;
+  return detectMediaTypeFromUrl(file.name || "");
+}
+
+export function detectMediaTypeFromUrl(url) {
+  if (!url) return "";
+  if (/youtu\.?be/i.test(url)) return "video";
+  const cleaned = url.split(/[?#]/)[0];
+  const ext = (cleaned.split(".").pop() || "").toLowerCase();
+  for (const [kind, exts] of Object.entries(EXT_MAP)) {
+    if (exts.includes(ext)) return kind;
+  }
+  return "";
+}
+
 // Resolves ANY stored clue media value into something an <img>/<video>/<audio> src can use:
 // - "media:xxx"  -> looks up the blob in IndexedDB, returns an object URL
 // - "data:..."   -> legacy inline base64 (from before this fix) — passed through as-is
@@ -150,7 +184,7 @@ export function timestamp() {
 }
 
 export function blankClue() {
-  return { question: "", answer: "", imageUrl: "", videoUrl: "", audioUrl: "", used: false };
+  return { question: "", answer: "", mediaUrl: "", mediaType: "", used: false, timerSeconds: null };
 }
 export function blankCategory(name, valuesArray) {
   const targetValues = valuesArray || [100, 200, 300, 400, 500];
@@ -176,6 +210,10 @@ export function defaultSessionData() {
       { id: "t2", name: "Team 2", score: 0 },
       { id: "t3", name: "Team 3", score: 0 },
     ],
+    settings: {
+      timerEnabled: true,
+      timerDuration: 30, // global default, in seconds — per-clue timerSeconds overrides this
+    },
   };
 }
 
@@ -247,6 +285,9 @@ export const SessionStore = {
 
 export function migrateClueSchemaIfNeeded(data) {
   if (!data.values) data.values = [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
+  if (!data.settings) data.settings = { timerEnabled: true, timerDuration: 30 };
+  if (data.settings.timerEnabled === undefined) data.settings.timerEnabled = true;
+  if (!data.settings.timerDuration) data.settings.timerDuration = 30;
   data.categories.forEach((cat) => {
     data.values.forEach((v) => {
       const clue = cat.clues[v];
@@ -254,9 +295,24 @@ export function migrateClueSchemaIfNeeded(data) {
         cat.clues[v] = blankClue();
         return;
       }
-      if (clue.imageUrl === undefined) clue.imageUrl = "";
-      if (clue.videoUrl === undefined) clue.videoUrl = "";
-      if (clue.audioUrl === undefined) clue.audioUrl = "";
+      // Migrate from the old three-field (imageUrl/videoUrl/audioUrl) schema
+      // to a single mediaUrl/mediaType. If a clue had more than one set
+      // (the old editor allowed combos), keep just one — image, then
+      // video, then audio — since a clue can now only hold one media item.
+      if (clue.mediaUrl === undefined) {
+        const legacy = [
+          ["image", clue.imageUrl],
+          ["video", clue.videoUrl],
+          ["audio", clue.audioUrl],
+        ].find(([, url]) => url);
+        clue.mediaUrl = legacy ? legacy[1] : "";
+        clue.mediaType = legacy ? legacy[0] : "";
+        delete clue.imageUrl;
+        delete clue.videoUrl;
+        delete clue.audioUrl;
+      }
+      if (clue.mediaType === undefined) clue.mediaType = "";
+      if (clue.timerSeconds === undefined) clue.timerSeconds = null;
     });
   });
 }
