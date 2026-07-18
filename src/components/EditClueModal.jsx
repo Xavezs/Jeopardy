@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState, useEffect } from "react";
 import MediaField from "./MediaField";
 
 export default function EditClueModal({
@@ -10,12 +10,37 @@ export default function EditClueModal({
   onClearMedia,
   onSave,
   onClose,
+  defaultTimerSeconds,
 }) {
+  const [closing, setClosing] = useState(false);
+  const mouseDownOnOverlay = React.useRef(false);
+
+  const requestClose = (cb) => {
+    setClosing(true);
+    setTimeout(() => cb(), 160);
+  };
+
+  // Esc closes the same way Cancel/backdrop-click does — no save.
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") requestClose(onClose);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+
   return (
     <div
-      className="modal-overlay"
-      onClick={(e) => {
-        if (e.target === e.currentTarget) onClose();
+      className={"modal-overlay" + (closing ? " closing" : "")}
+      onMouseDown={(e) => {
+        mouseDownOnOverlay.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (mouseDownOnOverlay.current && e.target === e.currentTarget) {
+          requestClose(onClose);
+        }
+        mouseDownOnOverlay.current = false;
       }}
     >
       <div className="modal">
@@ -37,46 +62,42 @@ export default function EditClueModal({
           />
         </div>
 
+        <div className="form-row">
+          <label>Timer override</label>
+          <div className="timer-override-control">
+            <span className="timer-override-icon" aria-hidden="true">⏱</span>
+            <input
+              type="number"
+              min="1"
+              placeholder={`Board default (${defaultTimerSeconds}s)`}
+              value={editForm.timerSeconds}
+              onChange={(e) => setEditForm((f) => ({ ...f, timerSeconds: e.target.value }))}
+            />
+            <span className="timer-override-suffix">sec</span>
+          </div>
+          <div className="hint">Leave blank to use the board's default timer length.</div>
+        </div>
+
         <MediaField
-          label="Image — paste a URL, or upload a file"
-          type="image"
-          accept="image/*"
-          placeholder="https://... .jpg / .png / .gif"
-          value={mediaState.image}
-          onUrlChange={(url) => setMediaState((prev) => ({ ...prev, image: { ...prev.image, mode: "url", url } }))}
-          onFile={(file) => onMediaFile("image", file)}
-          onClear={() => onClearMedia("image")}
-        />
-        <MediaField
-          label="Video — paste a URL/YouTube link, or upload a file"
-          type="video"
-          accept="video/*"
-          placeholder="https://... video file, or a YouTube link"
-          value={mediaState.video}
-          onUrlChange={(url) => setMediaState((prev) => ({ ...prev, video: { ...prev.video, mode: "url", url } }))}
-          onFile={(file) => onMediaFile("video", file)}
-          onClear={() => onClearMedia("video")}
-          hint="Direct video file link, YouTube URL, or an uploaded file — any of the three works."
-        />
-        <MediaField
-          label="Audio — paste a URL, or upload a file"
-          type="audio"
-          accept="audio/*"
-          placeholder="https://... .mp3 / .wav"
-          value={mediaState.audio}
-          onUrlChange={(url) => setMediaState((prev) => ({ ...prev, audio: { ...prev.audio, mode: "url", url } }))}
-          onFile={(file) => onMediaFile("audio", file)}
-          onClear={() => onClearMedia("audio")}
+          label="Media — image, video, or audio: paste a URL, or upload a file"
+          type=""
+          accept="image/*,video/*,audio/*"
+          placeholder="https://... image, video, audio file, or a YouTube link"
+          value={mediaState.media}
+          onUrlChange={(url) => setMediaState((prev) => ({ ...prev, media: { ...prev.media, mode: "url", url } }))}
+          onFile={(file) => onMediaFile("media", file)}
+          onClear={() => onClearMedia("media")}
+          hint="The type (image / video / audio) is detected automatically."
         />
 
         <div className="hint" style={{ textAlign: "center", marginBottom: 8 }}>
-          You can fill in any combination — e.g. an image AND audio on the same clue. Uploaded files stay embedded in the board itself, nothing goes to a server.
+          Uploaded files stay embedded in the board itself, nothing goes to a server.
         </div>
         <div className="modal-footer">
-          <button className="btn gold" onClick={onSave}>
+          <button className="btn gold" onClick={() => requestClose(onSave)}>
             Save Clue
           </button>
-          <button className="btn" onClick={onClose}>
+          <button className="btn" onClick={() => requestClose(onClose)}>
             Cancel
           </button>
         </div>
