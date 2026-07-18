@@ -15,6 +15,49 @@ import ClueModal from "./components/ClueModal";
 import EditClueModal from "./components/EditClueModal";
 import SessionsModal from "./components/SessionsModal";
 import ConfirmDialog from "./components/ConfirmDialog";
+import TeamRandomizer from "./components/TeamRandomizer";
+import MarqueeBulbs from "./lib/MarqueeBulbs";
+import hoverTickUrl from "./assets/hover-tick.mp3";
+
+/* =========================================================================
+   HOVER SOUND
+   A short sound that plays when hovering a clickable clue cell, loaded
+   from src/assets/hover-tick.mp3. One <audio> element is created once
+   (module scope) and preloaded; each play clones it via cloneNode() so
+   a fast mouse-sweep across several cells doesn't cut a still-playing
+   sound short — overlapping clones just play independently and get
+   garbage collected once they finish.
+   ========================================================================= */
+const hoverAudioTemplate = typeof Audio !== "undefined" ? new Audio(hoverTickUrl) : null;
+if (hoverAudioTemplate) {
+  hoverAudioTemplate.preload = "auto";
+  hoverAudioTemplate.volume = 0.4; // adjust to taste
+}
+
+let lastHoverTickAt = 0;
+const HOVER_TICK_MIN_GAP_MS = 55; // guards against a rapid mouse-sweep firing a pile of overlapping plays
+
+function playHoverTick() {
+  if (!hoverAudioTemplate) return;
+  const now = performance.now();
+  if (now - lastHoverTickAt < HOVER_TICK_MIN_GAP_MS) return;
+  lastHoverTickAt = now;
+  try {
+    const node = hoverAudioTemplate.cloneNode(true);
+    node.volume = hoverAudioTemplate.volume;
+    node.play().catch(() => {
+      /* best effort — browsers may block audio before the user has interacted with the page yet */
+    });
+  } catch (e) {
+    /* best effort — silently ignore */
+  }
+}
+
+/* =========================================================================
+   MARQUEE LIGHTS
+   Moved to ./lib/MarqueeBulbs.jsx so it can be shared with the Team
+   Randomizer's slot-machine border too.
+   ========================================================================= */
 
 /* =========================================================================
    MAIN APP
@@ -28,8 +71,46 @@ export default function JeopardyBoard() {
   }, [session]);
 
   const [editMode, setEditMode] = useState(false);
+  const [view, setView] = useState("board"); // "board" | "randomizer"
   const [saveMsg, setSaveMsg] = useState("");
   const saveMsgTimeout = useRef(null);
+
+  // Round-switch transition. Each category header + clue cell animates
+  // individually (not the board as one piece) as a scale + fade ripple,
+  // left to right: "idle" -> "out" (every column shrinks to 40% size and
+  // fades to transparent, each column starting slightly later than the
+  // column to its left) -> swap the actual round data -> "in-start"
+  // (every cell jumps instantly back to 40%/transparent, no transition,
+  // since it's already invisible either way) -> "idle" (pops back to full
+  // size and opacity with a slight overshoot bounce, same left-to-right
+  // stagger, revealing the new round). It's still just per-cell CSS
+  // transform + opacity — GPU composited — so it stays smooth regardless
+  // of grid size.
+  const [boardFlip, setBoardFlip] = useState("idle"); // "idle" | "out" | "in-start" | "in"
+  const boardFlipTimeouts = useRef([]);
+  const FLIP_STAGGER_MS = 45; // delay added per column, left to right
+  const FLIP_CELL_MS = 200; // must match the transition duration in board.css
+
+  // "DOUBLE JEOPARDY!"-style announcement banner that pops up on a round
+  // switch, holds briefly, then fades out right as the board flip begins.
+  // { text, phase: "in" | "out" } | null — phase drives which CSS
+  // animation (pop-in vs fade-out) is applied.
+  const [roundBanner, setRoundBanner] = useState(null);
+  const BANNER_HOLD_MS = 750; // how long the banner sits fully visible before fading
+  const BANNER_FADE_MS = 300; // must match .round-banner-out transition in board.css
+  useEffect(() => {
+    return () => boardFlipTimeouts.current.forEach((t) => clearTimeout(t));
+  }, []);
+  // catIndex: which category column this cell belongs to — every cell in
+  // the SAME column shares a delay, so the whole column flips together
+  // and the wave rolls left to right across the board.
+  // Only truly-idle (steady state, no flip in progress) resets the delay
+  // to 0 — "in" is the pop-back-in leg itself and needs to KEEP the
+  // stagger, or every cell would pop back at the exact same instant the
+  // moment we transition away from "in-start".
+  function flipDelay(catIndex) {
+    return boardFlip === "idle" ? "0ms" : `${catIndex * FLIP_STAGGER_MS}ms`;
+  }
 
   const [activeClue, setActiveClue] = useState(null); // {catId, value}
   const [revealed, setRevealed] = useState(false);
@@ -147,22 +228,80 @@ export default function JeopardyBoard() {
 
   /* ---------------- SESSION SWITCHING ---------------- */
   async function switchToSession(id) {
+    // Same per-cell stagger ripple used for round switching (see switchRound):
+    // the CURRENT board flips out top-to-bottom, then — once both the flip-out
+    // animation and the (async) session load have finished — the new board
+    // is swapped in and flips back to idle with the same wave.
+    if (boardFlip !== "idle") return;
     await flushPersist();
-    const loaded = await SessionStore.loadSession(id);
-    if (!loaded) return;
+
+    const d = sessionRef.current.data;
+    const rd = currentRoundOf(d);
+    const maxSteps = rd.categories.length - 1; // last column's delay index (0-indexed)
+    const outDuration = maxSteps * FLIP_STAGGER_MS + FLIP_CELL_MS;
+
+    setBoardFlip("out");
+
+    const [loaded] = await Promise.all([
+      SessionStore.loadSession(id),
+      new Promise((resolve) => {
+        const t = setTimeout(resolve, outDuration);
+        boardFlipTimeouts.current.push(t);
+      }),
+    ]);
+
+    if (!loaded) {
+      setBoardFlip("idle");
+      return;
+    }
     migrateClueSchemaIfNeeded(loaded.data);
     ensureClueGrid(loaded.data);
     await SessionStore.setCurrentId(id);
     setEditMode(false);
     setActiveClue(null);
+    setEditingTarget(null);
     setSession(loaded);
+    setBoardFlip("in-start"); // instant jump to the opposite edge-on angle, no transition
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setBoardFlip("in"); // transition back to flat, same left-to-right stagger
+        const tIdle = setTimeout(() => setBoardFlip("idle"), outDuration); // pop finished — safe to clear the lingering delay now
+        boardFlipTimeouts.current.push(tIdle);
+      });
+    });
   }
   async function createAndSwitchToNewSession(name) {
+    if (boardFlip !== "idle") return;
     await flushPersist();
-    const created = await SessionStore.createSession(name);
+
+    const d = sessionRef.current.data;
+    const rd = currentRoundOf(d);
+    const maxSteps = rd.categories.length - 1; // last column's delay index (0-indexed)
+    const outDuration = maxSteps * FLIP_STAGGER_MS + FLIP_CELL_MS;
+
+    setBoardFlip("out");
+
+    const [created] = await Promise.all([
+      SessionStore.createSession(name),
+      new Promise((resolve) => {
+        const t = setTimeout(resolve, outDuration);
+        boardFlipTimeouts.current.push(t);
+      }),
+    ]);
+
     await SessionStore.setCurrentId(created.id);
     setEditMode(true);
+    setActiveClue(null);
+    setEditingTarget(null);
     setSession(created);
+    setBoardFlip("in-start");
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setBoardFlip("in");
+        const tIdle = setTimeout(() => setBoardFlip("idle"), outDuration);
+        boardFlipTimeouts.current.push(tIdle);
+      });
+    });
   }
 
   async function refreshSessionList() {
@@ -214,13 +353,60 @@ export default function JeopardyBoard() {
 
   /* ---------------- CATEGORY / ROW ACTIONS ---------------- */
   function ensureClueGrid(d) {
-    // Fills in any missing category×row combos. Only called after a structural
-    // change (add/remove/load) — never during render.
-    d.categories.forEach((cat) => {
-      d.values.forEach((v) => {
-        if (!cat.clues[v]) cat.clues[v] = blankClue();
+    // Fills in any missing category×row combos, for every round. Only
+    // called after a structural change (add/remove/load) — never during render.
+    d.rounds.forEach((round) => {
+      round.categories.forEach((cat) => {
+        round.values.forEach((v) => {
+          if (!cat.clues[v]) cat.clues[v] = blankClue();
+        });
       });
     });
+  }
+  // Every category/row/clue action below operates on THIS round only —
+  // the other round's categories, values, and clues are untouched.
+  function currentRoundOf(d) {
+    return d.rounds[d.currentRound];
+  }
+
+  function switchRound(idx) {
+    const d = sessionRef.current.data;
+    if (idx === d.currentRound || !d.rounds[idx] || boardFlip !== "idle" || roundBanner) return;
+    const rd = currentRoundOf(d);
+    const maxSteps = rd.categories.length - 1; // last column's delay index (0-indexed, the farthest column)
+    const outDuration = maxSteps * FLIP_STAGGER_MS + FLIP_CELL_MS;
+
+    // Announce the incoming round first — banner pops in immediately, then
+    // once it's held on screen for a beat, it starts fading out at the
+    // exact moment the board flip kicks off, so the two hand off cleanly.
+    setRoundBanner({ text: (d.rounds[idx].name || "ROUND") + "!", phase: "in" });
+
+    const tBanner = setTimeout(() => {
+      setRoundBanner((b) => (b ? { ...b, phase: "out" } : b));
+      setBoardFlip("out");
+      const t = setTimeout(() => {
+        d.currentRound = idx;
+        // Close any open modals — they reference category ids scoped to the
+        // round that was active when they were opened.
+        setActiveClue(null);
+        setEditingTarget(null);
+        touch();
+        persist();
+        setBoardFlip("in-start"); // instant jump to the opposite edge-on angle, no transition
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setBoardFlip("in"); // transition back to flat, same left-to-right stagger
+            const tIdle = setTimeout(() => setBoardFlip("idle"), outDuration); // pop finished — safe to clear the lingering delay now
+            boardFlipTimeouts.current.push(tIdle);
+          });
+        });
+      }, outDuration);
+      boardFlipTimeouts.current.push(t);
+
+      const tClear = setTimeout(() => setRoundBanner(null), BANNER_FADE_MS);
+      boardFlipTimeouts.current.push(tClear);
+    }, BANNER_HOLD_MS);
+    boardFlipTimeouts.current.push(tBanner);
   }
 
   function renameCategory(cat, name) {
@@ -229,19 +415,21 @@ export default function JeopardyBoard() {
   }
   async function removeCategory(cat) {
     const d = sessionRef.current.data;
-    if (d.categories.length <= 1) {
+    const rd = currentRoundOf(d);
+    if (rd.categories.length <= 1) {
       appAlert("You must keep at least one column category!");
       return;
     }
     if (await appConfirm(`Delete column "${cat.name || "Category"}" and all its contained clues?`)) {
-      d.categories = d.categories.filter((c) => c.id !== cat.id);
+      rd.categories = rd.categories.filter((c) => c.id !== cat.id);
       touch();
       persist();
     }
   }
   function addCategory() {
     const d = sessionRef.current.data;
-    d.categories.push(blankCategory("New Category", d.values));
+    const rd = currentRoundOf(d);
+    rd.categories.push(blankCategory("New Category", rd.values));
     ensureClueGrid(d);
     touch();
     persist();
@@ -249,32 +437,34 @@ export default function JeopardyBoard() {
 
   function changeRowValue(oldVal, input) {
     const d = sessionRef.current.data;
+    const rd = currentRoundOf(d);
     const newVal = parseInt(input, 10);
-    if (isNaN(newVal) || newVal <= 0 || d.values.includes(newVal)) {
+    if (isNaN(newVal) || newVal <= 0 || rd.values.includes(newVal)) {
       touch(); // revert silently, no popup needed for a simple field edit
       return;
     }
-    const oldIndex = d.values.indexOf(oldVal);
-    d.values[oldIndex] = newVal;
-    d.categories.forEach((c) => {
+    const oldIndex = rd.values.indexOf(oldVal);
+    rd.values[oldIndex] = newVal;
+    rd.categories.forEach((c) => {
       if (c.clues[oldVal]) {
         c.clues[newVal] = c.clues[oldVal];
         delete c.clues[oldVal];
       }
     });
-    d.values.sort((a, b) => a - b);
+    rd.values.sort((a, b) => a - b);
     touch();
     persist();
   }
   async function removeRow(v) {
     const d = sessionRef.current.data;
-    if (d.values.length <= 1) {
+    const rd = currentRoundOf(d);
+    if (rd.values.length <= 1) {
       appAlert("You must keep at least one row!");
       return;
     }
     if (await appConfirm(`Remove the entire $${v} row? All clue data inside it across columns will be lost.`)) {
-      d.values = d.values.filter((val) => val !== v);
-      d.categories.forEach((c) => {
+      rd.values = rd.values.filter((val) => val !== v);
+      rd.categories.forEach((c) => {
         delete c.clues[v];
       });
       touch();
@@ -283,12 +473,13 @@ export default function JeopardyBoard() {
   }
   function addRow() {
     const d = sessionRef.current.data;
+    const rd = currentRoundOf(d);
     let nextVal = 100;
-    if (d.values && d.values.length > 0) nextVal = Math.max(...d.values) + 100;
-    while (d.values.includes(nextVal)) nextVal += 100;
-    d.values.push(nextVal);
-    d.values.sort((a, b) => a - b);
-    d.categories.forEach((c) => {
+    if (rd.values && rd.values.length > 0) nextVal = Math.max(...rd.values) + 100;
+    while (rd.values.includes(nextVal)) nextVal += 100;
+    rd.values.push(nextVal);
+    rd.values.sort((a, b) => a - b);
+    rd.categories.forEach((c) => {
       c.clues[nextVal] = blankClue();
     });
     ensureClueGrid(d);
@@ -327,6 +518,13 @@ export default function JeopardyBoard() {
     touch();
     persist();
   }
+  function applyTeamOrder(orderedTeams) {
+    const d = sessionRef.current.data;
+    d.teams = orderedTeams;
+    touch();
+    persist();
+    setView("board");
+  }
 
   /* ---------------- CLUE PLAY MODAL ---------------- */
   function openClueModal(cat, value) {
@@ -336,7 +534,7 @@ export default function JeopardyBoard() {
   function closeClueModal(markUsed) {
     if (markUsed && activeClue) {
       const d = sessionRef.current.data;
-      const cat = d.categories.find((c) => c.id === activeClue.catId);
+      const cat = currentRoundOf(d).categories.find((c) => c.id === activeClue.catId);
       if (cat) cat.clues[activeClue.value].used = true;
       touch();
       persist();
@@ -388,7 +586,7 @@ export default function JeopardyBoard() {
   function saveClue() {
     if (!editingTarget) return;
     const d = sessionRef.current.data;
-    const cat = d.categories.find((c) => c.id === editingTarget.catId);
+    const cat = currentRoundOf(d).categories.find((c) => c.id === editingTarget.catId);
     if (cat) {
       const clue = cat.clues[editingTarget.value];
       clue.question = editForm.question.trim();
@@ -427,11 +625,13 @@ export default function JeopardyBoard() {
 
   /* ---------------- RESET ROUND ---------------- */
   async function resetRound() {
-    if (!(await appConfirm("Reset all scores to 0 and mark all clues unused in this session? Your questions/answers/media stay."))) return;
+    if (!(await appConfirm("Reset all scores to 0 and mark all clues unused (both rounds)? Your questions/answers/media stay."))) return;
     const d = sessionRef.current.data;
-    d.categories.forEach((cat) => {
-      d.values.forEach((v) => {
-        if (cat.clues[v]) cat.clues[v].used = false;
+    d.rounds.forEach((round) => {
+      round.categories.forEach((cat) => {
+        round.values.forEach((v) => {
+          if (cat.clues[v]) cat.clues[v].used = false;
+        });
       });
     });
     d.teams.forEach((t) => (t.score = 0));
@@ -447,20 +647,30 @@ export default function JeopardyBoard() {
     );
   }
 
-  const nCats = data.categories.length;
-  const nRows = data.values.length;
+  if (view === "randomizer") {
+    return (
+      <div className="jp-root">
+        <TeamRandomizer teams={data.teams} onApplyOrder={applyTeamOrder} onClose={() => setView("board")} />
+      </div>
+    );
+  }
+
+  const rd = data.rounds[data.currentRound];
+  const nCats = rd.categories.length;
+  const nRows = rd.values.length;
   const boardGridStyle = editMode
     ? { gridTemplateColumns: `74px repeat(${nCats}, minmax(0, 1fr)) 67px`, gridTemplateRows: `74px repeat(${nRows}, minmax(0, 1fr)) 67px` }
     : { gridTemplateColumns: `repeat(${nCats}, minmax(0, 1fr))`, gridTemplateRows: `auto repeat(${nRows}, minmax(0, 1fr))` };
 
-  const activeCat = activeClue ? data.categories.find((c) => c.id === activeClue.catId) : null;
+  const activeCat = activeClue ? rd.categories.find((c) => c.id === activeClue.catId) : null;
   const activeClueObj = activeCat && activeClue ? activeCat.clues[activeClue.value] : null;
 
-  const editingCat = editingTarget ? data.categories.find((c) => c.id === editingTarget.catId) : null;
+  const editingCat = editingTarget ? rd.categories.find((c) => c.id === editingTarget.catId) : null;
 
   return (
     <div className="jp-root">
-      <div className="marquee">
+      <div className={"marquee" + (editMode ? " editing" : "")}>
+        {editMode ? null : <MarqueeBulbs />}
         <input
           className="marquee-title"
           maxLength={40}
@@ -477,12 +687,34 @@ export default function JeopardyBoard() {
         Session: <b>{session.name}</b> · last saved {formatDate(session.updatedAt)}
       </div>
 
+      <div className="round-tabs">
+        {data.rounds.map((round, i) => (
+          <button
+            key={i}
+            className={"round-tab" + (data.currentRound === i ? " active" : "")}
+            onClick={() => switchRound(i)}
+          >
+            {round.name}
+          </button>
+        ))}
+      </div>
+
+      {roundBanner && (
+        <div className={"round-banner" + (roundBanner.phase === "out" ? " round-banner-out" : "")}>
+          <MarqueeBulbs spacing={16} inset={7} radius={12} />
+          <div className="round-banner-text">{roundBanner.text}</div>
+        </div>
+      )}
+
       <div className="toolbar">
-        <button className="btn gold" onClick={() => setEditMode((v) => !v)}>
+        <button className="btn" onClick={() => setEditMode((v) => !v)}>
           {editMode ? "✓ Done Editing" : "✎ Edit Board"}
         </button>
         <button className="btn" onClick={openSessionsModal}>
           ⏱ Sessions
+        </button>
+        <button className="btn" onClick={() => setView("randomizer")}>
+          Randomize Order
         </button>
         <button className="btn" onClick={resetRound}>
           ↺ Reset Round (keep content)
@@ -507,6 +739,7 @@ export default function JeopardyBoard() {
               defaultValue={data.settings.timerDuration}
               key={"timer-default-" + session.id}
               onBlur={(e) => setGlobalTimerDuration(e.target.value)}
+              onWheel={(e) => e.target.blur()}
             />
             sec
           </label>
@@ -515,11 +748,15 @@ export default function JeopardyBoard() {
 
       <div id="boardWrap">
         <div id="board" style={boardGridStyle}>
-          {data.categories.map((cat, catIndex) => (
+          {rd.categories.map((cat, catIndex) => (
             <div
               key={cat.id}
-              className="cat-cell"
-              style={{ gridRow: "1", gridColumn: editMode ? catIndex + 2 : catIndex + 1 }}
+              className={"cat-cell" + (boardFlip === "out" ? " flip-out" : "") + (boardFlip === "in-start" ? " flip-in-start" : "")}
+              style={{
+                gridRow: "1",
+                gridColumn: editMode ? catIndex + 2 : catIndex + 1,
+                transitionDelay: flipDelay(catIndex),
+              }}
             >
               {editMode ? (
                 <>
@@ -548,7 +785,7 @@ export default function JeopardyBoard() {
             </div>
           )}
 
-          {data.values.map((v, rowIndex) => {
+          {rd.values.map((v, rowIndex) => {
             const gridRowPosition = rowIndex + 2;
             return (
               <React.Fragment key={v}>
@@ -562,6 +799,7 @@ export default function JeopardyBoard() {
                       key={v + "-value"}
                       title="Point value for this row"
                       onBlur={(e) => changeRowValue(v, e.target.value)}
+                      onWheel={(e) => e.target.blur()}
                     />
                     <button className="row-delete-btn" title="Delete this row value pattern" onClick={() => removeRow(v)}>
                       <span className="icon">✕</span>
@@ -569,20 +807,37 @@ export default function JeopardyBoard() {
                   </div>
                 )}
 
-                {data.categories.map((cat, catIndex) => {
+                {rd.categories.map((cat, catIndex) => {
                   const clue = cat.clues[v] || blankClue();
                   return (
                     <div
                       key={cat.id + "-" + v}
-                      className={"clue-cell" + (clue.used ? " used" : "") + (editMode ? " edit-mode-cell" : "")}
-                      style={{ gridRow: gridRowPosition, gridColumn: editMode ? catIndex + 2 : catIndex + 1 }}
+                      className={
+                        "clue-cell" +
+                        (clue.used ? " used" : "") +
+                        (editMode ? " edit-mode-cell" : "") +
+                        (boardFlip === "out" ? " flip-out" : "") +
+                        (boardFlip === "in-start" ? " flip-in-start" : "")
+                      }
+                      style={{
+                        gridRow: gridRowPosition,
+                        gridColumn: editMode ? catIndex + 2 : catIndex + 1,
+                        transitionDelay: flipDelay(catIndex),
+                      }}
                       onClick={() => {
                         if (editMode) openEditModal(cat, v);
                         else if (!clue.used) openClueModal(cat, v);
                       }}
+                      onMouseEnter={() => {
+                        if (editMode || !clue.used) playHoverTick();
+                      }}
                     >
                       <div className="clue-value">${v}</div>
-                      {editMode && clue.mediaUrl && <div className="media-dot">●</div>}
+                      {editMode && 
+                      clue.question?.trim() && 
+                      clue.answer?.trim() && (
+                        <div className={`media-dot ${clue.mediaUrl ? "has-media" : ""}`}>●</div>
+                      )}
                     </div>
                   );
                 })}
@@ -620,7 +875,7 @@ export default function JeopardyBoard() {
               <div className="team-name-display">{team.name}</div>
             )}
             <div className="team-score-row">
-              <button className="plus" onClick={() => adjustTeamScore(team, 100)}>
+              <button className="plus" onClick={() => adjustTeamScore(team, 50)}>
                 +
               </button>
               {editMode ? (
@@ -631,13 +886,14 @@ export default function JeopardyBoard() {
                   key={team.id + "-score"}
                   title="Set this team's score manually"
                   onBlur={(e) => setTeamScore(team, e.target.value)}
+                  onWheel={(e) => e.target.blur()}
                 />
               ) : (
                 <div className={"team-score-display" + (scorePulse[team.id] ? " " + scorePulse[team.id] : "")}>
                   ${team.score}
                 </div>
               )}
-              <button className="minus" onClick={() => adjustTeamScore(team, -100)}>
+              <button className="minus" onClick={() => adjustTeamScore(team, -50)}>
                 -
               </button>
             </div>

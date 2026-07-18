@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import MediaField from "./MediaField";
 
 export default function EditClueModal({
@@ -13,17 +13,34 @@ export default function EditClueModal({
   defaultTimerSeconds,
 }) {
   const [closing, setClosing] = useState(false);
+  const mouseDownOnOverlay = React.useRef(false);
 
   const requestClose = (cb) => {
     setClosing(true);
     setTimeout(() => cb(), 160);
   };
 
+  // Esc closes the same way Cancel/backdrop-click does — no save.
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") requestClose(onClose);
+    };
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [onClose]);
+
   return (
     <div
       className={"modal-overlay" + (closing ? " closing" : "")}
-      onClick={(e) => {
-        if (e.target === e.currentTarget) requestClose(onClose);
+      onMouseDown={(e) => {
+        mouseDownOnOverlay.current = e.target === e.currentTarget;
+      }}
+      onMouseUp={(e) => {
+        if (mouseDownOnOverlay.current && e.target === e.currentTarget) {
+          requestClose(onClose);
+        }
+        mouseDownOnOverlay.current = false;
       }}
     >
       <div className="modal">
