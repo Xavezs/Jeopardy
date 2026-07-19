@@ -3,12 +3,60 @@ import { youTubeEmbed } from "../lib/utils";
 import { getMediaUrl } from "../lib/storage";
 import CustomAudioPlayer from './CustomAudioPlayer';
 import CustomVideoPlayer from './CustomVideoPlayer';
+import { createSfx, getSharedAudioCtx } from "../lib/sfx";
+
+/* =========================================================================
+   REVEAL SOUND
+   Plays src/assets/reveal.mp3 when the front face of a clue is clicked to
+   flip/reveal the question. Falls back to a synthesized chime if the file
+   is missing/unloadable. File-load/fallback/debounce plumbing lives in
+   lib/sfx.js's createSfx() — only the synthesized tone (unique to this
+   sound) stays here.
+   ========================================================================= */
+const revealSfxUrl = new URL("../assets/reveal.mp3", import.meta.url).href;
+
+function playSynthRevealTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+
+    // Bright upward chime — reads as a bigger, more celebratory moment
+    // than the plain click tone used elsewhere in the app.
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = "triangle";
+    osc.frequency.setValueAtTime(600, t0);
+    osc.frequency.exponentialRampToValueAtTime(1100, t0 + 0.09);
+    oscGain.gain.setValueAtTime(0.0001, t0);
+    oscGain.gain.exponentialRampToValueAtTime(0.22, t0 + 0.01);
+    oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.onended = () => {
+      osc.disconnect();
+      oscGain.disconnect();
+    };
+    osc.start(t0);
+    osc.stop(t0 + 0.23);
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+const playRevealSfx = createSfx({
+  url: revealSfxUrl,
+  fallbackTone: playSynthRevealTone,
+  volume: 0.5,
+  minGapMs: 40, // guards against double-fires
+});
 
 function playAlertSound() {
   try {
-    const Ctx = window.AudioContext || window.webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
     const beepAt = (delay) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -25,7 +73,6 @@ function playAlertSound() {
     beepAt(0);
     beepAt(0.35);
     beepAt(0.7);
-    setTimeout(() => ctx.close(), 1200);
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
@@ -51,6 +98,7 @@ export default function ClueModal({
   onAdjustTeamScore,
   timerEnabled,
   timerSeconds,
+  onDuckMusic,
 }) {
   const [mediaUrl, setMediaUrl] = useState("");
   // What to actually try rendering as. Starts from the stored mediaType;
@@ -64,6 +112,13 @@ export default function ClueModal({
   const [timeUp, setTimeUp] = useState(false);
   const alertPlayedRef = React.useRef(false);
   const [flipped, setFlipped] = useState(false);
+
+  // Whatever was playing (audio/video below) belongs to THIS clue — if the
+  // clue changes or the modal closes while it was still playing, make sure
+  // background music comes back up rather than staying ducked forever.
+  useEffect(() => {
+    return () => onDuckMusic && onDuckMusic(false);
+  }, [clue, onDuckMusic]);
 
   // Reset the clock (and flip state) whenever a new clue is opened (or its configured duration changes)
   useEffect(() => {
@@ -168,13 +223,18 @@ export default function ClueModal({
         <div className={"clue-flip-inner" + (flipped ? " is-flipped" : "")}>
           <div
             className="clue-flip-face clue-flip-front"
-            onClick={() => setFlipped(true)}
+            data-sfx-handled
+            onClick={() => {
+              playRevealSfx();
+              setFlipped(true);
+            }}
             role="button"
             tabIndex={0}
             aria-label="Reveal clue"
             onKeyDown={(e) => {
               if (e.key === "Enter" || e.key === " ") {
                 e.preventDefault();
+                playRevealSfx();
                 setFlipped(true);
               }
             }}
@@ -250,9 +310,9 @@ export default function ClueModal({
                       title="clue-video"
                     />
                   ) : (
-                    <CustomVideoPlayer src={mediaUrl} onError={() => setRenderAs("audio")} />
+                    <CustomVideoPlayer src={mediaUrl} onError={() => setRenderAs("audio")} onPlayStateChange={onDuckMusic} />
                   ))}
-                {renderAs === "audio" && <CustomAudioPlayer src={mediaUrl} />}
+                {renderAs === "audio" && <CustomAudioPlayer src={mediaUrl} onPlayStateChange={onDuckMusic} />}
               </div>
             )}
 

@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 
-export default function CustomAudioPlayer({ src }) {
+export default function CustomAudioPlayer({ src, onPlayStateChange }) {
   const audioRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -16,12 +16,22 @@ export default function CustomAudioPlayer({ src }) {
     }
   }, [volume, isMuted]);
 
+  // Safety net: if this player unmounts (modal closed, clue swapped, or
+  // renderAs falls back to a different media kind) while still playing,
+  // make sure the parent knows playback stopped so it can un-duck.
+  useEffect(() => {
+    return () => onPlayStateChange && onPlayStateChange(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const togglePlay = () => {
     if (!audioRef.current) return;
     if (isPlaying) {
       audioRef.current.pause();
+      onPlayStateChange && onPlayStateChange(false);
     } else {
       audioRef.current.play();
+      onPlayStateChange && onPlayStateChange(true);
     }
     setIsPlaying(!isPlaying);
   };
@@ -74,6 +84,7 @@ export default function CustomAudioPlayer({ src }) {
   const handleEnded = () => {
     setIsPlaying(false);
     setCurrentTime(0);
+    onPlayStateChange && onPlayStateChange(false);
   };
 
   return (

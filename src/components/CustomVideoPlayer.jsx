@@ -1,6 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 
-export default function CustomVideoPlayer({ src, onError }) {
+export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
   const [isPlaying, setIsPlaying] = useState(false);
@@ -18,6 +18,14 @@ export default function CustomVideoPlayer({ src, onError }) {
     }
   }, [volume, isMuted]);
 
+  // Safety net: if this player unmounts (modal closed, clue swapped, or
+  // renderAs falls back from video to audio after an error) while still
+  // playing, make sure the parent knows so it can un-duck.
+  useEffect(() => {
+    return () => onPlayStateChange && onPlayStateChange(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Track fullscreen changes (e.g. user hits Esc)
   useEffect(() => {
     const handleFsChange = () => {
@@ -31,8 +39,10 @@ export default function CustomVideoPlayer({ src, onError }) {
     if (!videoRef.current) return;
     if (isPlaying) {
       videoRef.current.pause();
+      onPlayStateChange && onPlayStateChange(false);
     } else {
       videoRef.current.play();
+      onPlayStateChange && onPlayStateChange(true);
     }
     setIsPlaying(!isPlaying);
   };
@@ -94,6 +104,7 @@ export default function CustomVideoPlayer({ src, onError }) {
   const handleEnded = () => {
     setIsPlaying(false);
     setCurrentTime(0);
+    onPlayStateChange && onPlayStateChange(false);
   };
 
   return (

@@ -92,7 +92,6 @@
     border: none;
     outline:none; text-align:center; width:100%;
     cursor: text;
-    padding-bottom: 8px;
     transition: all 0.15s ease;
   }
   .marquee-title:not(:disabled):focus{
@@ -1087,4 +1086,104 @@ button.btn.gold:hover{ linear-gradient(180deg, var(--gold), #c8932c);}
 
 @media (max-width: 620px){
   .lever-col{ width: 100%; order: -1; }
+}
+
+/* ---- Background music widget — floating corner button + expandable panel ---- */
+.bgm-widget{
+  position: fixed; bottom: 18px; right: 18px; z-index: 60;
+  display: flex; flex-direction: column; align-items: flex-end; gap: 10px;
+}
+.bgm-toggle-btn{
+  width: 46px; height: 46px; border-radius: 50%; font-size: 19px; line-height: 1;
+  background: linear-gradient(180deg, #1a2570, #0e1550);
+  border: 1px solid rgba(240,185,66,0.4); color: var(--text);
+  cursor: pointer; display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+  transition: transform 0.12s ease, box-shadow 0.15s ease, border-color 0.15s ease, opacity 0.4s ease;
+}
+.bgm-toggle-btn:hover{ transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,0.6); }
+.bgm-toggle-btn:active{ transform: translateY(0) scale(0.94); }
+.bgm-toggle-btn.is-playing{
+  border-color: var(--gold);
+  box-shadow: 0 0 0 0 rgba(240,185,66,0.5), 0 4px 14px rgba(0,0,0,0.5);
+  animation: bgmPulse 1.8s ease-in-out infinite;
+}
+.bgm-toggle-btn.is-ducked{
+  opacity: 0.55;
+  animation: none;
+  box-shadow: 0 4px 14px rgba(0,0,0,0.5);
+}
+@keyframes bgmPulse{
+  0%, 100%{ box-shadow: 0 0 0 0 rgba(240,185,66,0.45), 0 4px 14px rgba(0,0,0,0.5); }
+  50%{ box-shadow: 0 0 0 8px rgba(240,185,66,0), 0 4px 14px rgba(0,0,0,0.5); }
+}
+
+.bgm-panel{
+  width: 240px; padding: 14px; border-radius: 12px;
+  background: linear-gradient(180deg, rgba(26,37,112,0.97), rgba(6,9,26,0.98));
+  border: 1px solid rgba(240,185,66,0.3);
+  box-shadow: 0 12px 30px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05);
+  animation: bgmPanelIn 0.16s ease-out;
+}
+@keyframes bgmPanelIn{
+  from{ opacity: 0; transform: translateY(6px); }
+  to{ opacity: 1; transform: translateY(0); }
+}
+.bgm-panel-title{
+  font-family: var(--font-display); font-size: 13px; letter-spacing: 0.5px;
+  color: var(--gold); margin-bottom: 10px; text-align: center;
+}
+.bgm-track-row{
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid rgba(240,185,66,0.15);
+}
+.bgm-track-name{
+  font-size: 12px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis;
+  white-space: nowrap; flex: 1;
+}
+.bgm-clear-btn{
+  width: 20px; height: 20px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: bold;
+  background: linear-gradient(180deg, #e8544a, #a8322a); color: #fff; border: none; cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.bgm-clear-btn:hover{ filter: brightness(1.12); transform: scale(1.1); }
+.bgm-upload-btn{
+  display: block; width: 100%; text-align: center; box-sizing: border-box;
+  font-family: var(--font-body); font-weight: bold; font-size: 11.5px; letter-spacing: 0.3px;
+  padding: 8px 10px; border-radius: 6px; border: 1px dashed var(--gold-dim);
+  background: rgba(0,0,0,0.2); color: var(--text); cursor: pointer;
+  margin-bottom: 12px; transition: border-color 0.15s ease, background 0.15s ease;
+}
+.bgm-upload-btn:hover{ border-color: var(--gold); background: rgba(240,185,66,0.08); }
+.bgm-controls-row{ display: flex; align-items: center; gap: 8px; }
+.bgm-play-btn{
+  width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+  background: linear-gradient(180deg, var(--gold), #c8932c); color: #1a1200; border: none; cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease;
+}
+.bgm-play-btn:hover{ filter: brightness(1.08); }
+.bgm-play-btn:active{ transform: scale(0.92); }
+.bgm-play-btn:disabled{ opacity: 0.35; cursor: not-allowed; filter: none; }
+.bgm-volume-slider{
+  flex: 1; accent-color: var(--gold); cursor: pointer;
+}
+.bgm-loop-btn{
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(0,0,0,0.25); color: var(--text-dim);
+  border: 1px solid rgba(240,185,66,0.25); cursor: pointer;
+  transition: transform 0.12s ease, filter 0.12s ease, color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.bgm-loop-btn:hover{ border-color: var(--gold); color: var(--text); }
+.bgm-loop-btn:active{ transform: scale(0.92); }
+.bgm-loop-btn.is-active{
+  background: linear-gradient(180deg, var(--gold), #c8932c);
+  border-color: var(--gold); color: #1a1200;
+}
+
+@media (max-width: 620px){
+  .bgm-widget{ bottom: 12px; right: 12px; }
+  .bgm-panel{ width: 200px; }
 }
