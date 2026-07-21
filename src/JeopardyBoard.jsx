@@ -16,42 +16,141 @@ import EditClueModal from "./components/EditClueModal";
 import SessionsModal from "./components/SessionsModal";
 import ConfirmDialog from "./components/ConfirmDialog";
 import TeamRandomizer from "./components/TeamRandomizer";
+import BackgroundMusicPlayer from "./components/BackgroundMusicPlayer";
+import { BgmStore } from "./lib/storage/bgmStore";
 import MarqueeBulbs from "./lib/MarqueeBulbs";
-import hoverTickUrl from "./assets/hover-tick.mp3";
+import { createSfx, getSharedAudioCtx } from "./lib/sfx";
+import { useScorePulse } from "./lib/hooks/useScorePulse";
+import { useConfirmDialog } from "./lib/hooks/useConfirmDialog";
 
 /* =========================================================================
    HOVER SOUND
-   A short sound that plays when hovering a clickable clue cell, loaded
-   from src/assets/hover-tick.mp3. One <audio> element is created once
-   (module scope) and preloaded; each play clones it via cloneNode() so
-   a fast mouse-sweep across several cells doesn't cut a still-playing
-   sound short — overlapping clones just play independently and get
-   garbage collected once they finish.
+   Plays src/assets/hover-tick.mp3 if it's present; otherwise falls back to
+   a short synthesized "tick" so hovering still has a sound effect even
+   before you've dropped a file in. File-load/fallback/debounce plumbing
+   lives in lib/sfx.js's createSfx() — only the synthesized tone (which is
+   unique to this sound) stays here.
+
+   Note: this uses `new URL(..., import.meta.url)` rather than a static
+   `import x from "./assets/hover-tick.mp3"`. A static import needs Vite to
+   resolve the file at BUILD time — if it's missing, the whole build fails.
+   `new URL()` just builds a URL string, so it's safe to reference a file
+   that may not exist yet; we detect that at runtime instead and swap to
+   the fallback tone.
    ========================================================================= */
-const hoverAudioTemplate = typeof Audio !== "undefined" ? new Audio(hoverTickUrl) : null;
-if (hoverAudioTemplate) {
-  hoverAudioTemplate.preload = "auto";
-  hoverAudioTemplate.volume = 0.4; // adjust to taste
-}
+const hoverTickUrl = new URL("./assets/hover-tick.mp3", import.meta.url).href;
 
-let lastHoverTickAt = 0;
-const HOVER_TICK_MIN_GAP_MS = 55; // guards against a rapid mouse-sweep firing a pile of overlapping plays
-
-function playHoverTick() {
-  if (!hoverAudioTemplate) return;
-  const now = performance.now();
-  if (now - lastHoverTickAt < HOVER_TICK_MIN_GAP_MS) return;
-  lastHoverTickAt = now;
+function playSynthHoverTick() {
   try {
-    const node = hoverAudioTemplate.cloneNode(true);
-    node.volume = hoverAudioTemplate.volume;
-    node.play().catch(() => {
-      /* best effort — browsers may block audio before the user has interacted with the page yet */
-    });
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+
+    // Low "thock" body — a quick pitch-drop thump, like a muted kick, gives
+    // the deep low-end of a switch bottoming out.
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(170, t0);
+    osc.frequency.exponentialRampToValueAtTime(65, t0 + 0.09);
+    oscGain.gain.setValueAtTime(0.0001, t0);
+    oscGain.gain.exponentialRampToValueAtTime(0.32, t0 + 0.006);
+    oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.onended = () => {
+      osc.disconnect();
+      oscGain.disconnect();
+    };
+    osc.start(t0);
+    osc.stop(t0 + 0.14);
+
+    // Short filtered noise burst — the plasticky "clack" transient on top
+    // of the thump, the part that actually reads as a keypress.
+    const bufferSize = Math.max(1, Math.floor(ctx.sampleRate * 0.02)); // ~20ms of noise
+    const noiseBuffer = ctx.createBuffer(1, bufferSize, ctx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    for (let i = 0; i < bufferSize; i++) data[i] = Math.random() * 2 - 1;
+
+    const noise = ctx.createBufferSource();
+    noise.buffer = noiseBuffer;
+    const noiseFilter = ctx.createBiquadFilter();
+    noiseFilter.type = "lowpass";
+    noiseFilter.frequency.setValueAtTime(1200, t0);
+    const noiseGain = ctx.createGain();
+    noiseGain.gain.setValueAtTime(0.0001, t0);
+    noiseGain.gain.exponentialRampToValueAtTime(0.16, t0 + 0.004);
+    noiseGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.03);
+    noise.connect(noiseFilter);
+    noiseFilter.connect(noiseGain);
+    noiseGain.connect(ctx.destination);
+    noise.onended = () => {
+      noise.disconnect();
+      noiseFilter.disconnect();
+      noiseGain.disconnect();
+    };
+    noise.start(t0);
+    noise.stop(t0 + 0.03);
   } catch (e) {
-    /* best effort — silently ignore */
+    /* best effort — silently ignore if audio is blocked */
   }
 }
+
+const playHoverTick = createSfx({
+  url: hoverTickUrl,
+  fallbackTone: playSynthHoverTick,
+  volume: 0.4,
+  minGapMs: 55, // guards against a rapid mouse-sweep firing a pile of overlapping plays
+});
+
+/* =========================================================================
+   CLICK SOUND
+   Same idea as the hover tick above: plays src/assets/click.mp3 if it's
+   present, otherwise falls back to a short synthesized "click" so every
+   button still has a sound effect even before a file's been dropped in.
+   Fired globally (see the document-level listener in the component below)
+   so every <button> in the app — board, toolbar, modals, custom players,
+   the music widget — gets it for free, with no per-button wiring needed.
+   ========================================================================= */
+const clickSfxUrl = new URL("./assets/click.mp3", import.meta.url).href;
+
+function playSynthClickTone() {
+  try {
+    const ctx = getSharedAudioCtx(); // reuse the same shared AudioContext as the hover tick
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+
+    // A brighter, snappier tick than the hover sound — higher pitch, shorter
+    // decay — so the two read as distinct even played back to back.
+    const osc = ctx.createOscillator();
+    const oscGain = ctx.createGain();
+    osc.type = "square";
+    osc.frequency.setValueAtTime(1400, t0);
+    osc.frequency.exponentialRampToValueAtTime(700, t0 + 0.045);
+    oscGain.gain.setValueAtTime(0.0001, t0);
+    oscGain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.004);
+    oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
+    osc.connect(oscGain);
+    oscGain.connect(ctx.destination);
+    osc.onended = () => {
+      osc.disconnect();
+      oscGain.disconnect();
+    };
+    osc.start(t0);
+    osc.stop(t0 + 0.07);
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+const playClickSfx = createSfx({
+  url: clickSfxUrl,
+  fallbackTone: playSynthClickTone,
+  volume: 0.45,
+  minGapMs: 40, // guards against double-fires (e.g. a click that also triggers a synthetic one)
+});
 
 /* =========================================================================
    MARQUEE LIGHTS
@@ -115,6 +214,11 @@ export default function JeopardyBoard() {
   const [activeClue, setActiveClue] = useState(null); // {catId, value}
   const [revealed, setRevealed] = useState(false);
 
+  // True while the clue modal's own audio/video is playing — passed down to
+  // BackgroundMusicPlayer so it can duck (fade down, not pause) instead of
+  // the two overlapping. Reset to false whenever the clue modal closes.
+  const [duckMusic, setDuckMusic] = useState(false);
+
   const [editingTarget, setEditingTarget] = useState(null); // {catId, value}
   const [editForm, setEditForm] = useState({ question: "", answer: "", timerSeconds: "" });
   const [mediaState, setMediaState] = useState({
@@ -124,23 +228,29 @@ export default function JeopardyBoard() {
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
   const [sessionIndex, setSessionIndex] = useState([]);
 
-  const [dialog, setDialog] = useState(null); // {title, message, okLabel, showCancel}
-  const dialogResolveRef = useRef(null);
-
-  // { [teamId]: "pulse-up" | "pulse-down" } — cleared automatically after the animation plays
-  const [scorePulse, setScorePulse] = useState({});
-  const scorePulseTimeouts = useRef({});
-  function firePulse(teamId, direction) {
-    setScorePulse((p) => ({ ...p, [teamId]: direction }));
-    clearTimeout(scorePulseTimeouts.current[teamId]);
-    scorePulseTimeouts.current[teamId] = setTimeout(() => {
-      setScorePulse((p) => {
-        const next = { ...p };
-        delete next[teamId];
-        return next;
-      });
-    }, 500);
+  // Background music is GLOBAL — deliberately its own bit of state, loaded
+  // once at startup and saved to its own storage key, completely decoupled
+  // from `session`. It must never live inside session.data, or switching
+  // sessions hands BackgroundMusicPlayer a new settings object and the
+  // track resets/restarts.
+  const [bgmSettings, setBgmSettings] = useState(null);
+  const bgmRef = useRef(null);
+  useEffect(() => {
+    bgmRef.current = bgmSettings;
+  }, [bgmSettings]);
+  const bgmPersistTimeout = useRef(null);
+  function updateBgm(patch) {
+    const next = { ...bgmRef.current, ...patch };
+    setBgmSettings(next);
+    bgmRef.current = next;
+    clearTimeout(bgmPersistTimeout.current);
+    bgmPersistTimeout.current = setTimeout(() => {
+      BgmStore.save(bgmRef.current);
+    }, 400);
   }
+
+  const { scorePulse, firePulse } = useScorePulse();
+  const { dialog, appConfirm, appAlert, resolveDialog } = useConfirmDialog();
 
   const data = session ? session.data : null;
 
@@ -185,24 +295,48 @@ export default function JeopardyBoard() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  function showDialog({ title, message, okLabel, showCancel }) {
-    return new Promise((resolve) => {
-      dialogResolveRef.current = resolve;
-      setDialog({ title, message, okLabel, showCancel });
-    });
-  }
-  function appConfirm(message) {
-    return showDialog({ title: "Are you sure?", message, okLabel: "Confirm", showCancel: true });
-  }
-  function appAlert(message) {
-    return showDialog({ title: "Heads up", message, okLabel: "OK", showCancel: false });
-  }
-  function resolveDialog(val) {
-    const r = dialogResolveRef.current;
-    dialogResolveRef.current = null;
-    setDialog(null);
-    if (r) r(val);
-  }
+  // Global click SFX — fires for every <button> (and anything acting as one
+  // via role="button", like the clue-modal's flip-to-reveal card) anywhere
+  // in the app via one delegated listener, rather than wiring it into each
+  // element individually. Skips disabled buttons since those don't actually
+  // fire click events in the first place. The board's own clue cells play
+  // this directly in their onClick instead (see below), since they're plain
+  // divs with no role attribute — this selector never double-fires for them.
+  useEffect(() => {
+    const handleGlobalClick = (e) => {
+      const btn = e.target.closest && e.target.closest("button, [role='button']");
+      // data-sfx-handled opts an element out of the global click sound —
+      // used by the clue-reveal front face, which plays its own reveal
+      // chime instead and would otherwise double-fire both sounds at once.
+      if (btn && !btn.disabled && !btn.closest("[data-sfx-handled]")) playClickSfx();
+    };
+    document.addEventListener("click", handleGlobalClick, true);
+    return () => document.removeEventListener("click", handleGlobalClick, true);
+  }, []);
+
+  // Global hover SFX for every <button> OUTSIDE the board (toolbar, team
+  // cards, modals, the music widget, etc.) — the clue cells themselves are
+  // plain <div>s with their own dedicated hover handling below, so this
+  // never double-fires for them. "mouseover" bubbles (unlike mouseenter),
+  // so one delegated listener covers the whole app; lastHoveredBtn just
+  // stops it from re-triggering on every pixel of mouse movement within
+  // the same button.
+  useEffect(() => {
+    let lastHoveredBtn = null;
+    const handleGlobalMouseOver = (e) => {
+      const btn = e.target.closest && e.target.closest("button");
+      if (btn && !btn.disabled) {
+        if (btn !== lastHoveredBtn) {
+          lastHoveredBtn = btn;
+          playHoverTick();
+        }
+      } else {
+        lastHoveredBtn = null;
+      }
+    };
+    document.addEventListener("mouseover", handleGlobalMouseOver, true);
+    return () => document.removeEventListener("mouseover", handleGlobalMouseOver, true);
+  }, []);
 
   /* ---------------- INIT ---------------- */
   useEffect(() => {
@@ -222,6 +356,21 @@ export default function JeopardyBoard() {
       migrateClueSchemaIfNeeded(loaded.data);
       ensureClueGrid(loaded.data);
       setSession(loaded);
+
+      // Load the GLOBAL bgm settings — independent of whichever session
+      // just loaded above. One-time migration: if this is the very first
+      // time (no global track saved yet) but the loaded session happens to
+      // have an old per-session track from before this was global, adopt
+      // it so nobody's existing music silently disappears.
+      let bgm = await BgmStore.load();
+      const legacyBgm = loaded.data.settings.backgroundMusic;
+      if (!bgm.fileRef && legacyBgm && legacyBgm.fileRef) {
+        bgm = { ...bgm, ...legacyBgm };
+        await BgmStore.save(bgm);
+      }
+      setBgmSettings(bgm);
+      bgmRef.current = bgm;
+
       setReady(true);
     })();
   }, []);
@@ -540,6 +689,7 @@ export default function JeopardyBoard() {
       persist();
     }
     setActiveClue(null);
+    setDuckMusic(false);
   }
 
   /* ---------------- CLUE EDIT MODAL ---------------- */
@@ -623,6 +773,36 @@ export default function JeopardyBoard() {
     persist();
   }
 
+  /* ---------------- BACKGROUND MUSIC (global — not per-session) ---------------- */
+  async function handleBgmUpload(file) {
+    if (!file) return;
+    const proceed =
+      file.size < 50 * 1024 * 1024 ||
+      (await appConfirm(`"${file.name}" is ${humanSize(file.size)}. That's a large file — it may take a moment to store. Use it anyway?`));
+    if (!proceed) return;
+    try {
+      const ref = await MediaStore.put(file);
+      updateBgm({ fileRef: ref, fileName: `${file.name} (${humanSize(file.size)})` });
+    } catch (e) {
+      appAlert("Could not store that track — your browser may be blocking local storage (e.g. private browsing mode).");
+    }
+  }
+  function clearBgm() {
+    updateBgm({ fileRef: "", fileName: "" });
+  }
+  function setBgmVolume(volume) {
+    updateBgm({ volume });
+  }
+  function toggleBgmLoop() {
+    updateBgm({ loop: !bgmRef.current.loop });
+  }
+  function setBgmSource(source) {
+    updateBgm({ source });
+  }
+  function setBgmSpotifyUrl(url) {
+    updateBgm({ spotifyUrl: url });
+  }
+
   /* ---------------- RESET ROUND ---------------- */
   async function resetRound() {
     if (!(await appConfirm("Reset all scores to 0 and mark all clues unused (both rounds)? Your questions/answers/media stay."))) return;
@@ -647,14 +827,6 @@ export default function JeopardyBoard() {
     );
   }
 
-  if (view === "randomizer") {
-    return (
-      <div className="jp-root">
-        <TeamRandomizer teams={data.teams} onApplyOrder={applyTeamOrder} onClose={() => setView("board")} />
-      </div>
-    );
-  }
-
   const rd = data.rounds[data.currentRound];
   const nCats = rd.categories.length;
   const nRows = rd.values.length;
@@ -669,6 +841,10 @@ export default function JeopardyBoard() {
 
   return (
     <div className="jp-root">
+      {view === "randomizer" ? (
+        <TeamRandomizer teams={data.teams} onApplyOrder={applyTeamOrder} onClose={() => setView("board")} />
+      ) : (
+        <>
       <div className={"marquee" + (editMode ? " editing" : "")}>
         {editMode ? null : <MarqueeBulbs />}
         <input
@@ -825,8 +1001,13 @@ export default function JeopardyBoard() {
                         transitionDelay: flipDelay(catIndex),
                       }}
                       onClick={() => {
-                        if (editMode) openEditModal(cat, v);
-                        else if (!clue.used) openClueModal(cat, v);
+                        if (editMode) {
+                          playClickSfx();
+                          openEditModal(cat, v);
+                        } else if (!clue.used) {
+                          playClickSfx();
+                          openClueModal(cat, v);
+                        }
                       }}
                       onMouseEnter={() => {
                         if (editMode || !clue.used) playHoverTick();
@@ -922,6 +1103,7 @@ export default function JeopardyBoard() {
           onAdjustTeamScore={adjustTeamScore}
           timerEnabled={data.settings.timerEnabled}
           timerSeconds={activeClueObj.timerSeconds != null ? activeClueObj.timerSeconds : data.settings.timerDuration}
+          onDuckMusic={setDuckMusic}
         />
       )}
 
@@ -951,8 +1133,22 @@ export default function JeopardyBoard() {
           onRenameCommit={handleRenameSessionCommit}
         />
       )}
+        </>
+      )}
 
       <ConfirmDialog dialog={dialog} onResolve={resolveDialog} />
+      {bgmSettings && (
+        <BackgroundMusicPlayer
+          settings={bgmSettings}
+          onUploadFile={handleBgmUpload}
+          onClear={clearBgm}
+          onVolumeChange={setBgmVolume}
+          onToggleLoop={toggleBgmLoop}
+          onSetSource={setBgmSource}
+          onSetSpotifyUrl={setBgmSpotifyUrl}
+          ducking={duckMusic}
+        />
+      )}
     </div>
   );
 }
