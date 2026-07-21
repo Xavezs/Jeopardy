@@ -28,16 +28,16 @@ export function getSharedAudioCtx() {
  *
  * @param {string} url - Asset URL, e.g. `new URL("./assets/click.mp3", import.meta.url).href`
  * @param {() => void} fallbackTone - Synthesized tone to play if the file is missing/unloadable
- * @param {number} [volume=0.5] - 0–1 playback volume for the file-based sound
+ * @param {number} [volume=0.3] - 0–1 playback volume for the file-based sound
  * @param {number} [minGapMs=40] - Minimum ms between plays; guards against double-fires
  * @returns {() => void} play() — call this to trigger the sound
  */
-export function createSfx({ url, fallbackTone, volume = 0.5, minGapMs = 40 }) {
+export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
   const audioTemplate = typeof Audio !== "undefined" ? new Audio(url) : null;
   let fileAvailable = !!audioTemplate;
   if (audioTemplate) {
     audioTemplate.preload = "auto";
-    audioTemplate.volume = volume;
+    audioTemplate.volume = volume; 
     audioTemplate.addEventListener("error", () => {
       fileAvailable = false; // file missing/unloadable — every future play uses the fallback tone instead
     });

@@ -22,6 +22,7 @@ import MarqueeBulbs from "./lib/MarqueeBulbs";
 import { createSfx, getSharedAudioCtx } from "./lib/sfx";
 import { useScorePulse } from "./lib/hooks/useScorePulse";
 import { useConfirmDialog } from "./lib/hooks/useConfirmDialog";
+import DiscordOverlay from "./components/DiscordOverlay";
 
 /* =========================================================================
    HOVER SOUND
@@ -100,7 +101,7 @@ function playSynthHoverTick() {
 const playHoverTick = createSfx({
   url: hoverTickUrl,
   fallbackTone: playSynthHoverTick,
-  volume: 0.4,
+  volume: 0.1,
   minGapMs: 55, // guards against a rapid mouse-sweep firing a pile of overlapping plays
 });
 
@@ -148,8 +149,128 @@ function playSynthClickTone() {
 const playClickSfx = createSfx({
   url: clickSfxUrl,
   fallbackTone: playSynthClickTone,
-  volume: 0.45,
+  volume: 0.1,
   minGapMs: 40, // guards against double-fires (e.g. a click that also triggers a synthetic one)
+});
+
+/* =========================================================================
+   CORRECT / INCORRECT SOUNDS
+   Same pair used in ClueModal for its ↑ / ↓ scoring shortcut — reused here
+   so the main scoreboard's number-key-select + ↑/↓ shortcut sounds
+   identical. Same file-with-synth-fallback pattern — see lib/sfx.js's
+   createSfx().
+   ========================================================================= */
+const correctSfxUrl = new URL("./assets/correct.mp3", import.meta.url).href;
+const incorrectSfxUrl = new URL("./assets/incorrect.mp3", import.meta.url).href;
+
+function playSynthCorrectTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    // Quick ascending two-note "ding-ding"
+    [0, 0.1].forEach((delay, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = i === 0 ? 880 : 1320;
+      gain.gain.setValueAtTime(0.0001, t0 + delay);
+      gain.gain.exponentialRampToValueAtTime(0.25, t0 + delay + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0 + delay);
+      osc.stop(t0 + delay + 0.2);
+    });
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+function playSynthIncorrectTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    // Descending "buzz"
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(300, t0);
+    osc.frequency.exponentialRampToValueAtTime(120, t0 + 0.25);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.3);
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+const playCorrectSfx = createSfx({
+  url: correctSfxUrl,
+  fallbackTone: playSynthCorrectTone,
+  volume: 0.15,
+  minGapMs: 40,
+});
+
+const playIncorrectSfx = createSfx({
+  url: incorrectSfxUrl,
+  fallbackTone: playSynthIncorrectTone,
+  volume: 0.15,
+  minGapMs: 40,
+});
+
+/* =========================================================================
+   CATEGORY REVEAL SOUND
+   Plays src/assets/reveal.mp3 if present; otherwise falls back to a short
+   synthesized ascending chime so category reveals still have audio even
+   without a media file. File-load/fallback/debounce plumbing lives in
+   lib/sfx.js's createSfx().
+   ========================================================================= */
+const catRevealSfxUrl = new URL("./assets/reveal-card.mp3", import.meta.url).href;
+
+function playSynthCatRevealTone() {
+  try {
+    const ctx = getSharedAudioCtx(); // reuse the same shared AudioContext
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+
+    // Ascending bright chime — C5 to C6
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(523.25, t0);
+    osc.frequency.exponentialRampToValueAtTime(1046.5, t0 + 0.15);
+
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
+
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.onended = () => {
+      osc.disconnect();
+      gain.disconnect();
+    };
+    osc.start(t0);
+    osc.stop(t0 + 0.22);
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+const playCatRevealSfx = createSfx({
+  url: catRevealSfxUrl,
+  fallbackTone: playSynthCatRevealTone,
+  volume: 0.15,
+  minGapMs: 40,
 });
 
 /* =========================================================================
@@ -214,6 +335,22 @@ export default function JeopardyBoard() {
   const [activeClue, setActiveClue] = useState(null); // {catId, value}
   const [revealed, setRevealed] = useState(false);
 
+  // Category headers start blank (a clickable "?") and pop-reveal one at a
+  // time as the host clicks each one — keyed by category id, so switching
+  // rounds naturally re-hides the new round's categories (different ids)
+  // while flipping back to an already-played round remembers what was
+  // already shown. Never persisted — purely a live "for the show" state.
+  const [revealedCats, setRevealedCats] = useState(() => new Set());
+  function revealCategory(cat) {
+    setRevealedCats((prev) => {
+      if (prev.has(cat.id)) return prev;
+      const next = new Set(prev);
+      next.add(cat.id);
+      return next;
+    });
+    playCatRevealSfx();
+  }
+
   // True while the clue modal's own audio/video is playing — passed down to
   // BackgroundMusicPlayer so it can duck (fade down, not pause) instead of
   // the two overlapping. Reset to false whenever the clue modal closes.
@@ -223,7 +360,39 @@ export default function JeopardyBoard() {
   const [editForm, setEditForm] = useState({ question: "", answer: "", timerSeconds: "" });
   const [mediaState, setMediaState] = useState({
     media: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
+    answerMedia: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
   });
+
+  // Drag-to-swap clue cards in Edit Mode. Dragging one cell onto another
+  // swaps their CONTENT (question/answer/media/timer/used) between the two
+  // grid positions — the $ value stays put since it's tied to the row, not
+  // the clue. dragOverKey drives the visual "drop here" highlight while
+  // hovering a valid target.
+  const [dragSource, setDragSource] = useState(null); // {catId, value}
+  const [dragOverKey, setDragOverKey] = useState(null); // catId + "-" + value
+
+  // Which team's scoreboard number is "armed" for the ↑/↓ +/- shortcut —
+  // click a team's score to select it (gold ring), then Up/Down adjusts
+  // it by SCORE_STEP. Replaces the old dedicated +/- buttons. Cleared
+  // whenever edit mode turns on, since editing uses a free-typed input
+  // instead.
+  const [selectedScoreTeamId, setSelectedScoreTeamId] = useState(null);
+  const SCORE_STEP = 50;
+  function swapClueCells(source, target) {
+    if (!source || !target) return;
+    if (source.catId === target.catId && source.value === target.value) return;
+    const d = sessionRef.current.data;
+    const rd = currentRoundOf(d);
+    const srcCat = rd.categories.find((c) => c.id === source.catId);
+    const tgtCat = rd.categories.find((c) => c.id === target.catId);
+    if (!srcCat || !tgtCat) return;
+    const srcClue = srcCat.clues[source.value] || blankClue();
+    const tgtClue = tgtCat.clues[target.value] || blankClue();
+    srcCat.clues[source.value] = tgtClue;
+    tgtCat.clues[target.value] = srcClue;
+    touch();
+    persist();
+  }
 
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
   const [sessionIndex, setSessionIndex] = useState([]);
@@ -338,6 +507,52 @@ export default function JeopardyBoard() {
     return () => document.removeEventListener("mouseover", handleGlobalMouseOver, true);
   }, []);
 
+  // Deselect the scoreboard team whenever edit mode is toggled on, or a
+  // clue modal is open (its own ↑/↓ shortcut takes over scoring there —
+  // see ClueModal — so the two never fight over the same keys).
+  useEffect(() => {
+    if (editMode || activeClue) setSelectedScoreTeamId(null);
+  }, [editMode, activeClue]);
+
+  // Number keys (1-9) select a team on the main scoreboard, mirroring the
+  // 1-4 "arm a team" shortcut in ClueModal — press a digit to select that
+  // team (by its position among the rendered team cards), then Up/Down
+  // arrow keys +/- its score by SCORE_STEP. Only active when we're not in
+  // edit mode, no clue modal is open (it has its own copy of this
+  // shortcut), and focus isn't inside a text input (so typing in the team
+  // name/score fields still works normally).
+  useEffect(() => {
+    const handleScoreKeyDown = (e) => {
+      if (editMode || activeClue) return;
+      const tag = document.activeElement && document.activeElement.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA") return;
+
+      const teams = sessionRef.current?.data?.teams;
+
+      const digit = Number(e.key);
+      if (Number.isInteger(digit) && teams && digit >= 1 && digit <= teams.length) {
+        playClickSfx();
+        setSelectedScoreTeamId(teams[digit - 1].id);
+        return;
+      }
+
+      if (selectedScoreTeamId == null) return;
+      if (e.key !== "ArrowUp" && e.key !== "ArrowDown") return;
+      const team = teams?.find((t) => t.id === selectedScoreTeamId);
+      if (!team) return;
+      e.preventDefault();
+      if (e.key === "ArrowUp") {
+        playCorrectSfx();
+        adjustTeamScore(team, SCORE_STEP);
+      } else {
+        playIncorrectSfx();
+        adjustTeamScore(team, -SCORE_STEP);
+      }
+    };
+    window.addEventListener("keydown", handleScoreKeyDown);
+    return () => window.removeEventListener("keydown", handleScoreKeyDown);
+  }, [selectedScoreTeamId, editMode, activeClue]);
+
   /* ---------------- INIT ---------------- */
   useEffect(() => {
     (async () => {
@@ -409,6 +624,7 @@ export default function JeopardyBoard() {
     setEditMode(false);
     setActiveClue(null);
     setEditingTarget(null);
+    setRevealedCats(new Set());
     setSession(loaded);
     setBoardFlip("in-start"); // instant jump to the opposite edge-on angle, no transition
     requestAnimationFrame(() => {
@@ -442,6 +658,7 @@ export default function JeopardyBoard() {
     setEditMode(true);
     setActiveClue(null);
     setEditingTarget(null);
+    setRevealedCats(new Set());
     setSession(created);
     setBoardFlip("in-start");
     requestAnimationFrame(() => {
@@ -706,7 +923,12 @@ export default function JeopardyBoard() {
       isMediaRef(existing) || isDataUrl(existing)
         ? { mode: "file", url: "", fileRef: existing, fileName: "File attached (from earlier) — remove to replace", fileType: clue.mediaType || "" }
         : { mode: "url", url: existing, fileRef: "", fileName: "", fileType: "" };
-    setMediaState({ media });
+    const existingAnswer = clue.answerMediaUrl || "";
+    const answerMedia =
+      isMediaRef(existingAnswer) || isDataUrl(existingAnswer)
+        ? { mode: "file", url: "", fileRef: existingAnswer, fileName: "File attached (from earlier) — remove to replace", fileType: clue.answerMediaType || "" }
+        : { mode: "url", url: existingAnswer, fileRef: "", fileName: "", fileType: "" };
+    setMediaState({ media, answerMedia });
   }
   function closeEditModal() {
     setEditingTarget(null);
@@ -751,6 +973,15 @@ export default function JeopardyBoard() {
         const url = m.url.trim();
         clue.mediaUrl = url;
         clue.mediaType = url ? detectMediaTypeFromUrl(url) : "";
+      }
+      const am = mediaState.answerMedia;
+      if (am.mode === "file") {
+        clue.answerMediaUrl = am.fileRef;
+        clue.answerMediaType = am.fileType || "";
+      } else {
+        const answerUrl = am.url.trim();
+        clue.answerMediaUrl = answerUrl;
+        clue.answerMediaType = answerUrl ? detectMediaTypeFromUrl(answerUrl) : "";
       }
       touch();
       persist();
@@ -815,6 +1046,7 @@ export default function JeopardyBoard() {
       });
     });
     d.teams.forEach((t) => (t.score = 0));
+    setRevealedCats(new Set());
     touch();
     persist();
   }
@@ -924,34 +1156,46 @@ export default function JeopardyBoard() {
 
       <div id="boardWrap">
         <div id="board" style={boardGridStyle}>
-          {rd.categories.map((cat, catIndex) => (
-            <div
-              key={cat.id}
-              className={"cat-cell" + (boardFlip === "out" ? " flip-out" : "") + (boardFlip === "in-start" ? " flip-in-start" : "")}
-              style={{
-                gridRow: "1",
-                gridColumn: editMode ? catIndex + 2 : catIndex + 1,
-                transitionDelay: flipDelay(catIndex),
-              }}
-            >
-              {editMode ? (
-                <>
-                  <input
-                    className="cat-name-input"
-                    maxLength={30}
-                    defaultValue={cat.name}
-                    key={cat.id + "-name"}
-                    onBlur={(e) => renameCategory(cat, e.target.value)}
-                  />
-                  <button className="cat-remove" title="Remove this category" onClick={() => removeCategory(cat)}>
-                    ✕
+          {rd.categories.map((cat, catIndex) => {
+            const isRevealed = editMode || revealedCats.has(cat.id);
+            return (
+              <div
+                key={cat.id}
+                className={
+                  "cat-cell" +
+                  (boardFlip === "out" ? " flip-out" : "") +
+                  (boardFlip === "in-start" ? " flip-in-start" : "") +
+                  (!isRevealed ? " cat-locked" : "")
+                }
+                style={{
+                  gridRow: "1",
+                  gridColumn: editMode ? catIndex + 2 : catIndex + 1,
+                  transitionDelay: flipDelay(catIndex),
+                }}
+              >
+                {editMode ? (
+                  <>
+                    <input
+                      className="cat-name-input"
+                      maxLength={30}
+                      defaultValue={cat.name}
+                      key={cat.id + "-name"}
+                      onBlur={(e) => renameCategory(cat, e.target.value)}
+                    />
+                    <button className="cat-remove" title="Remove this category" onClick={() => removeCategory(cat)}>
+                      ✕
+                    </button>
+                  </>
+                ) : isRevealed ? (
+                  <div className="cat-name cat-name-reveal">{cat.name}</div>
+                ) : (
+                  <button className="cat-reveal-btn" title="Click to reveal this category" onClick={() => revealCategory(cat)}>
+                    <span className="cat-reveal-mark">?</span>
                   </button>
-                </>
-              ) : (
-                <div className="cat-name">{cat.name}</div>
-              )}
-            </div>
-          ))}
+                )}
+              </div>
+            );
+          })}
 
           {editMode && (
             <div className="grid-add-column-cell" style={{ gridColumn: nCats + 2, gridRow: `1 / span ${nRows + 1}` }}>
@@ -985,20 +1229,52 @@ export default function JeopardyBoard() {
 
                 {rd.categories.map((cat, catIndex) => {
                   const clue = cat.clues[v] || blankClue();
+                  const cellKey = cat.id + "-" + v;
                   return (
                     <div
-                      key={cat.id + "-" + v}
+                      key={cellKey}
                       className={
                         "clue-cell" +
                         (clue.used ? " used" : "") +
                         (editMode ? " edit-mode-cell" : "") +
                         (boardFlip === "out" ? " flip-out" : "") +
-                        (boardFlip === "in-start" ? " flip-in-start" : "")
+                        (boardFlip === "in-start" ? " flip-in-start" : "") +
+                        (editMode && dragSource && dragSource.catId === cat.id && dragSource.value === v ? " drag-source" : "") +
+                        (editMode && dragOverKey === cellKey && !(dragSource && dragSource.catId === cat.id && dragSource.value === v)
+                          ? " drag-over"
+                          : "")
                       }
                       style={{
                         gridRow: gridRowPosition,
                         gridColumn: editMode ? catIndex + 2 : catIndex + 1,
                         transitionDelay: flipDelay(catIndex),
+                      }}
+                      draggable={editMode}
+                      onDragStart={(e) => {
+                        if (!editMode) return;
+                        setDragSource({ catId: cat.id, value: v });
+                        e.dataTransfer.effectAllowed = "move";
+                        e.dataTransfer.setData("text/plain", cellKey); // Firefox requires data to be set for drag to start
+                      }}
+                      onDragOver={(e) => {
+                        if (!editMode || !dragSource) return;
+                        e.preventDefault();
+                        e.dataTransfer.dropEffect = "move";
+                        if (dragOverKey !== cellKey) setDragOverKey(cellKey);
+                      }}
+                      onDragLeave={() => {
+                        setDragOverKey((k) => (k === cellKey ? null : k));
+                      }}
+                      onDrop={(e) => {
+                        e.preventDefault();
+                        if (!editMode || !dragSource) return;
+                        swapClueCells(dragSource, { catId: cat.id, value: v });
+                        setDragSource(null);
+                        setDragOverKey(null);
+                      }}
+                      onDragEnd={() => {
+                        setDragSource(null);
+                        setDragOverKey(null);
                       }}
                       onClick={() => {
                         if (editMode) {
@@ -1038,7 +1314,21 @@ export default function JeopardyBoard() {
 
       <div id="teamsWrap">
         {data.teams.map((team) => (
-          <div key={team.id} className="team-card">
+          <div
+            key={team.id}
+            className={
+              "team-card" +
+              (!editMode && selectedScoreTeamId === team.id ? " kb-selected" : "")
+            }
+            role={editMode ? undefined : "button"}
+            tabIndex={editMode ? undefined : 0}
+            title={editMode ? undefined : `Select (or press ${data.teams.indexOf(team) + 1}), then use ↑ / ↓ to adjust score`}
+            aria-label={editMode ? undefined : `Select ${team.name}'s score to adjust with arrow keys, or press ${data.teams.indexOf(team) + 1}`}
+            onClick={() => {
+              if (editMode) return;
+              setSelectedScoreTeamId((id) => (id === team.id ? null : team.id));
+            }}
+          >
             {editMode && (
               <button className="team-remove" title="Remove this team" onClick={() => removeTeam(team)}>
                 ✕
@@ -1056,9 +1346,6 @@ export default function JeopardyBoard() {
               <div className="team-name-display">{team.name}</div>
             )}
             <div className="team-score-row">
-              <button className="plus" onClick={() => adjustTeamScore(team, 50)}>
-                +
-              </button>
               {editMode ? (
                 <input
                   className="team-score-display team-score-input"
@@ -1070,13 +1357,16 @@ export default function JeopardyBoard() {
                   onWheel={(e) => e.target.blur()}
                 />
               ) : (
-                <div className={"team-score-display" + (scorePulse[team.id] ? " " + scorePulse[team.id] : "")}>
+                <div
+                  className={
+                    "team-score-display" +
+                    (scorePulse[team.id] ? " " + scorePulse[team.id] : "") +
+                    (selectedScoreTeamId === team.id ? " kb-selected" : "")
+                  }
+                >
                   ${team.score}
                 </div>
               )}
-              <button className="minus" onClick={() => adjustTeamScore(team, -50)}>
-                -
-              </button>
             </div>
           </div>
         ))}
@@ -1149,6 +1439,7 @@ export default function JeopardyBoard() {
           ducking={duckMusic}
         />
       )}
+      <DiscordOverlay />
     </div>
   );
 }
