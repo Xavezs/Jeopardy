@@ -19,7 +19,16 @@ export function timestamp() {
 }
 
 export function blankClue() {
-  return { question: "", answer: "", mediaUrl: "", mediaType: "", used: false, timerSeconds: null };
+  return {
+    question: "",
+    answer: "",
+    mediaUrl: "",
+    mediaType: "",
+    answerMediaUrl: "",
+    answerMediaType: "",
+    used: false,
+    timerSeconds: null,
+  };
 }
 export function blankCategory(name, valuesArray) {
   const targetValues = valuesArray || [100, 200, 300, 400, 500];
@@ -183,6 +192,8 @@ export function migrateClueSchemaIfNeeded(data) {
           delete clue.audioUrl;
         }
         if (clue.mediaType === undefined) clue.mediaType = "";
+        if (clue.answerMediaUrl === undefined) clue.answerMediaUrl = "";
+        if (clue.answerMediaType === undefined) clue.answerMediaType = "";
         if (clue.timerSeconds === undefined) clue.timerSeconds = null;
       });
     });

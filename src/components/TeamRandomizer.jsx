@@ -15,12 +15,12 @@ import spinningSound from "../assets/slot-spin.mp3";
 import stopSound from "../assets/slot-stop.mp3";
 import winSound from "../assets/slot-win.mp3";
 
-const CELL_HEIGHT = 72; // must match .slot-cell height in board.css
+const CELL_HEIGHT = 92; // must match .slot-cell height in board.css
 const LOOPS = 7; // how many full shuffled loops each reel scrolls through
 const BASE_DURATION = 2350; // ms — first reel's spin time
 const STAGGER = 400; // ms added per subsequent reel, so they stop in order
 
-const LEVER_TRAVEL = 168; // px — must match the lever track height in board.css
+const LEVER_TRAVEL = 216; // px — must match the lever track height in board.css
 const LEVER_PULL_THRESHOLD = 0.6; // fraction of travel that counts as "pulled"
 const LEVER_TAP_DISTANCE = 8; // px — drags shorter than this count as a tap, not a pull
 
@@ -306,7 +306,6 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
               ))}
 
               <div className="lever-col">
-                <div className="lever-label">{spinning ? "…" : finished ? "PULL\nAGAIN" : "PULL TO\nSPIN"}</div>
                 <div className={"lever-track" + (canPull ? "" : " disabled")}>
                   <div
                     className="lever-handle"

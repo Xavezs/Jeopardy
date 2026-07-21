@@ -67,21 +67,8 @@ export default function MediaField({ label, type, accept, placeholder, value, on
             onChange={(e) => handleFiles(e.target.files)}
           />
           <div className="dropzone-text">
-            Drop {type ? `your ${type}` : "an image, video, or audio file"} here or
+            Drop or upload {type ? `your ${type}` : "an image/video/audio file"} here
           </div>
-          <button
-            type="button"
-            className="btn gold dropzone-btn"
-            onClick={(e) => {
-              e.stopPropagation();
-              fileInputRef.current && fileInputRef.current.click();
-            }}
-          >
-            Upload From Device
-          </button>
-          {acceptLabel && (
-            <div className="dropzone-formats">Supported formats: {acceptLabel}</div>
-          )}
         </div>
       )}
 

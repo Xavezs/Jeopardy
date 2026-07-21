@@ -13,7 +13,7 @@ import { createSfx, getSharedAudioCtx } from "../lib/sfx";
    lib/sfx.js's createSfx() — only the synthesized tone (unique to this
    sound) stays here.
    ========================================================================= */
-const revealSfxUrl = new URL("../assets/reveal.mp3", import.meta.url).href;
+const revealSfxUrl = new URL("../assets/reveal-card.mp3", import.meta.url).href;
 
 function playSynthRevealTone() {
   try {
@@ -48,8 +48,80 @@ function playSynthRevealTone() {
 const playRevealSfx = createSfx({
   url: revealSfxUrl,
   fallbackTone: playSynthRevealTone,
-  volume: 0.5,
+  volume: 0.1,
   minGapMs: 40, // guards against double-fires
+});
+
+/* =========================================================================
+   CORRECT / INCORRECT SOUNDS
+   Triggered by the ↑ / ↓ keyboard shortcuts once a team is selected via
+   number keys (1-4). Same file-with-synth-fallback pattern as the reveal
+   sound above — see lib/sfx.js's createSfx().
+   ========================================================================= */
+const correctSfxUrl = new URL("../assets/correct.mp3", import.meta.url).href;
+const incorrectSfxUrl = new URL("../assets/incorrect.mp3", import.meta.url).href;
+
+function playSynthCorrectTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    // Quick ascending two-note "ding-ding"
+    [0, 0.1].forEach((delay, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = i === 0 ? 880 : 1320;
+      gain.gain.setValueAtTime(0.0001, t0 + delay);
+      gain.gain.exponentialRampToValueAtTime(0.25, t0 + delay + 0.01);
+      gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.18);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(t0 + delay);
+      osc.stop(t0 + delay + 0.2);
+    });
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+function playSynthIncorrectTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    if (ctx.state === "suspended") ctx.resume();
+    const t0 = ctx.currentTime;
+    // Descending "buzz"
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sawtooth";
+    osc.frequency.setValueAtTime(300, t0);
+    osc.frequency.exponentialRampToValueAtTime(120, t0 + 0.25);
+    gain.gain.setValueAtTime(0.0001, t0);
+    gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(t0);
+    osc.stop(t0 + 0.3);
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+const playCorrectSfx = createSfx({
+  url: correctSfxUrl,
+  fallbackTone: playSynthCorrectTone,
+  volume: 0.15,
+  minGapMs: 40,
+});
+
+const playIncorrectSfx = createSfx({
+  url: incorrectSfxUrl,
+  fallbackTone: playSynthIncorrectTone,
+  volume: 0.15,
+  minGapMs: 40,
 });
 
 function playAlertSound() {
@@ -106,12 +178,20 @@ export default function ClueModal({
   // ambiguous pasted URL), onError below advances it to the next kind.
   const [renderAs, setRenderAs] = useState("");
 
+  // Same idea as mediaUrl/renderAs above, but for the OPTIONAL media shown
+  // alongside the answer once it's revealed (e.g. a payoff photo/clip).
+  const [answerMediaUrl, setAnswerMediaUrl] = useState("");
+  const [answerRenderAs, setAnswerRenderAs] = useState("");
+
   const effectiveDuration = Math.max(1, parseInt(timerSeconds, 10) || 30);
   const [remaining, setRemaining] = useState(effectiveDuration);
   const [running, setRunning] = useState(false);
   const [timeUp, setTimeUp] = useState(false);
   const alertPlayedRef = React.useRef(false);
   const [flipped, setFlipped] = useState(false);
+  // Which team is "armed" for the ↑/↓ correct/incorrect keyboard shortcuts.
+  // Selected via number keys 1-4 (index into teams array), cleared per-clue.
+  const [selectedTeamIndex, setSelectedTeamIndex] = useState(null);
 
   // Whatever was playing (audio/video below) belongs to THIS clue — if the
   // clue changes or the modal closes while it was still playing, make sure
@@ -127,6 +207,7 @@ export default function ClueModal({
     setTimeUp(false);
     alertPlayedRef.current = false;
     setFlipped(false);
+    setSelectedTeamIndex(null);
   }, [clue, effectiveDuration]);
 
   // Countdown tick while running
@@ -167,16 +248,20 @@ export default function ClueModal({
 
     async function convertIds() {
       const url = clue.mediaUrl ? await getMediaUrl(clue.mediaUrl) : "";
+      const answerUrl = clue.answerMediaUrl ? await getMediaUrl(clue.answerMediaUrl) : "";
       if (cancelled) {
-        // Clue changed again before this resolved — don't leak the object URL we just made
+        // Clue changed again before this resolved — don't leak the object URLs we just made
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
+        if (answerUrl && answerUrl.startsWith("blob:")) URL.revokeObjectURL(answerUrl);
         return;
       }
-      urlsToRevoke = url && url.startsWith("blob:") ? [url] : [];
+      urlsToRevoke = [url, answerUrl].filter((u) => u && u.startsWith("blob:"));
       setMediaUrl(url);
       // Prefer the stored type; if it's unknown, guess image first (most
       // common) and let onError cascade through video -> audio below.
       setRenderAs(clue.mediaType || (url ? "image" : ""));
+      setAnswerMediaUrl(answerUrl);
+      setAnswerRenderAs(clue.answerMediaType || (answerUrl ? "image" : ""));
     }
     convertIds();
 
@@ -195,14 +280,57 @@ export default function ClueModal({
   };
 
   // Esc closes the clue the same way clicking the backdrop does — doesn't mark it complete.
+  // Space progresses through both reveal stages: first press flips the card
+  // (category/value -> question), second press reveals the answer text —
+  // mirrors the two-step flow of clicking the card then "Reveal Answer".
+  // Number keys (1-4) "arm" a team; ↑/↓ then score that team correct/incorrect
+  // and play the matching sfx. Only active once the answer side is showing,
+  // so these never fight with the reveal shortcuts above.
   useEffect(() => {
     const handleKeyDown = (e) => {
-      if (e.key === "Escape") requestClose(false);
+      if (e.key === "Escape") {
+        requestClose(false);
+        return;
+      }
+
+      if (e.key === " " || e.code === "Space") {
+        e.preventDefault(); // stop page scroll
+        if (!flipped) {
+          playRevealSfx();
+          setFlipped(true);
+        } else {
+          // Once flipped, space toggles the answer back and forth —
+          // reveal it, hit space again to hide it, and so on.
+          playRevealSfx();
+          onToggleReveal();
+        }
+        return;
+      }
+
+      if (!flipped) return; // remaining shortcuts only apply once flipped
+
+      const digit = Number(e.key);
+      if (Number.isInteger(digit) && digit >= 1 && digit <= teams.length) {
+        setSelectedTeamIndex(digit - 1);
+        return;
+      }
+
+      if (e.key === "ArrowUp" || e.key === "ArrowDown") {
+        if (selectedTeamIndex == null || !teams[selectedTeamIndex]) return;
+        e.preventDefault(); // stop page scroll
+        const team = teams[selectedTeamIndex];
+        if (e.key === "ArrowUp") {
+          playCorrectSfx();
+          onAdjustTeamScore(team, value);
+        } else {
+          playIncorrectSfx();
+          onAdjustTeamScore(team, -value);
+        }
+      }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [flipped, revealed, onToggleReveal, teams, selectedTeamIndex, value, onAdjustTeamScore]);
 
   if (!activeCat || !clue) return null;
 
@@ -232,7 +360,9 @@ export default function ClueModal({
             tabIndex={0}
             aria-label="Reveal clue"
             onKeyDown={(e) => {
-              if (e.key === "Enter" || e.key === " ") {
+              // Space is handled globally now (works regardless of focus).
+              // Enter stays here for keyboard users who've tabbed to this element.
+              if (e.key === "Enter") {
                 e.preventDefault();
                 playRevealSfx();
                 setFlipped(true);
@@ -317,8 +447,34 @@ export default function ClueModal({
             )}
 
            <div className={"clue-answer-box" + (revealed ? " show" : "")} style={{ whiteSpace: "pre-line" }}>{clue.answer || "(no answer set)"}</div>
+            {revealed && answerMediaUrl && answerRenderAs && (
+              <div className="clue-media clue-answer-media">
+                {answerRenderAs === "image" && (
+                  <img src={answerMediaUrl} alt="" onError={() => setAnswerRenderAs("video")} />
+                )}
+                {answerRenderAs === "video" &&
+                  (youTubeEmbed(answerMediaUrl) ? (
+                    <iframe
+                      src={youTubeEmbed(answerMediaUrl)}
+                      allow="autoplay; encrypted-media; picture-in-picture"
+                      allowFullScreen
+                      title="clue-answer-video"
+                    />
+                  ) : (
+                    <CustomVideoPlayer src={answerMediaUrl} onError={() => setAnswerRenderAs("audio")} onPlayStateChange={onDuckMusic} />
+                  ))}
+                {answerRenderAs === "audio" && <CustomAudioPlayer src={answerMediaUrl} onPlayStateChange={onDuckMusic} />}
+              </div>
+            )}
             <div className="clue-actions">
-              <button className="btn" onClick={onToggleReveal}>
+              <button
+                className="btn"
+                data-sfx-handled
+                onClick={() => {
+                  playRevealSfx();
+                  onToggleReveal();
+                }}
+              >
                 {revealed ? "Hide Answer" : "Reveal Answer"}
               </button>
               <button className="btn" onClick={() => requestClose(true)}>
@@ -326,13 +482,17 @@ export default function ClueModal({
               </button>
             </div>
             <div className="score-row">
-              {teams.map((team) => (
-                <div key={team.id} className="score-team-block">
+              {teams.map((team, i) => (
+                <div
+                  key={team.id}
+                  className={"score-team-block" + (i === selectedTeamIndex ? " kb-selected" : "")}
+                  onClick={() => setSelectedTeamIndex(i)}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select ${team.name} (${i + 1})`}
+                >
                   <div className="name">{team.name}</div>
-                  <div className="btns">
-                    <button className="plus" onClick={() => onAdjustTeamScore(team, value)}>+{value}</button>
-                    <button className="minus" onClick={() => onAdjustTeamScore(team, -value)}>−{value}</button>
-                  </div>
+                  <div className="score-value">{team.score ?? 0}</div>
                 </div>
               ))}
             </div>

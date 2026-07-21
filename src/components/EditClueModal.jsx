@@ -72,6 +72,7 @@ export default function EditClueModal({
               placeholder={`Board default (${defaultTimerSeconds}s)`}
               value={editForm.timerSeconds}
               onChange={(e) => setEditForm((f) => ({ ...f, timerSeconds: e.target.value }))}
+              onWheel={(e) => e.target.blur()}
             />
             <span className="timer-override-suffix">sec</span>
           </div>
@@ -79,7 +80,7 @@ export default function EditClueModal({
         </div>
 
         <MediaField
-          label="Media — image, video, or audio: paste a URL, or upload a file"
+          label="Question media (optional) — image, video, or audio: paste a URL, or upload a file"
           type=""
           accept="image/*,video/*,audio/*"
           placeholder="https://... image, video, audio file, or a YouTube link"
@@ -88,6 +89,18 @@ export default function EditClueModal({
           onFile={(file) => onMediaFile("media", file)}
           onClear={() => onClearMedia("media")}
           hint="The type (image / video / audio) is detected automatically."
+        />
+
+        <MediaField
+          label="Answer media (optional) — shown alongside the answer when revealed"
+          type=""
+          accept="image/*,video/*,audio/*"
+          placeholder="https://... image, video, audio file, or a YouTube link"
+          value={mediaState.answerMedia}
+          onUrlChange={(url) => setMediaState((prev) => ({ ...prev, answerMedia: { ...prev.answerMedia, mode: "url", url } }))}
+          onFile={(file) => onMediaFile("answerMedia", file)}
+          onClear={() => onClearMedia("answerMedia")}
+          hint="Optional — e.g. reveal a photo, clip, or sound as part of the answer."
         />
 
         <div className="hint" style={{ textAlign: "center", marginBottom: 8 }}>
