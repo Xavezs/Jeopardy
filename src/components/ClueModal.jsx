@@ -7,11 +7,6 @@ import { createSfx, getSharedAudioCtx } from "../lib/sfx";
 
 /* =========================================================================
    REVEAL SOUND
-   Plays src/assets/reveal.mp3 when the front face of a clue is clicked to
-   flip/reveal the question. Falls back to a synthesized chime if the file
-   is missing/unloadable. File-load/fallback/debounce plumbing lives in
-   lib/sfx.js's createSfx() — only the synthesized tone (unique to this
-   sound) stays here.
    ========================================================================= */
 const revealSfxUrl = new URL("../assets/reveal-card.mp3", import.meta.url).href;
 
@@ -22,8 +17,6 @@ function playSynthRevealTone() {
     if (ctx.state === "suspended") ctx.resume();
     const t0 = ctx.currentTime;
 
-    // Bright upward chime — reads as a bigger, more celebratory moment
-    // than the plain click tone used elsewhere in the app.
     const osc = ctx.createOscillator();
     const oscGain = ctx.createGain();
     osc.type = "triangle";
@@ -49,14 +42,11 @@ const playRevealSfx = createSfx({
   url: revealSfxUrl,
   fallbackTone: playSynthRevealTone,
   volume: 0.1,
-  minGapMs: 40, // guards against double-fires
+  minGapMs: 40,
 });
 
 /* =========================================================================
    CORRECT / INCORRECT SOUNDS
-   Triggered by the ↑ / ↓ keyboard shortcuts once a team is selected via
-   number keys (1-4). Same file-with-synth-fallback pattern as the reveal
-   sound above — see lib/sfx.js's createSfx().
    ========================================================================= */
 const correctSfxUrl = new URL("../assets/correct.mp3", import.meta.url).href;
 const incorrectSfxUrl = new URL("../assets/incorrect.mp3", import.meta.url).href;
@@ -67,7 +57,6 @@ function playSynthCorrectTone() {
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume();
     const t0 = ctx.currentTime;
-    // Quick ascending two-note "ding-ding"
     [0, 0.1].forEach((delay, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -92,7 +81,6 @@ function playSynthIncorrectTone() {
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume();
     const t0 = ctx.currentTime;
-    // Descending "buzz"
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sawtooth";
@@ -171,15 +159,19 @@ export default function ClueModal({
   timerEnabled,
   timerSeconds,
   onDuckMusic,
+  resolveDiscordMembersForTeam,
+  scorePulse,
+  // Buzzer props
+  buzzerEnabled = true,
+  buzzerLive,
+  buzzerWinner,
+  onArmBuzzer,
+  onResetBuzzer,
+  resolveTeamForDiscordUser,
 }) {
   const [mediaUrl, setMediaUrl] = useState("");
-  // What to actually try rendering as. Starts from the stored mediaType;
-  // if that guess turns out wrong (or was never set, e.g. old data / an
-  // ambiguous pasted URL), onError below advances it to the next kind.
   const [renderAs, setRenderAs] = useState("");
 
-  // Same idea as mediaUrl/renderAs above, but for the OPTIONAL media shown
-  // alongside the answer once it's revealed (e.g. a payoff photo/clip).
   const [answerMediaUrl, setAnswerMediaUrl] = useState("");
   const [answerRenderAs, setAnswerRenderAs] = useState("");
 
@@ -189,18 +181,20 @@ export default function ClueModal({
   const [timeUp, setTimeUp] = useState(false);
   const alertPlayedRef = React.useRef(false);
   const [flipped, setFlipped] = useState(false);
-  // Which team is "armed" for the ↑/↓ correct/incorrect keyboard shortcuts.
-  // Selected via number keys 1-4 (index into teams array), cleared per-clue.
   const [selectedTeamIndex, setSelectedTeamIndex] = useState(null);
 
-  // Whatever was playing (audio/video below) belongs to THIS clue — if the
-  // clue changes or the modal closes while it was still playing, make sure
-  // background music comes back up rather than staying ducked forever.
+  // Reveal the clue and arm buzzer ONLY if buzzer is enabled
+  const revealClue = () => {
+    playRevealSfx();
+    setFlipped(true);
+    if (buzzerEnabled && onArmBuzzer) onArmBuzzer();
+  };
+
   useEffect(() => {
     return () => onDuckMusic && onDuckMusic(false);
   }, [clue, onDuckMusic]);
 
-  // Reset the clock (and flip state) whenever a new clue is opened (or its configured duration changes)
+  // Reset clock & buzzer state when clue changes
   useEffect(() => {
     setRemaining(effectiveDuration);
     setRunning(false);
@@ -250,15 +244,12 @@ export default function ClueModal({
       const url = clue.mediaUrl ? await getMediaUrl(clue.mediaUrl) : "";
       const answerUrl = clue.answerMediaUrl ? await getMediaUrl(clue.answerMediaUrl) : "";
       if (cancelled) {
-        // Clue changed again before this resolved — don't leak the object URLs we just made
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
         if (answerUrl && answerUrl.startsWith("blob:")) URL.revokeObjectURL(answerUrl);
         return;
       }
       urlsToRevoke = [url, answerUrl].filter((u) => u && u.startsWith("blob:"));
       setMediaUrl(url);
-      // Prefer the stored type; if it's unknown, guess image first (most
-      // common) and let onError cascade through video -> audio below.
       setRenderAs(clue.mediaType || (url ? "image" : ""));
       setAnswerMediaUrl(answerUrl);
       setAnswerRenderAs(clue.answerMediaType || (answerUrl ? "image" : ""));
@@ -275,17 +266,11 @@ export default function ClueModal({
   const mouseDownOnOverlay = React.useRef(false);
 
   const requestClose = (markComplete) => {
+    if (onResetBuzzer) onResetBuzzer();
     setClosing(true);
     setTimeout(() => onClose(markComplete), 160);
   };
 
-  // Esc closes the clue the same way clicking the backdrop does — doesn't mark it complete.
-  // Space progresses through both reveal stages: first press flips the card
-  // (category/value -> question), second press reveals the answer text —
-  // mirrors the two-step flow of clicking the card then "Reveal Answer".
-  // Number keys (1-4) "arm" a team; ↑/↓ then score that team correct/incorrect
-  // and play the matching sfx. Only active once the answer side is showing,
-  // so these never fight with the reveal shortcuts above.
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === "Escape") {
@@ -294,30 +279,27 @@ export default function ClueModal({
       }
 
       if (e.key === " " || e.code === "Space") {
-        e.preventDefault(); // stop page scroll
+        e.preventDefault();
         if (!flipped) {
-          playRevealSfx();
-          setFlipped(true);
+          revealClue();
         } else {
-          // Once flipped, space toggles the answer back and forth —
-          // reveal it, hit space again to hide it, and so on.
           playRevealSfx();
           onToggleReveal();
         }
         return;
       }
 
-      if (!flipped) return; // remaining shortcuts only apply once flipped
+      if (!flipped) return;
 
       const digit = Number(e.key);
       if (Number.isInteger(digit) && digit >= 1 && digit <= teams.length) {
-        setSelectedTeamIndex(digit - 1);
+        setSelectedTeamIndex((prev) => (prev === digit - 1 ? null : digit - 1));
         return;
       }
 
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         if (selectedTeamIndex == null || !teams[selectedTeamIndex]) return;
-        e.preventDefault(); // stop page scroll
+        e.preventDefault();
         const team = teams[selectedTeamIndex];
         if (e.key === "ArrowUp") {
           playCorrectSfx();
@@ -330,9 +312,12 @@ export default function ClueModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, revealed, onToggleReveal, teams, selectedTeamIndex, value, onAdjustTeamScore]);
+  }, [flipped, revealed, onToggleReveal, teams, selectedTeamIndex, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer]);
 
   if (!activeCat || !clue) return null;
+
+  // Identify winning team if a player buzzed in
+  const winningTeam = buzzerWinner && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(buzzerWinner.id) : null;
 
   return (
     <div
@@ -352,20 +337,14 @@ export default function ClueModal({
           <div
             className="clue-flip-face clue-flip-front"
             data-sfx-handled
-            onClick={() => {
-              playRevealSfx();
-              setFlipped(true);
-            }}
+            onClick={revealClue}
             role="button"
             tabIndex={0}
             aria-label="Reveal clue"
             onKeyDown={(e) => {
-              // Space is handled globally now (works regardless of focus).
-              // Enter stays here for keyboard users who've tabbed to this element.
               if (e.key === "Enter") {
                 e.preventDefault();
-                playRevealSfx();
-                setFlipped(true);
+                revealClue();
               }
             }}
           >
@@ -375,6 +354,29 @@ export default function ClueModal({
           </div>
 
           <div className="clue-flip-face clue-flip-back">
+            {/* Buzzer Status Display */}
+            {buzzerEnabled && (buzzerWinner || buzzerLive) && (
+              <div className="buzzer-container" style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
+                <div style={{ flex: 1, minWidth: 0 }}>
+                  {buzzerWinner ? (
+                    <div className="buzzer-status has-winner" style={{ margin: 0 }}>
+                      <strong>{buzzerWinner.username}</strong> buzzed in!
+                      {winningTeam ? ` (${winningTeam.name})` : ""}
+                      {onArmBuzzer && (
+                        <button className="btn" style={{ marginLeft: 8, padding: "2px 6px" }} onClick={onArmBuzzer}>
+                          Re-open
+                        </button>
+                      )}
+                    </div>
+                  ) : buzzerLive ? (
+                    <div className="buzzer-status is-live" style={{ margin: 0 }}>
+                      BUZZER LIVE — waiting for /buzz
+                    </div>
+                  ) : null}
+                </div>
+              </div>
+            )}
+
             {timerEnabled && (
               <div className="clue-timer-corner">
                 <button
@@ -482,19 +484,47 @@ export default function ClueModal({
               </button>
             </div>
             <div className="score-row">
-              {teams.map((team, i) => (
-                <div
-                  key={team.id}
-                  className={"score-team-block" + (i === selectedTeamIndex ? " kb-selected" : "")}
-                  onClick={() => setSelectedTeamIndex(i)}
-                  role="button"
-                  tabIndex={0}
-                  aria-label={`Select ${team.name} (${i + 1})`}
-                >
-                  <div className="name">{team.name}</div>
-                  <div className="score-value">{team.score ?? 0}</div>
-                </div>
-              ))}
+              {teams.map((team, i) => {
+                const discordTeamMembers = resolveDiscordMembersForTeam ? resolveDiscordMembersForTeam(team) : [];
+                const isBuzzedIn = winningTeam && winningTeam.id === team.id;
+                return (
+                  <div
+                    key={team.id}
+                    className={
+                      "score-team-block" +
+                      (i === selectedTeamIndex ? " kb-selected" : "") +
+                      (isBuzzedIn ? " buzzed-in" : "") +
+                      (discordTeamMembers.some((m) => m.speaking) ? " discord-speaking" : "")
+                    }
+                    onClick={() => setSelectedTeamIndex((prev) => (prev === i ? null : i))}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`Select ${team.name} (${i + 1})`}
+                  >
+                    {discordTeamMembers.length > 0 && (
+                      <div className="score-team-discord-facepile">
+                        {discordTeamMembers.map((dm) => (
+                          <div className="score-team-discord-avatar-wrap" key={dm.id}>
+                            <img
+                              src={dm.avatarUrl}
+                              alt=""
+                              className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
+                              style={{ opacity: dm.deafened ? 0.4 : 1 }}
+                            />
+                            {dm.muted && (
+                              <div className="team-discord-muted-badge score-team-discord-muted-badge" title="Muted" />
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    <div className="name">{team.name}</div>
+                    <div className={"score-value" + (scorePulse && scorePulse[team.id] ? " " + scorePulse[team.id] : "")}>
+                      {team.score ?? 0}
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           </div>
         </div>

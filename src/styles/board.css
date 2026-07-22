@@ -354,11 +354,6 @@
     transform: translateY(-2px);
     animation: kb-selected-pulse 0.4s ease-out;
   }
-  .team-name-display{
-    width:100%; color:var(--gold); font-family:var(--font-display); text-align:center; font-size:17px;
-    letter-spacing:.4px; margin-top:1px; opacity:.9;  
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-bottom: 1px solid var(--gold); padding-bottom:2px;
-  }
   .team-name-input{
     width:100%; background: transparent; border: 2px dashed var(--gold-dim) ; border-radius:4px; 
     color:var(--gold); font-family:var(--font-display); text-align:center; font-size:13px;
@@ -614,7 +609,7 @@
     -webkit-appearance: none; margin: 0;
   }
 
-  .score-row{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; border-top:1px solid rgba(240,185,66,0.2); padding-top:16px; }
+  .score-row{ display:flex; gap:20px; justify-content:center; flex-wrap:wrap; border-top:1px solid rgba(240,185,66,0.2); padding-top:16px; }
   .score-team-block{
     text-align:center; cursor:pointer; padding:8px 16px; border-radius:8px;
     border:1px solid transparent; transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
@@ -626,6 +621,9 @@
     font-family: var(--font-display); font-size:22px; font-weight:700; color:var(--text);
     line-height:1; transition: color 0.15s ease;
   }
+
+  .score-team-block .score-value.pulse-up{ animation: scorePulseUp 0.5s ease; }
+  .score-team-block .score-value.pulse-down{ animation: scorePulseDown 0.5s ease; }
 
   /* Armed via number-key selection (1-4) for the ↑/↓ correct/incorrect
      keyboard shortcuts. Gold outline + soft glow to match the board's
@@ -1301,4 +1299,202 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   width: 100%;
   height: 100%;
   border: none;
+}
+
+/* =========================================================================
+   DISCORD TEAM-CARD INTEGRATION
+   Face-pile + speaking/mute indicator shown directly on a team card when
+   that team has one or more Discord members assigned (see
+   toggleTeamDiscordUser in useTeams.js). Reuses the same green (#23a55a)
+   Discord uses for its own speaking ring, so the card glow reads
+   consistently with the DiscordOverlay widget.
+   ========================================================================= */
+.team-card.discord-speaking{
+  border-color: #23a55a;
+  box-shadow: 0 0 0 2px #23a55a, 0 0 16px 2px rgba(35, 165, 90, 0.5), 0 8px 32px rgba(0,0,0,0.4);
+  transition: border-color 100ms ease, box-shadow 100ms ease;
+}
+.team-discord-avatar{
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  display: block;
+  object-fit: cover;
+}
+.team-discord-avatar.is-speaking {
+  transform: scale(1.15);
+}
+.team-discord-muted-badge{
+  position: absolute;
+  bottom: -2px;
+  right: -2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #ed4245;
+  border: 2px solid #1e1f22;
+  box-sizing: border-box;
+}
+
+/* -------------------------------------------------------------------------
+   Scoreboard face-pile (non-edit mode)
+   Small overlapping avatar stack shown above the team name whenever one or
+   more Discord members are assigned to that team — a team can hold any
+   number of members, so this scales by wrapping rather than growing a
+   single row indefinitely. */
+.team-name-display{
+  width:100%; color:var(--gold); font-family:var(--font-display); text-align:center; font-size:17px;
+  letter-spacing:.4px; margin-top:1px; opacity:.9;
+  border-bottom: 1px solid var(--gold); padding-bottom:2px;
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+}
+.team-name-display .team-name-text{
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%;
+}
+.team-discord-facepile{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.team-discord-facepile .team-discord-avatar-wrap{
+  position: relative;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+/* -------------------------------------------------------------------------
+   Clue modal score row — Discord face-pile
+   Mirrors the scoreboard's avatar/speaking/mute treatment so contestants'
+   faces + live voice state stay visible while a clue is open. Kept
+   compact (26px) and wraps so it scales to a team of any size without
+   pushing into the neighboring name/score rows. */
+.score-team-discord-facepile{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.score-team-discord-facepile .score-team-discord-avatar-wrap{
+  position: relative;
+  width: 26px;
+  height: 26px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+.score-team-block .score-team-discord-muted-badge{
+  width: 11px;
+  height: 11px;
+  border-width: 2px;
+}
+.score-team-block.discord-speaking{
+  outline: 2px solid #23a55a;
+  outline-offset: 4px;
+  border-radius: 8px;
+  box-shadow: 0 0 12px rgba(35, 165, 90, 0.45);
+}
+.score-team-block.discord-speaking .name{ color: #3ba55c; }
+
+/* -------------------------------------------------------------------------
+   Discord chip picker (edit mode)
+   Manual roster picker for assigning Discord voice-channel members to a
+   team — click a face to add it to the roster, click again to remove it.
+   No auto-match option; entirely explicit. box-sizing:border-box on the
+   chip is what keeps the circle exactly 26px (border included) instead of
+   swelling past the picker's row and overlapping the boxes above/below it. */
+.team-discord-picker{
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  margin: 10px 0;
+}
+.team-discord-chip{
+  box-sizing: border-box;
+  position: relative;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  margin: 0;
+  border-radius: 50%;
+  border: 2px solid rgba(240,185,66,0.25);
+  background: rgba(0,0,0,0.3);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  opacity: 0.65;
+  line-height: 1;
+  font: inherit;
+  flex-shrink: 0;
+  transition: opacity 0.12s ease, border-color 0.12s ease, transform 0.12s ease, box-shadow 0.12s ease;
+}
+.team-discord-chip img{
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  object-fit: cover;
+  display: block;
+}
+.team-discord-chip:hover{
+  opacity: 1;
+  transform: translateY(-1px);
+  border-color: var(--gold-dim);
+}
+.team-discord-chip.is-selected{
+  opacity: 1;
+  border-color: var(--gold);
+  box-shadow: 0 0 8px rgba(240,185,66,0.5);
+  transform: scale(1.08);
+}
+.team-discord-chip-speaking-dot{
+  position: absolute;
+  bottom: -1px;
+  right: -1px;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #23a55a;
+  border: 2px solid #0a0f28;
+  box-shadow: 0 0 6px rgba(35,165,90,0.8);
+  box-sizing: border-box;
+}
+.team-discord-picker-empty{
+  font-size: 10px;
+  color: var(--text-dim);
+  opacity: 0.6;
+  letter-spacing: .3px;
+}
+
+/* Buzzer Status Banner */
+.buzzer-status {
+  text-align: center;
+  padding: 8px;
+  margin: 8px 0;
+  border-radius: 6px;
+  font-weight: bold;
+  box-sizing: border-box;
+  margin: 1px 90px 8px 90px;
+}
+
+.buzzer-status.is-live {
+  color: #ffffff;
+}
+
+.buzzer-status.has-winner {
+  color: var(--gold);
+}
+
+/* Highlight team card when they buzz in */
+.score-team-block.buzzed-in {
+  outline: 3px solid #ffd700;
+  box-shadow: 0 0 10px rgba(255, 215, 0, 0.7);
 }
