@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef } from "react";
 import { MediaStore, isMediaRef, detectMediaTypeFromFile, detectMediaTypeFromUrl } from "../storage";
 import { isDataUrl, humanSize } from "../utils";
 
@@ -45,6 +45,11 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
     media: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
     answerMedia: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
   });
+  // Snapshot of whatever file ref the clue had in Supabase storage when the
+  // modal opened. Used to know what's safe to delete: if the user clears it,
+  // replaces it with a new upload, or cancels out of the modal, the ref that
+  // was here at open-time is the one that needs cleaning up server-side.
+  const originalRefsRef = useRef({ media: "", answerMedia: "" });
 
   function openEditModal(cat, value) {
     const clue = cat.clues[value];
@@ -65,8 +70,25 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
         ? { mode: "file", url: "", fileRef: existingAnswer, fileName: "File attached (from earlier) — remove to replace", fileType: clue.answerMediaType || "" }
         : { mode: "url", url: existingAnswer, fileRef: "", fileName: "", fileType: "" };
     setMediaState({ media, answerMedia });
+    // Remember what was actually in storage for this clue at open-time, so
+    // clear/replace/cancel later know what's safe to delete from Supabase.
+    originalRefsRef.current = {
+      media: isMediaRef(media.fileRef) ? media.fileRef : "",
+      answerMedia: isMediaRef(answerMedia.fileRef) ? answerMedia.fileRef : "",
+    };
   }
+  // Cancel: any file uploaded during this edit session that never got saved
+  // onto the clue would otherwise sit in Supabase storage forever. Delete
+  // anything currently in mediaState that wasn't there when we opened.
   function closeEditModal() {
+    const m = mediaState.media;
+    const am = mediaState.answerMedia;
+    if (isMediaRef(m.fileRef) && m.fileRef !== originalRefsRef.current.media) {
+      MediaStore.delete(m.fileRef);
+    }
+    if (isMediaRef(am.fileRef) && am.fileRef !== originalRefsRef.current.answerMedia) {
+      MediaStore.delete(am.fileRef);
+    }
     setEditingTarget(null);
   }
   async function handleMediaFile(type, file) {
@@ -81,16 +103,32 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
     try {
       const ref = await MediaStore.put(file);
       const fileType = detectMediaTypeFromFile(file);
-      setMediaState((prev) => ({
-        ...prev,
-        [type]: { mode: "file", url: "", fileRef: ref, fileName: `📎 ${file.name} (${humanSize(file.size)})`, fileType },
-      }));
+      // If a file was already sitting in this field (either the clue's
+      // original attachment, or one uploaded earlier in this same edit
+      // session that's now being replaced again), it's about to become
+      // orphaned — delete it from Supabase storage.
+      setMediaState((prev) => {
+        const previousRef = prev[type].fileRef;
+        if (isMediaRef(previousRef) && previousRef !== ref) {
+          MediaStore.delete(previousRef);
+        }
+        return {
+          ...prev,
+          [type]: { mode: "file", url: "", fileRef: ref, fileName: `📎 ${file.name} (${humanSize(file.size)})`, fileType },
+        };
+      });
     } catch (e) {
       appAlert("Could not store that file — your browser may be blocking local storage (e.g. private browsing mode).");
     }
   }
   function clearMediaField(type) {
-    setMediaState((prev) => ({ ...prev, [type]: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" } }));
+    setMediaState((prev) => {
+      const previousRef = prev[type].fileRef;
+      if (isMediaRef(previousRef)) {
+        MediaStore.delete(previousRef);
+      }
+      return { ...prev, [type]: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" } };
+    });
   }
   function saveClue() {
     if (!editingTarget) return;
@@ -110,6 +148,9 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
         const url = m.url.trim();
         clue.mediaUrl = url;
         clue.mediaType = url ? detectMediaTypeFromUrl(url) : "";
+        // Field was switched to URL mode (typed a URL directly) without
+        // going through "clear" first — the file it had is now orphaned.
+        if (isMediaRef(m.fileRef)) MediaStore.delete(m.fileRef);
       }
       const am = mediaState.answerMedia;
       if (am.mode === "file") {
@@ -119,6 +160,7 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
         const answerUrl = am.url.trim();
         clue.answerMediaUrl = answerUrl;
         clue.answerMediaType = answerUrl ? detectMediaTypeFromUrl(answerUrl) : "";
+        if (isMediaRef(am.fileRef)) MediaStore.delete(am.fileRef);
       }
       touch();
       persist();

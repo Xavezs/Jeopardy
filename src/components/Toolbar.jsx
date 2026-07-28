@@ -6,16 +6,18 @@ export default function Toolbar({
   onOpenSessions,
   onOpenRandomizer,
   onResetRound,
-  discordDisplayMode,
-  onToggleDiscordMode,
   timerEnabled,
   timerDuration,
   sessionId,
   onToggleTimerEnabled,
   onSetTimerDuration,
-  buzzerEnabled,
-  onToggleBuzzer,
+  roomCode,
 }) {
+  async function copyRoomCode() {
+    if (!roomCode) return;
+    await navigator.clipboard?.writeText(roomCode);
+  }
+
   return (
     <>
       <div className="toolbar">
@@ -29,26 +31,22 @@ export default function Toolbar({
           Randomize Order
         </button>
         <button className="btn" onClick={onResetRound}>
-          ↺ Reset Round (keep content)
+          ↺ Reset Round
         </button>
-        <button
-          className="btn"
-          title="Toggle team cards between normal names and Discord profiles"
-          onClick={onToggleDiscordMode}
-        >
-          {discordDisplayMode === "discord" ? "Discord Mode" : "Normal Mode"}
-        </button>
-        <button
-          className={`btn ${buzzerEnabled ? "btn-active" : ""}`}
-          title="Toggle Discord buzzer functionality on or off"
-          onClick={onToggleBuzzer}
-        >
-          {buzzerEnabled ? "Buzzer: ON" : "Buzzer: OFF"}
-        </button>
+        <div className="room-code-container" title="Players enter this code at /play">
+          <span className="room-code-label">Room code</span>
+          <input
+            readOnly
+            value={roomCode || "Creating…"}
+            onFocus={(event) => event.currentTarget.select()}
+            onClick={(event) => event.currentTarget.select()}
+            aria-label="Room code"
+            className="room-code-input"
+          />
+          <button className="btn" onClick={copyRoomCode} disabled={!roomCode}>Copy</button>
+        </div>
       </div>
-      <div className="edit-banner">
-        {editMode ? "EDIT MODE — click any cell to edit its clue, edit headers, or add/delete rows and columns" : ""}
-      </div>
+
 
       {editMode && (
         <div className="timer-settings-bar">

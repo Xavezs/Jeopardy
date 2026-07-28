@@ -1,6 +1,8 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useScorePulse } from "./useScorePulse";
 import { useDiscordMembers } from "./useDiscordMembers";
+import { useSpeakingState } from "./useSpeakingState";
+import { activityChannelId } from "../../discordSdk";
 import { playClickSfx, playCorrectSfx, playIncorrectSfx } from "../boardSfx";
 
 const SCORE_STEP = 50;
@@ -15,7 +17,7 @@ const SCORE_STEP = 50;
    HERE — nothing else in the app should import it directly, so there's a
    single owner of "how do we match a team to a Discord member".
    ========================================================================= */
-export function useTeams({ sessionRef, touch, persist, editMode, activeClue, setView }) {
+export function useTeams({ sessionRef, touch, persist, editMode, activeClue, setView, markTeamDeleted, markTeamAdded, players }) {
   const { scorePulse, firePulse } = useScorePulse();
 
   // "normal" — team cards show the plain, manually-typed team name. No
@@ -25,8 +27,28 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
   //   (see toggleTeamDiscordUser below), each with live speaking/mute
   //   state. A team can have any number of members assigned — there's no
   //   auto-matching by name; it's all explicit, click-to-add/remove.
-  const { members: discordMembers, connected: discordConnected } = useDiscordMembers();
-  const [discordDisplayMode, setDiscordDisplayMode] = useState("normal"); // "normal" | "discord"
+  const { members: rawDiscordMembers, connected: discordConnected } = useDiscordMembers(activityChannelId);
+
+  // "Who's talking" comes from a completely different source than the rest
+  // of this member data: rawDiscordMembers is the bot's socket feed (voice
+  // channel roster, mute/deafen state), while speaking state is read
+  // directly off the Discord Activity SDK client-side (see
+  // useSpeakingState). They're merged here, once, so every consumer below
+  // (resolveDiscordMembersForTeam, the discord-mode chip picker, etc.)
+  // just sees a single `speaking` boolean and doesn't need to know there
+  // are two feeds behind it.
+  const speakingIds = useSpeakingState();
+  const discordMembers = useMemo(
+    () => rawDiscordMembers.map((m) => ({ ...m, speaking: speakingIds.has(m.id) })),
+    [rawDiscordMembers, speakingIds]
+  );
+
+  // Always "discord" now — the normal/discord toggle was removed since
+  // this app is always run inside Discord. Kept as a no-op setter (rather
+  // than removing it from the return value) so Toolbar doesn't need to
+  // change immediately if it still references onToggleDiscordMode.
+  const discordDisplayMode = "discord";
+  const setDiscordDisplayMode = () => {};
 
   // Which team's scoreboard number is "armed" for the ↑/↓ +/- shortcut —
   // click a team's score to select it (gold ring), then Up/Down adjusts it
@@ -96,13 +118,20 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
   }
   function addTeam() {
     const d = sessionRef.current.data;
-    d.teams.push({ id: "t_" + Math.random().toString(36).slice(2, 9), name: "Team " + (d.teams.length + 1), score: 0 });
+    const newTeam = { id: "t_" + Math.random().toString(36).slice(2, 9), name: "Team " + (d.teams.length + 1), score: 0 };
+    d.teams.push(newTeam);
+    // Protects this team for a few seconds against the boardUpdate merge
+    // logic in usePersistence, which would otherwise see the server's
+    // stale copy (missing this team, since it hasn't round-tripped yet)
+    // and delete it right back out from under us.
+    if (markTeamAdded) markTeamAdded(newTeam.id);
     touch();
     persist();
   }
   function removeTeam(team) {
     const d = sessionRef.current.data;
     d.teams = d.teams.filter((t) => t.id !== team.id);
+    if (markTeamDeleted) markTeamDeleted(team.name);
     touch();
     persist();
   }
@@ -147,7 +176,20 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
       : team.discordUserId
       ? [team.discordUserId]
       : [];
-    return ids.map((id) => discordMembers.find((m) => m.id === id)).filter(Boolean);
+    return ids
+      .map((id) => {
+        // Live voice-channel presence wins when we have it (speaking/mute/
+        // deafen state). Otherwise fall back to the identity broadcast on
+        // join (playersUpdate) so the avatar still shows, just without
+        // live state, instead of rendering nothing.
+        const voice = discordMembers.find((m) => m.id === id);
+        if (voice) return voice;
+        const p = (players || []).find((pl) => pl.discordUserId === id);
+        return p
+          ? { id, username: p.discordUsername, avatarUrl: p.discordAvatarUrl, speaking: speakingIds.has(id), muted: false, deafened: false }
+          : null;
+      })
+      .filter(Boolean);
   }
 
   // Reverse of resolveDiscordMembersForTeam: given a Discord user id (e.g.

@@ -1,41 +1,217 @@
 import { useState, useRef, useEffect, useCallback } from "react";
+import { io } from "socket.io-client";
 import { SessionStore } from "../storage";
+
+const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
 
 /* =========================================================================
    usePersistence
-   Owns just the session STATE and its autosave plumbing (touch/persist/
-   flushPersist/saveMsg) — deliberately split out of useSessionManager so it
-   has no dependency on useBoardGrid. useSessionManager needs
-   board.ensureClueGrid/board.performFlip, and useBoardGrid needs
-   sessionRef/touch/persist — this hook is the thing both of those can
-   depend on without depending on each other.
+   Owns session STATE and its autosave plumbing. Role-aware via `isHost`:
+   only the host emits 'boardUpdate' on connect or save, preventing non-host
+   clients or secondary test windows from clobbering active room state.
    ========================================================================= */
-export function usePersistence() {
+export function usePersistence(isHost = true) {
   const [session, setSession] = useState(null);
   const sessionRef = useRef(null);
   useEffect(() => {
     sessionRef.current = session;
   }, [session]);
 
+  const isHostRef = useRef(isHost);
+  useEffect(() => {
+    isHostRef.current = isHost;
+  }, [isHost]);
+
   const [saveMsg, setSaveMsg] = useState("");
   const saveMsgTimeout = useRef(null);
   const persistTimeout = useRef(null);
+
+  // --- live sync ---
+  const socketRef = useRef(null);
+  const roomCodeRef = useRef(null);
+
+  // Recently-deleted team names (lowercased) -> deletion timestamp. Lets the
+  // boardUpdate merge below tell "zombie of a team we just deleted" apart
+  // from "legitimately new team from a joining player" — both show up as
+  // an unrecognized team ID, but only one of them should survive the merge.
+  // Self-expiring so it can't grow unbounded across a long session.
+  const deletedTeamNames = useRef(new Map());
+  const TOMBSTONE_MS = 15000;
+  const markTeamDeleted = useCallback((name) => {
+    if (!name) return;
+    deletedTeamNames.current.set(name.trim().toLowerCase(), Date.now());
+  }, []);
+
+  // Mirror image of the tombstone above: recently-added-locally team IDs.
+  // The host round-trips a newly-added team to the server on a 400ms
+  // debounce, so there's a brief window where our own brand-new team
+  // exists locally but not yet in the server's copy. If a disconnect
+  // grace-period cleanup (or anyone else's) boardUpdate lands in that
+  // window, its team list won't include our new team either — without
+  // this guard the "server no longer has it, so remove it locally" logic
+  // below would delete a team we just created before it ever got saved.
+  const recentlyAddedTeamIds = useRef(new Map());
+  const RECENT_ADD_MS = 5000;
+  const markTeamAdded = useCallback((id) => {
+    if (!id) return;
+    recentlyAddedTeamIds.current.set(id, Date.now());
+  }, []);
+
+  // Connected players, as broadcast by the server on join/disconnect
+  // (playersUpdate). Carries Discord identity (username/avatarUrl) per
+  // connected socket, plus a `connected` flag during the server's
+  // disconnect grace period — used as a fallback source for team avatars
+  // when live voice-presence data isn't available.
+  const [players, setPlayers] = useState([]);
+
+  useEffect(() => {
+    const socket = io(BOT_SERVER_URL);
+    socketRef.current = socket;
+
+    socket.on("connect", () => {
+      const roomCode = roomCodeRef.current;
+      if (!roomCode) return;
+      socket.emit("joinRoom", roomCode);
+      const s = sessionRef.current;
+      if (s && isHostRef.current) {
+        socket.emit("boardUpdate", {
+          roomCode,
+          data: s.data,
+          updatedAt: s.updatedAt,
+        });
+      }
+    });
+
+    // Applying a remote update goes straight into setSession, deliberately
+    // NOT through persist()/touch() — so receiving one never triggers a
+    // save or a rebroadcast.
+    socket.on("playersUpdate", (list) => {
+      setPlayers(Array.isArray(list) ? list : []);
+    });
+
+    socket.on("boardUpdate", ({ data, updatedAt }) => {
+      const s = sessionRef.current;
+      if (!s) return;
+
+      // The host owns board content, so we don't want to blanket-adopt a
+      // remote payload here — that could stomp in-progress edits with a
+      // stale broadcast. BUT the server can also push a boardUpdate on its
+      // own: when a joining player is auto-assigned to a team
+      // (joinAsPlayer), and when a disconnected player's grace period
+      // expires and they're detached/removed (disconnect handler in
+      // bot-server.js). Both of those only ever touch `teams`, so we merge
+      // just that array in rather than ignoring the message outright —
+      // additions, membership changes, AND removals, all three, otherwise
+      // the host's screen drifts from what every other client sees the
+      // moment someone leaves.
+      if (isHostRef.current) {
+        const incomingTeams = data?.teams;
+        if (!Array.isArray(incomingTeams)) return;
+
+        const localTeams = s.data.teams || [];
+        const incomingIds = new Set(incomingTeams.map((t) => t.id));
+        const localIds = new Set(localTeams.map((t) => t.id));
+
+        // Expire old tombstones/recent-add markers before using them.
+        const now = Date.now();
+        for (const [name, ts] of deletedTeamNames.current) {
+          if (now - ts > TOMBSTONE_MS) deletedTeamNames.current.delete(name);
+        }
+        for (const [id, ts] of recentlyAddedTeamIds.current) {
+          if (now - ts > RECENT_ADD_MS) recentlyAddedTeamIds.current.delete(id);
+        }
+
+        // New teams the server knows about that we don't yet (a player
+        // just auto-created one via joinAsPlayer) — add them, unless we
+        // deliberately just deleted a team with that same name.
+        const newTeams = incomingTeams.filter((t) => {
+          if (localIds.has(t.id)) return false;
+          if (t.name && deletedTeamNames.current.has(t.name.trim().toLowerCase())) return false;
+          return true;
+        });
+
+        // Teams the server no longer has at all — either its disconnect
+        // grace-period cleanup dropped them, or someone else's edit did.
+        // Adopt that removal locally too, unless it's a team we just
+        // added ourselves and the server echo simply hasn't caught up yet.
+        const removedIds = new Set(
+          localTeams
+            .filter((t) => !incomingIds.has(t.id) && !recentlyAddedTeamIds.current.has(t.id))
+            .map((t) => t.id)
+        );
+
+        let changed = newTeams.length > 0 || removedIds.size > 0;
+
+        // For teams both sides still agree exist, sync discordUserIds
+        // fully (both growing AND shrinking) — the server is the sole
+        // source of truth for who's actually connected to a team, since
+        // only joinAsPlayer/disconnect ever mutate this from its side.
+        const mergedExisting = localTeams
+          .filter((t) => !removedIds.has(t.id))
+          .map((t) => {
+            const remote = incomingTeams.find((rt) => rt.id === t.id);
+            if (!remote || !Array.isArray(remote.discordUserIds)) return t;
+            const currentIds = t.discordUserIds || [];
+            const remoteIds = remote.discordUserIds;
+            const same =
+              currentIds.length === remoteIds.length && currentIds.every((id) => remoteIds.includes(id));
+            if (!same) changed = true;
+            return same ? t : { ...t, discordUserIds: remoteIds };
+          });
+
+        if (!changed) return; // just our own echo, ignore
+
+        s.data.teams = [...mergedExisting, ...newTeams];
+        persist();
+        return;
+      }
+
+      // Last-write-wins: ignore a remote update older than what we already have.
+      if (updatedAt && s.updatedAt && updatedAt < s.updatedAt) return;
+      setSession((prev) => (prev ? { ...prev, data, updatedAt } : prev));
+    });
+
+    return () => socket.disconnect();
+  }, []);
+
+  const setRoomCode = useCallback((code) => {
+    roomCodeRef.current = code || null;
+    if (code && socketRef.current?.connected) {
+      socketRef.current.emit("joinRoom", code);
+      const s = sessionRef.current;
+      if (s && isHostRef.current) {
+        socketRef.current.emit("boardUpdate", {
+          roomCode: code,
+          data: s.data,
+          updatedAt: s.updatedAt,
+        });
+      }
+    }
+  }, []);
 
   function touch() {
     setSession((s) => (s ? { ...s } : s));
   }
 
   const persist = useCallback(() => {
-    // Update the UI immediately — don't make clicks wait on a storage write.
     touch();
     clearTimeout(persistTimeout.current);
     persistTimeout.current = setTimeout(async () => {
       const s = sessionRef.current;
       if (!s) return;
+
       await SessionStore.saveSession(s);
       setSaveMsg('Saved to "' + s.name + '"');
       clearTimeout(saveMsgTimeout.current);
       saveMsgTimeout.current = setTimeout(() => setSaveMsg(""), 1800);
+
+      if (roomCodeRef.current && isHostRef.current) {
+        socketRef.current?.emit("boardUpdate", {
+          roomCode: roomCodeRef.current,
+          data: s.data,
+          updatedAt: s.updatedAt,
+        });
+      }
     }, 400);
   }, []);
 
@@ -51,7 +227,6 @@ export function usePersistence() {
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (persistTimeout.current) {
-        // Best-effort — fires a synchronous-ish save attempt before the tab closes.
         const s = sessionRef.current;
         if (s) SessionStore.saveSession(s);
       }
@@ -60,5 +235,17 @@ export function usePersistence() {
     return () => window.removeEventListener("beforeunload", handleBeforeUnload);
   }, []);
 
-  return { session, setSession, sessionRef, touch, persist, flushPersist, saveMsg };
+  return {
+    session,
+    setSession,
+    sessionRef,
+    touch,
+    persist,
+    flushPersist,
+    saveMsg,
+    setRoomCode,
+    markTeamDeleted,
+    markTeamAdded,
+    players,
+  };
 }

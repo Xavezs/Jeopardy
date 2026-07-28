@@ -154,7 +154,14 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
       performFlip(
         () => rd.categories.length,
         () => {
-          d.currentRound = idx;
+          // Re-fetch here instead of reusing `d` from the top of this
+          // function — up to ~1s has passed (banner hold + fade), and if
+          // a remote boardUpdate arrived in that window (e.g. a second
+          // host tab/window in the same room), sessionRef.current.data
+          // may now point at a different object than the one we grabbed
+          // on click. Mutating the stale one silently no-ops on screen.
+          const liveData = sessionRef.current.data;
+          liveData.currentRound = idx;
           if (onBeforeSwitch) onBeforeSwitch();
           touch();
           persist();

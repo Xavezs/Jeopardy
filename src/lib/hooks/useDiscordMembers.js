@@ -1,13 +1,12 @@
-// lib/hooks/useDiscordMembers.js
+// src/lib/hooks/useDiscordMembers.js
 import { useEffect, useState, useRef } from "react";
 import { io } from "socket.io-client";
 
-const BOT_SERVER_URL = "http://localhost:4001";
+// Use the current origin so Discord can apply its URL mapping. During local
+// development, Vite proxies /socket.io to the bot server.
+const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
 
-// One shared socket for the whole app — every team-card speaking/mute
-// indicator reads from this same connection instead of each opening
-// its own.
-export function useDiscordMembers() {
+export function useDiscordMembers(channelId = null) {
   const [members, setMembers] = useState([]);
   const [connected, setConnected] = useState(false);
   const socketRef = useRef(null);
@@ -16,12 +15,18 @@ export function useDiscordMembers() {
     const socket = io(BOT_SERVER_URL);
     socketRef.current = socket;
 
-    socket.on("connect", () => setConnected(true));
+    socket.on("connect", () => {
+      setConnected(true);
+      if (channelId) {
+        socket.emit("watchVoiceChannel", channelId);
+      }
+    });
+
     socket.on("disconnect", () => setConnected(false));
     socket.on("voiceState", (data) => setMembers(data));
 
     return () => socket.disconnect();
-  }, []);
+  }, [channelId]);
 
   return { members, connected };
 }

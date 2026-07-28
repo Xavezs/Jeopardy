@@ -108,7 +108,7 @@
   }
   .session-bar{
     width: fit-content; margin: 0 auto 20px; text-align:center; letter-spacing:.4px;
-    font-size:11.5px; color:var(--text-dim);
+    font-size:9px; color:var(--text-dim);
     background: rgba(0,0,0,0.32); border: 1px solid rgba(240,185,66,0.28);
     border-radius: 999px; padding: 6px 18px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
@@ -168,6 +168,42 @@
     to{ opacity:0; transform: translate(-50%, -50%) scale(1.06); }
   }
 
+  /* Combined control bar: round toggle + toolbar buttons + room code, all
+     centered together as one group on a single line, in the order
+     toolbar buttons -> mode toggle -> room code.
+     .toolbar is set to display:contents so its own children (the 4 buttons
+     + the room-code-container) become direct flex items of .jp-control-bar,
+     letting us reorder them relative to .round-tabs with the order property. */
+  .jp-control-bar{
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin: 0 auto 12px;
+    max-width: 100%;
+  }
+  .jp-control-bar .toolbar{
+    display: contents;
+  }
+  .jp-control-bar .toolbar > .btn{
+    order: 1; /* toolbar buttons first */
+  }
+  .jp-control-bar .round-tabs{
+    order: 2; /* mode toggle in the middle */
+    margin: 0;
+  }
+  .jp-control-bar .toolbar > .room-code-container{
+    order: 3; /* room code + copy last */
+  }
+  .jp-control-bar .timer-settings-bar{
+    flex-basis: 100%; /* always its own line below, never squeezed into the row */
+    order: 5;
+  }
+  @media (max-width: 900px){
+    .jp-control-bar{ flex-direction: column; }
+  }
+
   .toolbar{ display:flex; flex-wrap:wrap; gap:8px; justify-content:center; margin-bottom:12px; }
   button.btn{
     font-family: var(--font-body); font-weight:bold; font-size:12px; letter-spacing:.4px;
@@ -180,7 +216,6 @@
   button.btn.gold{ background: linear-gradient(180deg, var(--gold), #c8932c); color: #1a1200; border-color: transparent; }
   button.btn.gold:hover{ box-shadow: 0 4px 16px rgba(240,185,66,0.4); }
   button.btn:disabled{ opacity:.35; cursor:not-allowed; transform:none; box-shadow:none; }
-  .edit-banner{ text-align:center; color:var(--gold); font-size:13px; letter-spacing:1px; margin-bottom:10px; min-height:16px; }
 
   #boardWrap{ overflow-x:auto; padding:10px 40px 4px; }
   #board{ display:grid; gap:7px; min-width: 520px; margin: 0 auto 16px auto; max-width:1200px; }
@@ -196,6 +231,14 @@
      renders above its flat neighbors instead of getting visually
      clipped by the grid gap.
 
+     .pv-cat is included alongside .cat-cell/.clue-cell so the SAME
+     ripple plays on the player-view board — PlayerView's board is laid
+     out one block per category (header + all its value cells together)
+     rather than one element per grid cell, so there the whole column
+     animates as a single unit instead of header+cells separately. Visually
+     equivalent to the host's per-column stagger, since the host's cells
+     in a given column already share one delay and move together anyway.
+
      IMPORTANT: the "out" rule below uses longhand transition-* properties
      instead of the `transition` shorthand. The shorthand resets every
      sub-property it doesn't mention — including transition-delay — back
@@ -203,11 +246,11 @@
      per-cell inline transitionDelay JS sets for the stagger, collapsing
      the ripple into everything moving at once. Leaving transition-delay
      out of this ruleset entirely lets the inline delay apply normally. */
-  .cat-cell.flip-out, .clue-cell.flip-out,
-  .cat-cell.flip-in-start, .clue-cell.flip-in-start{
+  .cat-cell.flip-out, .clue-cell.flip-out, .pv-cat.flip-out,
+  .cat-cell.flip-in-start, .clue-cell.flip-in-start, .pv-cat.flip-in-start{
     position: relative; z-index: 5;
   }
-  .cat-cell.flip-out, .clue-cell.flip-out{
+  .cat-cell.flip-out, .clue-cell.flip-out, .pv-cat.flip-out{
     transition-property: transform, opacity !important;
     transition-duration: 0.2s, 0.2s !important;
     transition-timing-function: cubic-bezier(0.55, 0, 0.85, 0.25), ease !important;
@@ -215,11 +258,17 @@
     opacity: 0 !important;
     will-change: transform, opacity;
   }
-  .cat-cell.flip-in-start, .clue-cell.flip-in-start{
+  .cat-cell.flip-in-start, .clue-cell.flip-in-start, .pv-cat.flip-in-start{
     transition: none !important;
     transform: scale(0.4) !important;
     opacity: 0 !important;
     will-change: transform, opacity;
+  }
+  /* Base pop-back transition for the player-view column — same curve as
+     .cat-cell/.clue-cell's own base transition, so the "in" leg (plain
+     .pv-cat, no flip-* class) gets the identical overshoot bounce. */
+  .pv-cat{
+    transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
   }
 
   .cat-cell{
@@ -354,6 +403,11 @@
     transform: translateY(-2px);
     animation: kb-selected-pulse 0.4s ease-out;
   }
+  .team-name-display{
+    width:100%; color:var(--gold); font-family:var(--font-display); text-align:center; font-size:17px;
+    letter-spacing:.4px; margin-top:1px; opacity:.9;  
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-bottom: 1px solid var(--gold); padding-bottom:2px;
+  }
   .team-name-input{
     width:100%; background: transparent; border: 2px dashed var(--gold-dim) ; border-radius:4px; 
     color:var(--gold); font-family:var(--font-display); text-align:center; font-size:13px;
@@ -482,61 +536,96 @@
     background-clip: padding-box;
   }
   .clue-modal-header{ text-align:center; color:var(--gold); font-family:var(--font-display); letter-spacing:1.5px; font-size:14px; margin-bottom:14px; opacity:.85; }
-  .clue-value-big{ text-align:center; font-family:var(--font-display); font-size:40px; color:var(--gold); margin-bottom:20px; text-shadow:0 0 20px rgba(240,185,66,0.3); }
+  .clue-value-big{ text-align:center; font-family:var(--font-display); font-size:20px; color:var(--gold); margin-bottom:20px; text-shadow:0 0 20px rgba(240,185,66,0.3); }
 
   /* ---- Clue flip-card: front shows category+value, click flips to the real clue ---- */
   /* The outer .modal box normally carries the card chrome (bg/border/padding/shadow),
      but for the flip card that chrome needs to live on the faces themselves so the
      whole card (frame included) rotates — otherwise only the inner content spins
      inside a static border, which looks broken. So we strip the chrome here... */
-  .modal.clue-modal-flip-outer{
-    perspective: 1600px;
-    background: transparent;
-    border: none;
-    padding: 0;
-    box-shadow: none;
-    overflow: visible;
-  }
-  .clue-flip-inner{
-    position:relative; display:grid;
-    transform-style: preserve-3d;
-    transition: transform 0.65s cubic-bezier(0.45,0.05,0.15,1);
-  }
-  .clue-flip-inner.is-flipped{ transform: rotateY(180deg); }
-  .clue-flip-face{
-    grid-area: 1 / 1;
-    backface-visibility: hidden;
-    -webkit-backface-visibility: hidden;
-    /* ...and re-apply it here instead, so front and back each look like a full card */
-    background: linear-gradient(180deg, #141d5e, #0a0e33);
-    border: 1px solid rgba(240,185,66,0.35);
-    border-radius: 14px;
-    box-shadow: 0 20px 60px rgba(0,0,0,0.6);
-    padding: 28px;
-    max-height: 88vh;
-    overflow-y: auto;
-  }
-  .clue-flip-back{ transform: rotateY(180deg); }
-  .clue-flip-front{
-    display:flex; flex-direction:column; align-items:center; justify-content:center;
-    gap:18px; min-height:280px; cursor:pointer; text-align:center; padding:20px;
-    border-radius:10px; 
-    transition: filter 0.15s ease, transform 0.15s ease;
-  }
-  .clue-flip-front:hover{ filter:brightness(1.1); }
-  .clue-flip-front:active{ transform: scale(0.985); }
-  .clue-flip-front-category{
-    font-family:var(--font-display); color:var(--gold-dim); letter-spacing:2px;
-    font-size:16px; text-transform:uppercase; opacity:.85;
-  }
-  .clue-flip-front-value{
-    font-family:var(--font-display); color:var(--gold); font-size:64px;
-    text-shadow:0 0 30px rgba(240,185,66,0.4);
-  }
-  .clue-flip-front-hint{
-    font-size:13px; color:var(--text-dim); letter-spacing:0.5px;
-    animation: hintPulse 1.6s ease-in-out infinite;
-  }
+.modal.clue-modal-flip-outer {
+  perspective: 1600px;
+  background: transparent;
+  border: none;
+  padding: 0;
+  box-shadow: none;
+  overflow: visible;
+}
+
+.clue-flip-inner {
+  position: relative;
+  display: grid;
+  transform-style: preserve-3d;
+  transition: transform 0.65s cubic-bezier(0.45, 0.05, 0.15, 1);
+  width: 100%;
+  height: 100%;
+}
+
+.clue-flip-inner.is-flipped {
+  transform: rotateY(180deg);
+}
+
+.clue-flip-face {
+  grid-area: 1 / 1;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  background: linear-gradient(180deg, #141d5e, #0a0e33);
+  border: 1px solid rgba(240, 185, 66, 0.35);
+  border-radius: 14px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+  padding: 28px;
+  max-height: 88vh;
+  overflow-y: auto;
+}
+
+.clue-flip-front {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  min-height: 280px;
+  cursor: pointer;
+  text-align: center;
+  padding: 20px;
+  border-radius: 10px;
+  transition: filter 0.15s ease, transform 0.15s ease;
+}
+
+.clue-flip-front:hover {
+  filter: brightness(1.1);
+}
+
+.clue-flip-front:active {
+  transform: scale(0.985);
+}
+
+.clue-flip-front-category {
+  font-family: var(--font-display);
+  color: var(--gold-dim);
+  letter-spacing: 2px;
+  font-size: 16px;
+  text-transform: uppercase;
+  opacity: 0.85;
+}
+
+.clue-flip-front-value {
+  font-family: var(--font-display);
+  color: var(--gold);
+  font-size: 64px;
+  text-shadow: 0 0 30px rgba(240, 185, 66, 0.4);
+}
+
+.clue-flip-front-hint {
+  font-size: 13px;
+  color: var(--text-dim);
+  letter-spacing: 0.5px;
+  animation: hintPulse 1.6s ease-in-out infinite;
+}
+
+.clue-flip-back {
+  transform: rotateY(180deg);
+}
   @keyframes hintPulse{ 0%,100%{ opacity:.55; } 50%{ opacity:1; } }
   .clue-question{ font-size:22px; text-align:center; line-height:1.5; color:var(--text); margin-bottom:20px; font-family:var(--font-display) }
   .clue-media{ display:flex; flex-direction:column; gap:14px; justify-content:center; margin-bottom:22px; }
@@ -609,7 +698,7 @@
     -webkit-appearance: none; margin: 0;
   }
 
-  .score-row{ display:flex; gap:20px; justify-content:center; flex-wrap:wrap; border-top:1px solid rgba(240,185,66,0.2); padding-top:16px; }
+  .score-row{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; border-top:1px solid rgba(240,185,66,0.2); padding-top:16px; }
   .score-team-block{
     text-align:center; cursor:pointer; padding:8px 16px; border-radius:8px;
     border:1px solid transparent; transition: transform 0.12s ease, background 0.12s ease, border-color 0.12s ease;
@@ -621,9 +710,6 @@
     font-family: var(--font-display); font-size:22px; font-weight:700; color:var(--text);
     line-height:1; transition: color 0.15s ease;
   }
-
-  .score-team-block .score-value.pulse-up{ animation: scorePulseUp 0.5s ease; }
-  .score-team-block .score-value.pulse-down{ animation: scorePulseDown 0.5s ease; }
 
   /* Armed via number-key selection (1-4) for the ↑/↓ correct/incorrect
      keyboard shortcuts. Gold outline + soft glow to match the board's
@@ -1299,6 +1385,9 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   width: 100%;
   height: 100%;
   border: none;
+<<<<<<< Updated upstream
+}
+=======
 }
 
 /* =========================================================================
@@ -1498,3 +1587,73 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   outline: 3px solid #ffd700;
   box-shadow: 0 0 10px rgba(255, 215, 0, 0.7);
 }
+
+.room-code-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  
+}
+
+.room-code-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  
+}
+
+.room-code-input {
+  width: 78px;
+  padding: 7px 8px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(240,185,66,0.28);
+  border-radius: 6px;
+  color: var(--text);
+}
+
+/* =========================================================================
+     JEOPARDY BOARD BACK BUTTON
+     ========================================================================= */
+  .jp-role-back-btn {
+    position: absolute;
+    top: 14px;
+    right: 14px;
+    z-index: 1000;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 16px;
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: #ffffff;
+    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
+    border: 2px solid rgba(255, 215, 0, 0.4);
+    border-radius: 8px;
+    cursor: pointer;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    transition: all 0.15s ease-in-out;
+  }
+
+  .jp-role-back-btn:hover {
+    background: linear-gradient(135deg, #334155 1px, #1e293b 100%);
+    border-color: rgba(255, 215, 0, 0.8);
+    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 215, 0, 0.2);
+    transform: translateY(-1px);
+  }
+
+  .jp-role-back-btn:active {
+    transform: translateY(1px) scale(0.97);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  }
+
+  .jp-role-back-arrow {
+    font-size: 15px;
+    line-height: 1;
+    color: #ffd700;
+  }
+>>>>>>> Stashed changes

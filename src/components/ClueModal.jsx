@@ -7,6 +7,11 @@ import { createSfx, getSharedAudioCtx } from "../lib/sfx";
 
 /* =========================================================================
    REVEAL SOUND
+   Plays src/assets/reveal.mp3 when the front face of a clue is clicked to
+   flip/reveal the question. Falls back to a synthesized chime if the file
+   is missing/unloadable. File-load/fallback/debounce plumbing lives in
+   lib/sfx.js's createSfx() — only the synthesized tone (unique to this
+   sound) stays here.
    ========================================================================= */
 const revealSfxUrl = new URL("../assets/reveal-card.mp3", import.meta.url).href;
 
@@ -17,6 +22,8 @@ function playSynthRevealTone() {
     if (ctx.state === "suspended") ctx.resume();
     const t0 = ctx.currentTime;
 
+    // Bright upward chime — reads as a bigger, more celebratory moment
+    // than the plain click tone used elsewhere in the app.
     const osc = ctx.createOscillator();
     const oscGain = ctx.createGain();
     osc.type = "triangle";
@@ -42,11 +49,14 @@ const playRevealSfx = createSfx({
   url: revealSfxUrl,
   fallbackTone: playSynthRevealTone,
   volume: 0.1,
-  minGapMs: 40,
+  minGapMs: 40, // guards against double-fires
 });
 
 /* =========================================================================
    CORRECT / INCORRECT SOUNDS
+   Triggered by the ↑ / ↓ keyboard shortcuts once a team is selected via
+   number keys (1-4). Same file-with-synth-fallback pattern as the reveal
+   sound above — see lib/sfx.js's createSfx().
    ========================================================================= */
 const correctSfxUrl = new URL("../assets/correct.mp3", import.meta.url).href;
 const incorrectSfxUrl = new URL("../assets/incorrect.mp3", import.meta.url).href;
@@ -57,6 +67,7 @@ function playSynthCorrectTone() {
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume();
     const t0 = ctx.currentTime;
+    // Quick ascending two-note "ding-ding"
     [0, 0.1].forEach((delay, i) => {
       const osc = ctx.createOscillator();
       const gain = ctx.createGain();
@@ -81,6 +92,7 @@ function playSynthIncorrectTone() {
     if (!ctx) return;
     if (ctx.state === "suspended") ctx.resume();
     const t0 = ctx.currentTime;
+    // Descending "buzz"
     const osc = ctx.createOscillator();
     const gain = ctx.createGain();
     osc.type = "sawtooth";
@@ -159,19 +171,31 @@ export default function ClueModal({
   timerEnabled,
   timerSeconds,
   onDuckMusic,
+<<<<<<< Updated upstream
+=======
+  onMediaStateChange, 
   resolveDiscordMembersForTeam,
   scorePulse,
-  // Buzzer props
   buzzerEnabled = true,
   buzzerLive,
   buzzerWinner,
+  buzzerQueue = [],
+  buzzerActiveIndex = -1,
   onArmBuzzer,
   onResetBuzzer,
   resolveTeamForDiscordUser,
+  flipped: propFlipped,
+  onFlip,
+>>>>>>> Stashed changes
 }) {
   const [mediaUrl, setMediaUrl] = useState("");
+  // What to actually try rendering as. Starts from the stored mediaType;
+  // if that guess turns out wrong (or was never set, e.g. old data / an
+  // ambiguous pasted URL), onError below advances it to the next kind.
   const [renderAs, setRenderAs] = useState("");
 
+  // Same idea as mediaUrl/renderAs above, but for the OPTIONAL media shown
+  // alongside the answer once it's revealed (e.g. a payoff photo/clip).
   const [answerMediaUrl, setAnswerMediaUrl] = useState("");
   const [answerRenderAs, setAnswerRenderAs] = useState("");
 
@@ -180,29 +204,52 @@ export default function ClueModal({
   const [running, setRunning] = useState(false);
   const [timeUp, setTimeUp] = useState(false);
   const alertPlayedRef = React.useRef(false);
+<<<<<<< Updated upstream
   const [flipped, setFlipped] = useState(false);
+  // Which team is "armed" for the ↑/↓ correct/incorrect keyboard shortcuts.
+  // Selected via number keys 1-4 (index into teams array), cleared per-clue.
   const [selectedTeamIndex, setSelectedTeamIndex] = useState(null);
+
+  // Whatever was playing (audio/video below) belongs to THIS clue — if the
+  // clue changes or the modal closes while it was still playing, make sure
+  // background music comes back up rather than staying ducked forever.
+=======
+  const [localFlipped, setLocalFlipped] = useState(false);
+  const flipped = propFlipped !== undefined ? propFlipped : localFlipped;
+  const [selectedTeamIndex, setSelectedTeamIndex] = useState(null);
+
+  // Stable string identifier for the active clue to prevent reference-churn resets
+  const clueId = activeCat && value ? `${activeCat.id}-${value}` : null;
 
   // Reveal the clue and arm buzzer ONLY if buzzer is enabled
   const revealClue = () => {
     playRevealSfx();
-    setFlipped(true);
+    if (onFlip) {
+      onFlip();
+    } else {
+      setLocalFlipped(true);
+    }
     if (buzzerEnabled && onArmBuzzer) onArmBuzzer();
   };
 
+>>>>>>> Stashed changes
   useEffect(() => {
     return () => onDuckMusic && onDuckMusic(false);
-  }, [clue, onDuckMusic]);
+  }, [clueId, onDuckMusic]);
 
-  // Reset clock & buzzer state when clue changes
+<<<<<<< Updated upstream
+  // Reset the clock (and flip state) whenever a new clue is opened (or its configured duration changes)
+=======
+  // Reset clock & buzzer state when unique clue selection changes
+>>>>>>> Stashed changes
   useEffect(() => {
     setRemaining(effectiveDuration);
     setRunning(false);
     setTimeUp(false);
     alertPlayedRef.current = false;
-    setFlipped(false);
+    setLocalFlipped(false);
     setSelectedTeamIndex(null);
-  }, [clue, effectiveDuration]);
+  }, [clueId, effectiveDuration]);
 
   // Countdown tick while running
   useEffect(() => {
@@ -241,18 +288,25 @@ export default function ClueModal({
     let urlsToRevoke = [];
 
     async function convertIds() {
-      const url = clue.mediaUrl ? await getMediaUrl(clue.mediaUrl) : "";
-      const answerUrl = clue.answerMediaUrl ? await getMediaUrl(clue.answerMediaUrl) : "";
+      const url = clue?.mediaUrl ? await getMediaUrl(clue.mediaUrl) : "";
+      const answerUrl = clue?.answerMediaUrl ? await getMediaUrl(clue.answerMediaUrl) : "";
       if (cancelled) {
+        // Clue changed again before this resolved — don't leak the object URLs we just made
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
         if (answerUrl && answerUrl.startsWith("blob:")) URL.revokeObjectURL(answerUrl);
         return;
       }
       urlsToRevoke = [url, answerUrl].filter((u) => u && u.startsWith("blob:"));
       setMediaUrl(url);
+<<<<<<< Updated upstream
+      // Prefer the stored type; if it's unknown, guess image first (most
+      // common) and let onError cascade through video -> audio below.
       setRenderAs(clue.mediaType || (url ? "image" : ""));
+=======
+      setRenderAs(clue?.mediaType || (url ? "image" : ""));
+>>>>>>> Stashed changes
       setAnswerMediaUrl(answerUrl);
-      setAnswerRenderAs(clue.answerMediaType || (answerUrl ? "image" : ""));
+      setAnswerRenderAs(clue?.answerMediaType || (answerUrl ? "image" : ""));
     }
     convertIds();
 
@@ -260,17 +314,23 @@ export default function ClueModal({
       cancelled = true;
       urlsToRevoke.forEach((u) => URL.revokeObjectURL(u));
     };
-  }, [clue]);
+  }, [clueId, clue?.mediaUrl, clue?.answerMediaUrl, clue?.mediaType, clue?.answerMediaType]);
 
   const [closing, setClosing] = useState(false);
   const mouseDownOnOverlay = React.useRef(false);
 
   const requestClose = (markComplete) => {
-    if (onResetBuzzer) onResetBuzzer();
     setClosing(true);
     setTimeout(() => onClose(markComplete), 160);
   };
 
+  // Esc closes the clue the same way clicking the backdrop does — doesn't mark it complete.
+  // Space progresses through both reveal stages: first press flips the card
+  // (category/value -> question), second press reveals the answer text —
+  // mirrors the two-step flow of clicking the card then "Reveal Answer".
+  // Number keys (1-4) "arm" a team; ↑/↓ then score that team correct/incorrect
+  // and play the matching sfx. Only active once the answer side is showing,
+  // so these never fight with the reveal shortcuts above.
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === "Escape") {
@@ -279,27 +339,30 @@ export default function ClueModal({
       }
 
       if (e.key === " " || e.code === "Space") {
-        e.preventDefault();
+        e.preventDefault(); // stop page scroll
         if (!flipped) {
-          revealClue();
+          playRevealSfx();
+          setFlipped(true);
         } else {
+          // Once flipped, space toggles the answer back and forth —
+          // reveal it, hit space again to hide it, and so on.
           playRevealSfx();
           onToggleReveal();
         }
         return;
       }
 
-      if (!flipped) return;
+      if (!flipped) return; // remaining shortcuts only apply once flipped
 
       const digit = Number(e.key);
       if (Number.isInteger(digit) && digit >= 1 && digit <= teams.length) {
-        setSelectedTeamIndex((prev) => (prev === digit - 1 ? null : digit - 1));
+        setSelectedTeamIndex(digit - 1);
         return;
       }
 
       if (e.key === "ArrowUp" || e.key === "ArrowDown") {
         if (selectedTeamIndex == null || !teams[selectedTeamIndex]) return;
-        e.preventDefault();
+        e.preventDefault(); // stop page scroll
         const team = teams[selectedTeamIndex];
         if (e.key === "ArrowUp") {
           playCorrectSfx();
@@ -312,12 +375,18 @@ export default function ClueModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, revealed, onToggleReveal, teams, selectedTeamIndex, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer]);
+  }, [flipped, revealed, onToggleReveal, teams, selectedTeamIndex, value, onAdjustTeamScore]);
+
+  // Auto-arm the buzzed-in team's scoreboard slot
+  useEffect(() => {
+    if (!buzzerWinner || !resolveTeamForDiscordUser) return;
+    const winner = resolveTeamForDiscordUser(buzzerWinner.id);
+    if (!winner) return;
+    const idx = teams.findIndex((t) => t.id === winner.id);
+    if (idx !== -1) setSelectedTeamIndex(idx);
+  }, [buzzerWinner, teams, resolveTeamForDiscordUser]);
 
   if (!activeCat || !clue) return null;
-
-  // Identify winning team if a player buzzed in
-  const winningTeam = buzzerWinner && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(buzzerWinner.id) : null;
 
   return (
     <div
@@ -337,14 +406,20 @@ export default function ClueModal({
           <div
             className="clue-flip-face clue-flip-front"
             data-sfx-handled
-            onClick={revealClue}
+            onClick={() => {
+              playRevealSfx();
+              setFlipped(true);
+            }}
             role="button"
             tabIndex={0}
             aria-label="Reveal clue"
             onKeyDown={(e) => {
+              // Space is handled globally now (works regardless of focus).
+              // Enter stays here for keyboard users who've tabbed to this element.
               if (e.key === "Enter") {
                 e.preventDefault();
-                revealClue();
+                playRevealSfx();
+                setFlipped(true);
               }
             }}
           >
@@ -354,6 +429,8 @@ export default function ClueModal({
           </div>
 
           <div className="clue-flip-face clue-flip-back">
+<<<<<<< Updated upstream
+=======
             {/* Buzzer Status Display */}
             {buzzerEnabled && (buzzerWinner || buzzerLive) && (
               <div className="buzzer-container" style={{ display: 'flex', alignItems: 'center', marginBottom: '12px' }}>
@@ -370,13 +447,14 @@ export default function ClueModal({
                     </div>
                   ) : buzzerLive ? (
                     <div className="buzzer-status is-live" style={{ margin: 0 }}>
-                      BUZZER LIVE — waiting for /buzz
+                      BUZZER READY 🟢
                     </div>
                   ) : null}
                 </div>
               </div>
             )}
 
+>>>>>>> Stashed changes
             {timerEnabled && (
               <div className="clue-timer-corner">
                 <button
@@ -442,9 +520,24 @@ export default function ClueModal({
                       title="clue-video"
                     />
                   ) : (
-                    <CustomVideoPlayer src={mediaUrl} onError={() => setRenderAs("audio")} onPlayStateChange={onDuckMusic} />
+                    <CustomVideoPlayer 
+                      src={mediaUrl} 
+                      onError={() => setRenderAs("audio")} 
+                      onPlayStateChange={(playing, time) => {
+                        if (onDuckMusic) onDuckMusic(playing);
+                        if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                      }} 
+                    />
                   ))}
-                {renderAs === "audio" && <CustomAudioPlayer src={mediaUrl} onPlayStateChange={onDuckMusic} />}
+                {renderAs === "audio" && (
+                  <CustomAudioPlayer 
+                    src={mediaUrl} 
+                    onPlayStateChange={(playing, time) => {
+                      if (onDuckMusic) onDuckMusic(playing);
+                      if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                    }} 
+                  />
+                )}
               </div>
             )}
 
@@ -463,9 +556,24 @@ export default function ClueModal({
                       title="clue-answer-video"
                     />
                   ) : (
-                    <CustomVideoPlayer src={answerMediaUrl} onError={() => setAnswerRenderAs("audio")} onPlayStateChange={onDuckMusic} />
+                    <CustomVideoPlayer 
+                      src={answerMediaUrl} 
+                      onError={() => setAnswerRenderAs("audio")} 
+                      onPlayStateChange={(playing, time) => {
+                        if (onDuckMusic) onDuckMusic(playing);
+                        if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                      }} 
+                    />
                   ))}
-                {answerRenderAs === "audio" && <CustomAudioPlayer src={answerMediaUrl} onPlayStateChange={onDuckMusic} />}
+                {answerRenderAs === "audio" && (
+                  <CustomAudioPlayer 
+                    src={answerMediaUrl} 
+                    onPlayStateChange={(playing, time) => {
+                      if (onDuckMusic) onDuckMusic(playing);
+                      if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                    }} 
+                  />
+                )}
               </div>
             )}
             <div className="clue-actions">
@@ -484,6 +592,21 @@ export default function ClueModal({
               </button>
             </div>
             <div className="score-row">
+<<<<<<< Updated upstream
+              {teams.map((team, i) => (
+                <div
+                  key={team.id}
+                  className={"score-team-block" + (i === selectedTeamIndex ? " kb-selected" : "")}
+                  onClick={() => setSelectedTeamIndex(i)}
+                  role="button"
+                  tabIndex={0}
+                  aria-label={`Select ${team.name} (${i + 1})`}
+                >
+                  <div className="name">{team.name}</div>
+                  <div className="score-value">{team.score ?? 0}</div>
+                </div>
+              ))}
+=======
               {teams.map((team, i) => {
                 const discordTeamMembers = resolveDiscordMembersForTeam ? resolveDiscordMembersForTeam(team) : [];
                 const isBuzzedIn = winningTeam && winningTeam.id === team.id;
@@ -503,19 +626,57 @@ export default function ClueModal({
                   >
                     {discordTeamMembers.length > 0 && (
                       <div className="score-team-discord-facepile">
-                        {discordTeamMembers.map((dm) => (
-                          <div className="score-team-discord-avatar-wrap" key={dm.id}>
-                            <img
-                              src={dm.avatarUrl}
-                              alt=""
-                              className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
-                              style={{ opacity: dm.deafened ? 0.4 : 1 }}
-                            />
-                            {dm.muted && (
-                              <div className="team-discord-muted-badge score-team-discord-muted-badge" title="Muted" />
-                            )}
-                          </div>
-                        ))}
+                        {discordTeamMembers.map((dm) => {
+                          const queuePos = buzzerQueue.findIndex((p) => p.id === dm.id);
+                          const hasBuzzed = queuePos !== -1;
+                          const isActive = buzzerWinner && buzzerWinner.id === dm.id;
+                          const struckOut = hasBuzzed && !isActive && queuePos < buzzerActiveIndex;
+
+                          return (
+                            <div className="score-team-discord-avatar-wrap" key={dm.id}>
+                              <img
+                                src={dm.avatarUrl}
+                                alt=""
+                                className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
+                                style={{ opacity: dm.deafened ? 0.4 : 1 }}
+                              />
+                              {dm.muted && (
+                                <div className="team-discord-muted-badge score-team-discord-muted-badge" title="Muted" />
+                              )}
+                              {hasBuzzed && (
+                                <div
+                                  className="score-team-buzz-order-badge"
+                                  title={
+                                    isActive
+                                      ? `Buzzed in — #${queuePos + 1}, currently answering`
+                                      : struckOut
+                                      ? `Buzzed in — #${queuePos + 1}, already tried`
+                                      : `Buzzed in — #${queuePos + 1}, waiting`
+                                  }
+                                  style={{
+                                    position: "absolute",
+                                    top: -4,
+                                    left: -4,
+                                    minWidth: 16,
+                                    height: 16,
+                                    padding: "0 3px",
+                                    borderRadius: "50%",
+                                    background: isActive ? "#ffd54a" : struckOut ? "#666" : "#4a90d9",
+                                    color: isActive ? "#222" : "#fff",
+                                    fontSize: 10,
+                                    fontWeight: 700,
+                                    lineHeight: "16px",
+                                    textAlign: "center",
+                                    boxShadow: "0 0 0 1.5px rgba(0,0,0,0.6)",
+                                    textDecoration: struckOut ? "line-through" : "none",
+                                  }}
+                                >
+                                  {queuePos + 1}
+                                </div>
+                              )}
+                            </div>
+                          );
+                        })}
                       </div>
                     )}
                     <div className="name">{team.name}</div>
@@ -525,6 +686,7 @@ export default function ClueModal({
                   </div>
                 );
               })}
+>>>>>>> Stashed changes
             </div>
           </div>
         </div>

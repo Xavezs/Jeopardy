@@ -1,215 +1,522 @@
-// bot-server.js
-require('dotenv').config();
+const path = require('path');
+require('dotenv').config({ path: path.join(__dirname, '.env') });
 const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
-const {
-  joinVoiceChannel,
-  VoiceConnectionStatus,
-  entersState,
-} = require('@discordjs/voice');
-const { Server } = require('socket.io');
+const express = require('express');
 const http = require('http');
+const { Server } = require('socket.io');
+const cookieParser = require('cookie-parser');
+const { router: authRouter } = require('./auth');
 
-const BOT_TOKEN = process.env.DISCORD_BOT_TOKEN;
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID;
-const GUILD_ID = process.env.DISCORD_GUILD_ID;
-const VOICE_CHANNEL_ID = process.env.DISCORD_VOICE_CHANNEL_ID;
+// Environment Variables & Port Config
 const PORT = process.env.PORT || 4001;
+const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
+const CLIENT_ID = process.env.CLIENT_ID;
 
-if (!BOT_TOKEN || !GUILD_ID || !VOICE_CHANNEL_ID) {
-  console.error('Missing DISCORD_BOT_TOKEN, DISCORD_GUILD_ID, or DISCORD_VOICE_CHANNEL_ID in .env');
-  process.exit(1);
-}
-if (!CLIENT_ID) {
-  console.error('Missing DISCORD_CLIENT_ID in .env — needed to register the /buzz slash command.');
-  process.exit(1);
+// How long a disconnected player's team membership is held before we treat
+// it as a real leave. Socket.IO fires 'disconnect' on tab-blur, brief
+// network drops, and page refreshes — all of which reconnect within a
+// second or two. Without this grace window, a disconnect instantly wipes
+// the team (if they were its last member), and the reconnect that follows
+// a moment later can't find that team anymore and creates a fresh one at
+// score 0 — the "team resurrection" bug.
+const DISCONNECT_GRACE_MS = 12000;
+
+// 1. Initialize Express App
+const app = express();
+
+// Trust proxy so secure cookies work properly through Cloudflare Tunnels
+app.set('trust proxy', 1);
+
+// Middleware
+app.use(express.json());
+app.use(cookieParser());
+
+// Mount Auth & API routes
+app.use('/api/auth', authRouter);
+app.use('/api/boards', require('./boards'));
+app.use('/api/media', require('./media'));
+
+// Initialize Socket.io Server
+const server = http.createServer(app);
+const io = new Server(server, {
+  cors: {
+    origin: '*',
+    methods: ['GET', 'POST'],
+  },
+});
+
+// Shared in-memory state for the browser host and player views.
+const gameRooms = new Map();
+
+/* =========================================================================
+   VOICE PRESENCE (roster + mute/deaf only — no bot audio connection)
+   Discord's regular Gateway (GuildVoiceStates intent) tells us who's in a
+   voice channel and their mute/deaf flags. That's all the bot needs to
+   provide now — "who's speaking" comes client-side instead, straight from
+   the Discord Activity SDK's own RPC events (see useSpeakingState.js), and
+   useTeams.js always prefers that value over anything broadcast here. So
+   there's no reason for the bot to join the channel's audio anymore; this
+   is purely Gateway data, no @discordjs/voice, no self-muted connection.
+   ========================================================================= */
+// channelId -> Set of socketIds currently watching it (via watchVoiceChannel)
+const watchersByChannel = new Map();
+
+function buildVoiceMemberList(channelId) {
+  const channel = client.channels.cache.get(channelId);
+  if (!channel || !channel.isVoiceBased?.()) return [];
+  return channel.members.map((member) => ({
+    id: member.id,
+    username: member.displayName || member.user.username,
+    avatarUrl: member.displayAvatarURL({ extension: 'png', size: 64 }),
+    // speaking is intentionally omitted here — the client merges its own
+    // SDK-sourced speaking state on top of this feed (see useTeams.js) and
+    // ignores whatever this field would say, so there's no point tracking
+    // it server-side anymore.
+    muted: !!(member.voice.mute || member.voice.selfMute),
+    deafened: !!(member.voice.deaf || member.voice.selfDeaf),
+  }));
 }
 
-const client = new Client({
+function broadcastVoiceState(channelId) {
+  const watchers = watchersByChannel.get(channelId);
+  if (!watchers || watchers.size === 0) return;
+  const list = buildVoiceMemberList(channelId);
+  for (const socketId of watchers) {
+    io.sockets.sockets.get(socketId)?.emit('voiceState', list);
+  }
+}
+
+// 2. Initialize Discord Bot Client
+const client = new Client({ 
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildVoiceStates,
-    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessages,
   ],
 });
 
-const httpServer = http.createServer();
-const io = new Server(httpServer, {
-  cors: { origin: '*' },
+// 3. Register Slash Commands & Activity Entry Point
+async function registerCommands() { 
+  if (!DISCORD_TOKEN || !CLIENT_ID) { 
+    console.error('Error: DISCORD_TOKEN or CLIENT_ID is missing in environment variables.'); 
+    return;
+  }
+
+  const commands = [
+    {
+      name: 'launch',
+      description: 'Launch Jeopardy Activity',
+      type: 4, // PRIMARY_ENTRY_POINT
+      handler: 2, // DISCORD_LAUNCH_ACTIVITY
+      integration_types: [0, 1], // Guild Install & User Install
+      contexts: [0, 1, 2], // Servers, Bot DMs, Group DMs
+    },
+    {
+      name: 'buzz',
+      description: 'Buzz in for Jeopardy!',
+    },
+  ];
+
+  const rest = new REST({ version: '10' }).setToken(DISCORD_TOKEN); 
+
+  try {
+    console.log('Registering application commands with Entry Point...'); 
+    await rest.put( 
+      Routes.applicationCommands(CLIENT_ID),
+      { body: commands }
+    );
+    console.log('Successfully registered Activity Entry Point command!'); 
+  } catch (err) {
+    console.error('Failed to register commands:', err); 
+  }
+}
+
+// 4. Discord Bot Event Handlers
+client.once('ready', async () => { 
+  console.log(`Discord Bot online as ${client.user.tag}`); 
+  await registerCommands(); 
 });
 
-// --- live speaking state, keyed by user id ---
-// (separate from the per-broadcast member list so it survives across rebuilds)
-const speakingUsers = new Set();
-let voiceConnection = null;
+client.on('interactionCreate', async (interaction) => {
+  if (!interaction.isChatInputCommand()) return; 
+
+  if (interaction.commandName === 'buzz') { 
+    await interaction.reply({ content: 'Buzzed in!', flags: 64 }); 
+  }
+});
+
+// Mute/deafen toggles and channel join/leave don't fire the speaking
+// start/end events above (those are audio-only) — this catches everything
+// else so the facepile's muted/deafened badges and membership stay live.
+client.on('voiceStateUpdate', (oldState, newState) => {
+  if (oldState.channelId && watchersByChannel.has(oldState.channelId)) {
+    broadcastVoiceState(oldState.channelId);
+  }
+  if (newState.channelId && newState.channelId !== oldState.channelId && watchersByChannel.has(newState.channelId)) {
+    broadcastVoiceState(newState.channelId);
+  }
+});
 
 /* =========================================================================
-   BUZZER STATE
-   `buzzerLive` — true only in the window between the host arming the
-   buzzer (question revealed) and someone winning it. While true, the
-   FIRST /buzz interaction wins; every /buzz after that is told they're
-   too late until the host arms it again.
-   `buzzerWinner` — whoever won the current window, or null if nobody has
-   buzzed yet / it's just been reset. Cleared every time the buzzer is
-   (re-)armed or reset.
+   TEAM CLEANUP
+   Shared by both the "no stable identity" immediate-leave path and the
+   grace-period timeout below. Only removes a departed player's Discord id
+   from their team, and only drops the team entirely once nobody else
+   still connected is on it — a team with another active player keeps its
+   score exactly as-is.
    ========================================================================= */
-let buzzerLive = false;
-let buzzerWinner = null; // { id, username, avatarUrl, timestamp }
+function detachFromTeamIfAbandoned(roomCode, leaving) {
+  const room = gameRooms.get(roomCode);
+  if (!leaving?.teamId || !room?.board?.data?.teams) return;
 
-function broadcastBuzzerState() {
-  io.emit('buzzerState', { live: buzzerLive, winner: buzzerWinner });
+  const stillConnected = room.players.some((p) => p.teamId === leaving.teamId);
+  if (stillConnected) return;
+
+  const team = room.board.data.teams.find((t) => t.id === leaving.teamId);
+  if (!team) return;
+
+  if (Array.isArray(team.discordUserIds) && leaving.discordUserId) {
+    team.discordUserIds = team.discordUserIds.filter((id) => id !== leaving.discordUserId);
+  }
+  const stillHasMembers = Array.isArray(team.discordUserIds) && team.discordUserIds.length > 0;
+  if (!stillHasMembers) {
+    room.board.data.teams = room.board.data.teams.filter((t) => t.id !== leaving.teamId);
+  }
+  room.board.updatedAt = Date.now();
+  gameRooms.set(roomCode, room);
+  io.to(roomCode).emit('boardUpdate', room.board);
 }
 
-async function registerCommands() {
-  const commands = [{ name: 'buzz', description: 'Buzz in!' }];
-  const rest = new REST({ version: '10' }).setToken(BOT_TOKEN);
-  try {
-    await rest.put(Routes.applicationGuildCommands(CLIENT_ID, GUILD_ID), { body: commands });
-    console.log('Slash command /buzz registered.');
-  } catch (err) {
-    console.error('Failed to register /buzz slash command:', err);
-  }
-}
-
-function buildMemberList(guild) {
-  const channel = guild.channels.cache.get(VOICE_CHANNEL_ID);
-  if (!channel) return [];
-
-  return channel.members
-    .filter((member) => member.id !== client.user.id) // exclude the bot itself
-    .map((member) => ({
-      id: member.id,
-      username: member.displayName,
-      avatarUrl: member.displayAvatarURL({ size: 128 }),
-      muted: member.voice.mute || member.voice.selfMute,
-      deafened: member.voice.deaf || member.voice.selfDeaf,
-      speaking: speakingUsers.has(member.id),
-    }));
-}
-
-function broadcastState() {
-  const guild = client.guilds.cache.get(GUILD_ID);
-  if (!guild) return;
-  io.emit('voiceState', buildMemberList(guild));
-}
-
-// --- join the watched voice channel as a silent listener ---
-async function connectToVoice(guild) {
-  const channel = guild.channels.cache.get(VOICE_CHANNEL_ID);
-  if (!channel) {
-    console.error(`Voice channel ${VOICE_CHANNEL_ID} not found in guild.`);
-    return;
-  }
-
-  voiceConnection = joinVoiceChannel({
-    channelId: channel.id,
-    guildId: guild.id,
-    adapterCreator: guild.voiceAdapterCreator,
-    selfMute: true,   // bot never talks
-    selfDeaf: false,  // must be false, or it won't receive audio packets at all
-  });
-
-  try {
-    await entersState(voiceConnection, VoiceConnectionStatus.Ready, 10_000);
-    console.log('Voice connection ready, listening for speaking events.');
-  } catch (err) {
-    console.error('Voice connection failed to become ready:', err);
-    return;
-  }
-  const receiver = voiceConnection.receiver; 
-  const speakingTimeouts = new Map();
-
-  receiver.speaking.on('start', (userId) => {
-    clearTimeout(speakingTimeouts.get(userId));
-    speakingUsers.add(userId);
-    broadcastState();
-  });
-
-  receiver.speaking.on('end', (userId) => {
-    const t = setTimeout(() => {
-      speakingUsers.delete(userId);
-      speakingTimeouts.delete(userId);
-      broadcastState();
-    }, 250);
-    speakingTimeouts.set(userId, t);
-  });
-  voiceConnection.on(VoiceConnectionStatus.Disconnected, async () => {
-    console.log('Voice connection disconnected, attempting reconnect...');
-    try {
-      await Promise.race([
-        entersState(voiceConnection, VoiceConnectionStatus.Signalling, 5_000),
-        entersState(voiceConnection, VoiceConnectionStatus.Connecting, 5_000),
-      ]);
-      // it's reconnecting, do nothing
-    } catch {
-      voiceConnection.destroy();
-      speakingUsers.clear();
-    }
-  });
-}
-
-client.once('ready', async () => {
-  console.log(`Bot logged in as ${client.user.tag}`);
-  await registerCommands();
-  const guild = client.guilds.cache.get(GUILD_ID);
-  if (guild) {
-    await connectToVoice(guild);
-    broadcastState();
-  }
-});
-
-client.on('voiceStateUpdate', () => {
-  broadcastState();
-});
-
-// --- /buzz slash command handler ---
-// First interaction while buzzerLive wins the round and locks everyone
-// else out (ephemeral replies so only the presser sees the result —
-// nothing leaks onto the board through Discord itself).
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand() || interaction.commandName !== 'buzz') return;
-
-  if (!buzzerLive) {
-    const msg = buzzerWinner
-      ? `🔒 ${buzzerWinner.username} already buzzed in — wait for the host to reset.`
-      : "⏳ The buzzer isn't open yet — wait for the host to reveal the clue.";
-    await interaction.reply({ content: msg, ephemeral: true });
-    return;
-  }
-
-  buzzerLive = false;
-  buzzerWinner = {
-    id: interaction.user.id,
-    username: interaction.member?.displayName || interaction.user.username,
-    avatarUrl: interaction.user.displayAvatarURL({ size: 128 }),
-    timestamp: Date.now(),
-  };
-  broadcastBuzzerState();
-  await interaction.reply({ content: '🔔 You buzzed in first!', ephemeral: true });
-});
-
+// 5. Unified Socket.io Real-time Game Coordination
 io.on('connection', (socket) => {
-  console.log('Frontend connected:', socket.id);
-  const guild = client.guilds.cache.get(GUILD_ID);
-  if (guild) socket.emit('voiceState', buildMemberList(guild));
-  socket.emit('buzzerState', { live: buzzerLive, winner: buzzerWinner });
+  console.log('Client connected:', socket.id);
 
-  // Host-side controls, emitted from the board (ClueModal auto-arms on
-  // reveal; Toolbar exposes a manual reset in case things get out of sync).
-  socket.on('armBuzzer', () => {
-    buzzerLive = true;
-    buzzerWinner = null;
-    broadcastBuzzerState();
+  socket.on('joinRoom', (rawRoomCode) => {
+    if (typeof rawRoomCode !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    socket.join(roomCode);
+    socket.gameRoomCode = roomCode;
+
+    const room = gameRooms.get(roomCode);
+    if (room?.board) socket.emit('boardUpdate', room.board);
+    if (room?.buzzer) socket.emit('buzzerState', room.buzzer);
+    if (room?.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
+    if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
+    if (room?.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
   });
 
-  socket.on('resetBuzzer', () => {
-    buzzerLive = false;
-    buzzerWinner = null;
-    broadcastBuzzerState();
+  socket.on('activeClueUpdate', ({ roomCode: rawRoomCode, activeClue }) => {
+    if (typeof rawRoomCode !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.activeClue = activeClue || null;
+    gameRooms.set(roomCode, room);
+    socket.to(roomCode).emit('activeClueUpdate', room.activeClue);
+  });
+
+  // Live "for the show" state, same treatment as activeClue — which
+  // category headers have been reveal-clicked by the host. Not part of
+  // persisted board data (see useBoardGrid.js), so it gets its own tiny
+  // relay rather than going through boardUpdate.
+  socket.on('revealedCatsUpdate', ({ roomCode: rawRoomCode, revealedCats }) => {
+    if (typeof rawRoomCode !== 'string' || !Array.isArray(revealedCats)) return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.revealedCats = revealedCats;
+    gameRooms.set(roomCode, room);
+    socket.to(roomCode).emit('revealedCatsUpdate', room.revealedCats);
+  });
+
+  // "DOUBLE JEOPARDY!"-style round-switch banner — same treatment as
+  // revealedCats/activeClue: live "for the show" state, not part of
+  // persisted board data (see useBoardGrid.js's roundBanner), so it gets
+  // its own tiny relay rather than going through boardUpdate. Deliberately
+  // NOT re-sent to late-joining sockets (unlike revealedCats/activeClue
+  // above) since the banner is a ~1s transient pop-up — a player joining
+  // mid-animation just misses it, same as missing any other in-progress
+  // one-off effect; the round itself is already reflected in boardData.
+  socket.on('roundBannerUpdate', ({ roomCode: rawRoomCode, roundBanner }) => {
+    if (typeof rawRoomCode !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.roundBanner = roundBanner || null;
+    gameRooms.set(roomCode, room);
+    socket.to(roomCode).emit('roundBannerUpdate', room.roundBanner);
+  });
+
+  // Background music "now playing" state — same treatment as activeClue:
+  // not part of persisted board data, live "for the show" only. Carries
+  // enough for a late-joining player to compute the correct playback
+  // position (positionSeconds + elapsed time since updatedAt), but
+  // deliberately no volume — each client's volume is local-only, never
+  // synced. See useBgmSync.js (host) and usePlayerSync.js (player).
+  socket.on('bgmUpdate', ({ roomCode: rawRoomCode, bgm }) => {
+    if (typeof rawRoomCode !== 'string' || !bgm) return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.bgm = bgm;
+    gameRooms.set(roomCode, room);
+    socket.to(roomCode).emit('bgmUpdate', room.bgm);
+  });
+
+  socket.on('boardUpdate', ({ roomCode: rawRoomCode, data, updatedAt }) => {
+    if (typeof rawRoomCode !== 'string' || !data) return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.board = { data, updatedAt: updatedAt || Date.now() };
+    gameRooms.set(roomCode, room);
+    
+    // socket.to(...) ensures the host doesn't receive its own echo back
+    socket.to(roomCode).emit('boardUpdate', room.board);
+  });
+
+  socket.on('watchVoiceChannel', (rawChannelId) => {
+    if (typeof rawChannelId !== 'string' || !rawChannelId) return;
+    const channelId = rawChannelId.trim();
+    if (!channelId) return;
+
+    // Stop watching whatever channel this socket was previously watching.
+    if (socket.watchedVoiceChannelId && socket.watchedVoiceChannelId !== channelId) {
+      const prevWatchers = watchersByChannel.get(socket.watchedVoiceChannelId);
+      prevWatchers?.delete(socket.id);
+      if (prevWatchers && prevWatchers.size === 0) watchersByChannel.delete(socket.watchedVoiceChannelId);
+    }
+
+    socket.watchedVoiceChannelId = channelId;
+    if (!watchersByChannel.has(channelId)) watchersByChannel.set(channelId, new Set());
+    watchersByChannel.get(channelId).add(socket.id);
+
+    socket.emit('voiceState', buildVoiceMemberList(channelId));
+  });
+
+  socket.on('joinAsPlayer', ({ roomCode: rawRoomCode, teamName, discordUser }) => {
+    if (typeof rawRoomCode !== 'string' || typeof teamName !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    const trimmedName = teamName.trim();
+    if (!roomCode || !trimmedName) return;
+
+    socket.join(roomCode);
+    socket.gameRoomCode = roomCode;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.board = room.board || { data: { teams: [] }, updatedAt: Date.now() };
+    room.board.data = room.board.data || { teams: [] };
+    room.board.data.teams = room.board.data.teams || [];
+    room.players = room.players || [];
+    room.pendingRemovals = room.pendingRemovals || new Map();
+
+    // If this Discord user already has a roster entry in this room, this
+    // is almost certainly a reconnect (tab refresh, brief network drop)
+    // rather than a fresh join. Reuse their existing entry: cancel any
+    // pending grace-period removal, point it at the new socket, and keep
+    // them on whatever team they were already assigned to. This is what
+    // stops a reconnect from spawning a duplicate/blank team and wiping
+    // their score — we deliberately skip the find-or-create-by-name logic
+    // below entirely in this case.
+    const existing = discordUser?.id
+      ? room.players.find((p) => p.discordUserId === discordUser.id)
+      : null;
+
+    if (existing) {
+      const pending = room.pendingRemovals.get(discordUser.id);
+      if (pending) clearTimeout(pending);
+      room.pendingRemovals.delete(discordUser.id);
+
+      existing.socketId = socket.id;
+      existing.connected = true;
+      existing.discordUsername = discordUser.username || existing.discordUsername;
+      existing.discordAvatarUrl = discordUser.avatarUrl || existing.discordAvatarUrl;
+
+      gameRooms.set(roomCode, room);
+
+      const team = room.board.data.teams.find((t) => t.id === existing.teamId);
+      socket.emit('joinedTeam', { teamId: existing.teamId, teamName: team?.name || trimmedName });
+      io.to(roomCode).emit('playersUpdate', room.players);
+
+      if (room.buzzer) socket.emit('buzzerState', room.buzzer);
+      if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
+      if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
+      if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+      return;
+    }
+
+    // Find-or-create the team by name (case-insensitive), same convention
+    // client-side code already uses ("t_" + random id, discordUserIds array).
+    let team = room.board.data.teams.find(
+      (t) => t.name && t.name.trim().toLowerCase() === trimmedName.toLowerCase()
+    );
+    if (!team) {
+      team = { id: 't_' + Math.random().toString(36).slice(2, 9), name: trimmedName, score: 0, discordUserIds: [] };
+      room.board.data.teams.push(team);
+    }
+    if (!Array.isArray(team.discordUserIds)) team.discordUserIds = [];
+    if (discordUser?.id && !team.discordUserIds.includes(discordUser.id)) {
+      team.discordUserIds.push(discordUser.id);
+    }
+
+    // Track this socket's player roster entry so we can clean up on disconnect
+    // and so host-side views can eventually show "who's connected".
+    room.players = room.players.filter((p) => p.socketId !== socket.id);
+    room.players.push({
+      socketId: socket.id,
+      discordUserId: discordUser?.id || null,
+      discordUsername: discordUser?.username || null,
+      discordAvatarUrl: discordUser?.avatarUrl || null,
+      teamId: team.id,
+      role: 'player',
+      connected: true,
+    });
+
+    room.board.updatedAt = Date.now();
+    gameRooms.set(roomCode, room);
+
+    // Confirm to the joining socket which team it landed on, then sync
+    // everyone in the room (including this socket) on the new board state.
+    socket.emit('joinedTeam', { teamId: team.id, teamName: team.name });
+    io.to(roomCode).emit('boardUpdate', room.board);
+    io.to(roomCode).emit('playersUpdate', room.players);
+
+    if (room.buzzer) socket.emit('buzzerState', room.buzzer);
+    if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
+    if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
+    if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+  });
+
+  // Deliberate "Leave" click, as opposed to a disconnect (tab close,
+  // network drop, backgrounding). This is intentional, so it skips the
+  // grace period entirely and removes the player immediately — no
+  // waiting to see if they come back, because they've told us they're not.
+  socket.on('leaveGame', (rawRoomCode, ack) => {
+    const roomCode = typeof rawRoomCode === 'string' ? rawRoomCode.trim().toUpperCase() : socket.gameRoomCode;
+    if (!roomCode) { if (typeof ack === 'function') ack({ ok: false }); return; }
+    const room = gameRooms.get(roomCode);
+    if (!room?.players) { if (typeof ack === 'function') ack({ ok: false }); return; }
+
+    const leaving = room.players.find((p) => p.socketId === socket.id);
+    if (!leaving) { if (typeof ack === 'function') ack({ ok: false }); return; }
+
+    // Cancel any pending grace-period timer for this player — otherwise it
+    // would still fire later and try to clean up an already-cleaned-up entry.
+    if (leaving.discordUserId && room.pendingRemovals) {
+      const pending = room.pendingRemovals.get(leaving.discordUserId);
+      if (pending) clearTimeout(pending);
+      room.pendingRemovals.delete(leaving.discordUserId);
+    }
+
+    room.players = room.players.filter((p) => p.socketId !== socket.id);
+    gameRooms.set(roomCode, room);
+    io.to(roomCode).emit('playersUpdate', room.players);
+    detachFromTeamIfAbandoned(roomCode, leaving);
+
+    socket.leave(roomCode);
+    socket.gameRoomCode = null;
+
+    // Ack tells the client the server has actually processed the leave —
+    // only then is it safe to disconnect without falling back to the
+    // grace-period path. See usePlayerSync.js's leaveGame().
+    if (typeof ack === 'function') ack({ ok: true });
+  });
+
+  socket.on('armBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, (buzzer) => ({ ...buzzer, live: true, queue: [], activeIndex: -1 })));
+  socket.on('resetBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, () => ({ live: false, queue: [], activeIndex: -1 })));
+  socket.on('nextBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, (buzzer) => ({ ...buzzer, activeIndex: buzzer.activeIndex + 1 })));
+  
+  socket.on('buzz', ({ roomCode: rawRoomCode, player }) => {
+    if (!player?.id) return;
+    updateBuzzer(rawRoomCode, (buzzer) => {
+      if (!buzzer.live || buzzer.queue.some((entry) => entry.id === player.id)) return buzzer;
+      const queue = [...buzzer.queue, player];
+      return { ...buzzer, queue, activeIndex: buzzer.activeIndex === -1 ? 0 : buzzer.activeIndex };
+    });
+  });
+
+  socket.on('disconnect', () => {
+    console.log('Client disconnected:', socket.id);
+
+    if (socket.watchedVoiceChannelId) {
+      const watchers = watchersByChannel.get(socket.watchedVoiceChannelId);
+      watchers?.delete(socket.id);
+      if (watchers && watchers.size === 0) watchersByChannel.delete(socket.watchedVoiceChannelId);
+    }
+
+    const roomCode = socket.gameRoomCode;
+    if (!roomCode) return;
+    const room = gameRooms.get(roomCode);
+    if (!room?.players) return;
+
+    const leaving = room.players.find((p) => p.socketId === socket.id);
+    if (!leaving) return;
+
+    // No stable Discord identity to match a future reconnect against —
+    // nothing to hold onto, so treat this as an immediate real leave,
+    // same as the original behavior.
+    if (!leaving.discordUserId) {
+      room.players = room.players.filter((p) => p.socketId !== socket.id);
+      gameRooms.set(roomCode, room);
+      io.to(roomCode).emit('playersUpdate', room.players);
+      detachFromTeamIfAbandoned(roomCode, leaving);
+      return;
+    }
+
+    // Mark them disconnected but keep their roster entry (and team
+    // membership) intact for a grace period, rather than tearing it down
+    // immediately — see DISCONNECT_GRACE_MS above for why.
+    leaving.connected = false;
+    gameRooms.set(roomCode, room);
+    io.to(roomCode).emit('playersUpdate', room.players);
+
+    room.pendingRemovals = room.pendingRemovals || new Map();
+    const key = leaving.discordUserId;
+    const existingTimeout = room.pendingRemovals.get(key);
+    if (existingTimeout) clearTimeout(existingTimeout);
+
+    const timeout = setTimeout(() => {
+      const r = gameRooms.get(roomCode);
+      if (!r?.players) return;
+
+      const stillGone = r.players.find((p) => p.discordUserId === key && p.connected === false);
+      if (!stillGone) return; // they reconnected within the grace window — nothing to do
+
+      r.players = r.players.filter((p) => p.discordUserId !== key);
+      gameRooms.set(roomCode, r);
+      io.to(roomCode).emit('playersUpdate', r.players);
+      detachFromTeamIfAbandoned(roomCode, stillGone);
+      r.pendingRemovals?.delete(key);
+    }, DISCONNECT_GRACE_MS);
+
+    room.pendingRemovals.set(key, timeout);
   });
 });
 
-httpServer.listen(PORT, () => {
-  console.log(`Voice overlay server listening on http://localhost:${PORT}`);
+function updateBuzzer(rawRoomCode, update) {
+  if (typeof rawRoomCode !== 'string') return;
+  const roomCode = rawRoomCode.trim().toUpperCase();
+  if (!roomCode) return;
+  const room = gameRooms.get(roomCode) || {};
+  room.buzzer = update(room.buzzer || { live: false, queue: [], activeIndex: -1 });
+  gameRooms.set(roomCode, room);
+  io.to(roomCode).emit('buzzerState', room.buzzer);
+}
+
+// 6. Start HTTP Server and Login to Discord
+server.listen(PORT, () => {
+  console.log(`Socket & Bot server running on http://localhost:${PORT}`);
 });
 
-client.login(BOT_TOKEN);
+if (DISCORD_TOKEN) {
+  client.login(DISCORD_TOKEN);
+} else {
+  console.warn('Warning: DISCORD_TOKEN not found. Skipping Discord client login.');
+}
