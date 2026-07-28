@@ -22,6 +22,11 @@ export default function BackgroundMusicPlayer({
   onVolumeChange,
   onToggleLoop,
   ducking = false,
+  // Called with { fileRef, fileName, loop, playing, positionSeconds,
+  // updatedAt } whenever any of those change — lets JeopardyBoard
+  // broadcast "now playing" state to players via useBgmSync. Deliberately
+  // excludes volume: each client's volume is local-only, never synced.
+  onPlaybackChange,
 }) {
   const [open, setOpen] = useState(false);
   const [playing, setPlaying] = useState(false); // never persisted — browsers block autoplay anyway, so this always starts paused on load
@@ -121,6 +126,25 @@ export default function BackgroundMusicPlayer({
 
   // Clean up any in-flight fade on unmount.
   useEffect(() => cancelFade, []);
+
+  // Report "now playing" state up to the parent whenever it actually
+  // changes — play/pause toggling, track swap, or loop toggle. This is
+  // the single source JeopardyBoard uses to broadcast bgmUpdate to
+  // players, so it needs to fire on every state change, not just clicks:
+  // it also covers the audio naturally ending (see onEnded below) and a
+  // fresh track load resetting `playing` back to false.
+  useEffect(() => {
+    if (!onPlaybackChange) return;
+    onPlaybackChange({
+      fileRef: settings.fileRef || "",
+      fileName: settings.fileName || "",
+      loop: !!settings.loop,
+      playing,
+      positionSeconds: audioRef.current ? audioRef.current.currentTime : 0,
+      updatedAt: Date.now(),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, settings.fileRef, settings.loop]);
 
   function togglePlay() {
     const audio = audioRef.current;

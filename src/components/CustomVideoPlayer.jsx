@@ -1,15 +1,75 @@
 import React, { useRef, useState, useEffect } from 'react';
 
-export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
+export default function CustomVideoPlayer({ 
+  src, 
+  onError, 
+  onPlayStateChange,
+  isPlaying: externalIsPlaying,
+  currentTime: externalCurrentTime,
+  disablePlayPause = false,
+  disableSeeking = false
+}) {
   const videoRef = useRef(null);
   const containerRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [internalIsPlaying, setInternalIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8); // Default 80% volume
   const [isMuted, setIsMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(0.8);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  // True when the browser's autoplay policy rejected a programmatic play()
+  // call (common for <video> with audio unless it follows a fresh click on
+  // this element). We surface a tap-to-unlock overlay rather than silently
+  // leaving the video stalled while currentTime keeps getting synced.
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  // Discord's Activity proxy (/.proxy/...) doesn't reliably forward the
+  // Range-request streaming a <video> element does while buffering larger
+  // files — small clips load fine, bigger ones cut out mid-playback. So
+  // instead of pointing <video src> at the proxied URL directly, we fetch
+  // it once as a single request, convert it to a blob, and play from that
+  // local blob URL — one clean download, no ranged requests for the proxy
+  // to mishandle.
+  const [resolvedSrc, setResolvedSrc] = useState('');
+  const [prefetching, setPrefetching] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let blobUrl = null;
+    setResolvedSrc('');
+
+    if (!src) return;
+
+    // Already-local resources don't need re-fetching.
+    if (src.startsWith('blob:') || src.startsWith('data:')) {
+      setResolvedSrc(src);
+      return;
+    }
+
+    setPrefetching(true);
+    (async () => {
+      try {
+        const res = await fetch(src);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        if (cancelled) return;
+        blobUrl = URL.createObjectURL(blob);
+        setResolvedSrc(blobUrl);
+      } catch (err) {
+        console.error('[CustomVideoPlayer] blob prefetch failed, falling back to direct src:', err, src);
+        if (!cancelled) setResolvedSrc(src); // last resort: let the browser try streaming it directly
+      } finally {
+        if (!cancelled) setPrefetching(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [src]);
+
+  const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
 
   // Keep video volume in sync with React state
   useEffect(() => {
@@ -18,9 +78,32 @@ export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
     }
   }, [volume, isMuted]);
 
-  // Safety net: if this player unmounts (modal closed, clue swapped, or
-  // renderAs falls back from video to audio after an error) while still
-  // playing, make sure the parent knows so it can un-duck.
+  // Sync external isPlaying state from host
+  useEffect(() => {
+    if (!videoRef.current || !resolvedSrc || externalIsPlaying === undefined) return;
+    if (externalIsPlaying) {
+      const playPromise = videoRef.current.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise
+          .then(() => setAutoplayBlocked(false))
+          .catch(() => setAutoplayBlocked(true));
+      }
+    } else {
+      videoRef.current.pause();
+      setAutoplayBlocked(false);
+    }
+  }, [externalIsPlaying, resolvedSrc]);
+
+  // Sync external currentTime from host (corrects drift > 0.5s)
+  useEffect(() => {
+    if (!videoRef.current || !resolvedSrc || externalCurrentTime === undefined) return;
+    if (Math.abs(videoRef.current.currentTime - externalCurrentTime) > 0.5) {
+      videoRef.current.currentTime = externalCurrentTime;
+      setCurrentTime(externalCurrentTime);
+    }
+  }, [externalCurrentTime]);
+
+  // Safety net on unmount
   useEffect(() => {
     return () => onPlayStateChange && onPlayStateChange(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -36,16 +119,31 @@ export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
   }, []);
 
   const togglePlay = () => {
+    if (disablePlayPause) return; // Prevent manual toggle for players
     if (!videoRef.current) return;
-    if (isPlaying) {
+    if (internalIsPlaying) {
       videoRef.current.pause();
-      onPlayStateChange && onPlayStateChange(false);
+      onPlayStateChange && onPlayStateChange(false, videoRef.current.currentTime);
+      setInternalIsPlaying(false);
     } else {
       videoRef.current.play();
-      onPlayStateChange && onPlayStateChange(true);
+      onPlayStateChange && onPlayStateChange(true, videoRef.current.currentTime);
+      setInternalIsPlaying(true);
     }
-    setIsPlaying(!isPlaying);
   };
+
+  // Heartbeat: periodically re-broadcast current position while playing, so
+  // late-joining or drifted players get corrected without needing a fresh
+  // play/pause/seek event to happen first.
+  useEffect(() => {
+    if (!isPlaying || !onPlayStateChange) return;
+    const id = setInterval(() => {
+      if (videoRef.current) {
+        onPlayStateChange(true, videoRef.current.currentTime);
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [isPlaying, onPlayStateChange]);
 
   const handleTimeUpdate = () => {
     if (videoRef.current) {
@@ -60,10 +158,12 @@ export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
   };
 
   const handleSeek = (e) => {
+    if (disableSeeking) return; // Prevent manual scrubbing for players
     const time = parseFloat(e.target.value);
     if (videoRef.current) {
       videoRef.current.currentTime = time;
       setCurrentTime(time);
+      onPlayStateChange && onPlayStateChange(isPlaying, time);
     }
   };
 
@@ -102,9 +202,24 @@ export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
   };
 
   const handleEnded = () => {
-    setIsPlaying(false);
+    if (externalIsPlaying === undefined) {
+      setInternalIsPlaying(false);
+    }
     setCurrentTime(0);
     onPlayStateChange && onPlayStateChange(false);
+  };
+
+  // Runs on a direct click from the player themselves, which counts as the
+  // "user gesture" browsers require before allowing audible playback. Used
+  // to unstick a play() call that the sync effect above already tried (and
+  // failed) to make programmatically.
+  const handleUnlockClick = (e) => {
+    e.stopPropagation();
+    if (!videoRef.current) return;
+    videoRef.current
+      .play()
+      .then(() => setAutoplayBlocked(false))
+      .catch(() => {});
   };
 
   return (
@@ -112,25 +227,59 @@ export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
       <div className="player-video-frame" onClick={togglePlay}>
         <video
           ref={videoRef}
-          src={src}
+          {...(resolvedSrc ? { src: resolvedSrc } : {})}
+          playsInline
           onTimeUpdate={handleTimeUpdate}
           onLoadedMetadata={handleLoadedMetadata}
           onEnded={handleEnded}
-          onError={onError}
+          onError={(e) => {
+            const mediaError = e?.currentTarget?.error;
+            // MediaError.code: 1=ABORTED 2=NETWORK 3=DECODE 4=SRC_NOT_SUPPORTED
+            console.error(
+              '[CustomVideoPlayer] video failed to load/decode:',
+              'code=' + (mediaError?.code ?? 'unknown'),
+              mediaError?.message || '(no message)',
+              'src=' + resolvedSrc
+            );
+            onError && onError(e);
+          }}
           className="player-video-el"
         />
-        {!isPlaying && (
+        {prefetching && (
+          <div className="player-video-overlay" style={{ flexDirection: 'column', gap: 8 }}>
+            <span style={{ fontSize: 13, color: '#fff' }}>Loading video…</span>
+          </div>
+        )}
+        {!prefetching && !isPlaying && !(autoplayBlocked && disablePlayPause) && (
           <div className="player-video-overlay">
             <svg viewBox="0 0 24 24" className="player-icon play-arrow player-video-big-play">
               <path d="M8 5v14l11-7z" />
             </svg>
           </div>
         )}
+        {!prefetching && autoplayBlocked && disablePlayPause && (
+          <div
+            className="player-video-overlay"
+            onClick={handleUnlockClick}
+            style={{ cursor: 'pointer', flexDirection: 'column', gap: 8 }}
+          >
+            <svg viewBox="0 0 24 24" className="player-icon play-arrow player-video-big-play">
+              <path d="M8 5v14l11-7z" />
+            </svg>
+            <span style={{ fontSize: 13, color: '#fff' }}>Tap to start video</span>
+          </div>
+        )}
       </div>
 
       <div className="custom-video-controls">
         {/* Play/Pause Button */}
-        <button onClick={togglePlay} className="player-play-btn" title={isPlaying ? "Pause" : "Play"}>
+        <button 
+          onClick={togglePlay} 
+          disabled={disablePlayPause} 
+          className="player-play-btn" 
+          title={isPlaying ? "Pause" : "Play"}
+          style={disablePlayPause ? { cursor: 'not-allowed', opacity: 0.8 } : {}}
+        >
           {isPlaying ? (
             <svg viewBox="0 0 24 24" className="player-icon">
               <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
@@ -151,8 +300,10 @@ export default function CustomVideoPlayer({ src, onError, onPlayStateChange }) {
             max={duration || 100}
             value={currentTime}
             onChange={handleSeek}
+            disabled={disableSeeking}
             className="player-slider timeline-slider"
             style={{
+              cursor: disableSeeking ? 'not-allowed' : 'pointer',
               background: `linear-gradient(to right, #f59e0b 0%, #f59e0b ${(currentTime / (duration || 1)) * 100}%, #1e293b ${(currentTime / (duration || 1)) * 100}%, #1e293b 100%)`
             }}
           />

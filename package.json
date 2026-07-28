@@ -6,9 +6,19 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "bot-server": "node discord-bot/server.js",
+    "bot-app": "node discord-bot/bot-server.js",
+    "tunnel": "npx cloudflared --url http://localhost:5173",
+    "start:all": "concurrently \"npm run bot-server\" \"npm run bot-app\" \"npm run dev\" \"npm run tunnel\""
   },
   "dependencies": {
+    "@discord/embedded-app-sdk": "^2.5.0",
+    "@fontsource/comfortaa": "^5.3.0",
+    "@fontsource/quicksand": "^5.3.0",
+    "@supabase/ssr": "^0.12.3",
+    "@supabase/supabase-js": "^2.110.8",
+    "cookie-parser": "^1.4.7",
     "discord.js": "^14.27.0",
     "dotenv": "^17.4.2",
     "localforage": "^1.10.0",
@@ -19,6 +29,7 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
+    "concurrently": "^10.0.4",
     "vite": "^5.4.0"
   }
 }
