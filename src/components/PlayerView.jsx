@@ -4,7 +4,7 @@ import "../styles/board.css"; // TeamCard's classes (.team-card, .team-discord-a
 import { usePlayerSync } from "../lib/hooks/usePlayerSync";
 import { useBuzzer } from "../lib/hooks/useBuzzer";
 import { useSpeakingState } from "../lib/hooks/useSpeakingState";
-import { getMediaUrl } from "../lib/storage";
+import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
 import { youTubeEmbed } from "../lib/utils";
 import { getDiscordIdentity } from "../discordSdk";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
@@ -40,31 +40,6 @@ function clearCachedIdentity(roomCode) {
   localStorage.removeItem(`jeopardy:player:${code}:discordUser`);
 }
 
-// Ordered list of who's buzzed in, with the active answerer and "you"
-// highlighted — same treatment as the host's per-team buzz-order badges,
-// just laid out as a flat list since the player side doesn't track
-// per-team Discord facepiles.
-function BuzzQueue({ queue, activePlayerId, meId }) {
-  if (!queue.length) return null;
-  return (
-    <div className="pv-buzz-queue">
-      {queue.map((p, i) => (
-        <div
-          key={p.id}
-          className={
-            "pv-buzz-queue-item" +
-            (activePlayerId === p.id ? " active" : "") +
-            (p.id === meId ? " is-me" : "")
-          }
-        >
-          <span className="pv-buzz-queue-pos">{i + 1}</span>
-          <span className="pv-buzz-queue-name">{p.username}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
 function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, myPosition, idle, className = "" }) {
   const text = idle
     ? "Buzzer is closed — wait for the host…"
@@ -86,11 +61,15 @@ function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, myPosition, idl
 // setTeamScore, toggleTeamDiscordUser) is a no-op since players never
 // touch team management — those controls simply never render because
 // TeamCard only shows them when editMode is true.
-function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersByTeam }) {
+function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersByTeam, buzzPositionByTeam }) {
   if (!teams?.length) return null;
+  const sortedTeams = useMemo(() => {
+    return [...teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
+  }, [teams]);
+
   return (
     <div className={"pv-teams" + (compact ? " pv-teams-compact" : "")}>
-      {teams.map((team, i) => (
+      {sortedTeams.map((team, i) => (
         <div
           key={team.id}
           className={"pv-team-card-wrap" + (joinedTeamId === team.id ? " pv-team-mine" : "")}
@@ -109,6 +88,7 @@ function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersBy
             renameTeam={() => {}}
             setTeamScore={() => {}}
             scorePulse={pulseMap}
+            buzzPosition={buzzPositionByTeam?.[team.id] ?? null}
           />
         </div>
       ))}
@@ -372,6 +352,28 @@ function PlayerBoard({ roomCode, me, onLeave }) {
     return map;
   }, [players]);
 
+  // Maps each team to the queue position (1-based) of the earliest of its
+  // members currently buzzed in, so the TeamCard badge always shows that
+  // team's best/first spot in line rather than every member's position.
+  // Queue entries key off `buzzerMe.id` (a Discord id when linked,
+  // otherwise the local `p_...` id — see buzzerMe above), so a roster
+  // entry can match on either its own id or its discordUserId.
+  const buzzPositionByTeam = useMemo(() => {
+    if (!queue.length) return {};
+    const idToTeam = {};
+    for (const p of players) {
+      if (!p.teamId) continue;
+      idToTeam[p.id] = p.teamId;
+      if (p.discordUserId) idToTeam[p.discordUserId] = p.teamId;
+    }
+    const map = {};
+    queue.forEach((q, i) => {
+      const teamId = idToTeam[q.id];
+      if (teamId && map[teamId] === undefined) map[teamId] = i + 1;
+    });
+    return map;
+  }, [queue, players]);
+
   // Live "who's talking" — same client-side SDK source useTeams.js uses on
   // the host side (see useSpeakingState.js). Every client independently
   // subscribes to the same voice channel's RPC events, so this needs no
@@ -577,14 +579,40 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   useEffect(() => {
     let cancelled = false;
 
+    // Same fix as ClueModal.jsx: a stored mediaType wins if we have one.
+    // Otherwise, for a Drive link specifically, ask the server what the
+    // file's real mimeType is (cheap metadata-only call, no download)
+    // instead of blindly guessing "image" first and cascading on error.
+    // That guess-and-check was letting audio files silently succeed
+    // inside the video player (a <video> tag will often play audio-only
+    // bytes just fine) instead of ever reaching the audio player — this
+    // view was the one place that guess-and-check hadn't been replaced
+    // yet, which is why the host and player could disagree on the same
+    // clue's media type.
+    async function resolveRenderType(rawRef, resolvedUrl, storedType) {
+      if (storedType) return storedType;
+      if (isGoogleDriveUrl(rawRef)) {
+        const fileId = extractGoogleDriveFileId(rawRef);
+        const detected = fileId ? await resolveGoogleDriveMediaType(fileId) : "";
+        if (detected) return detected;
+      }
+      return resolvedUrl ? "image" : "";
+    }
+
     async function resolve() {
       const url = openClue?.mediaUrl ? await getMediaUrl(openClue.mediaUrl) : "";
       const aUrl = openClue?.answerMediaUrl ? await getMediaUrl(openClue.answerMediaUrl) : "";
       if (cancelled) return;
       setMediaUrl(url);
-      setRenderAs(openClue?.mediaType || (url ? "image" : ""));
       setAnswerMediaUrl(aUrl);
-      setAnswerRenderAs(openClue?.answerMediaType || (aUrl ? "image" : ""));
+
+      const [type, answerType] = await Promise.all([
+        resolveRenderType(openClue?.mediaUrl, url, openClue?.mediaType),
+        resolveRenderType(openClue?.answerMediaUrl, aUrl, openClue?.answerMediaType),
+      ]);
+      if (cancelled) return;
+      setRenderAs(type);
+      setAnswerRenderAs(answerType);
     }
     resolve();
 
@@ -685,6 +713,22 @@ function PlayerBoard({ roomCode, me, onLeave }) {
         </button>
       </div>
 
+      {/* Floating Leave button — the room bar above gets covered by
+          .pv-clue-overlay whenever a clue is open, which made "Leave"
+          unreachable mid-question. This renders on top of the overlay
+          (fixed position, high z-index in CSS) so players can always
+          bail out, e.g. if the game freezes or they need to disconnect
+          mid-clue, without waiting for the clue to close first. */}
+      {openClue && (
+        <button
+          className="pv-leave pv-leave-floating"
+          onClick={handleLeave}
+          title="Leave and return to page selection"
+        >
+          Leave
+        </button>
+      )}
+
       {openClue && (
         <div className="pv-clue-overlay">
           <div className="pv-clue-flip-outer">
@@ -696,8 +740,10 @@ function PlayerBoard({ roomCode, me, onLeave }) {
               </div>
 
               <div className="pv-clue-flip-face pv-clue-flip-back">
-                <div className="pv-clue-cat">{openClue.categoryName}</div>
-                <div className="pv-clue-value">${openClue.value}</div>
+                <div className="pv-clue-cat-value">
+                  <div className="pv-clue-cat">{openClue.categoryName}</div>
+                  <div className="pv-clue-value">${openClue.value}</div>
+                </div>
                 <div className="pv-clue-question">{openClue.question || "(no question text set)"}</div>
 
                 {mediaUrl && renderAs && (
@@ -786,8 +832,15 @@ function PlayerBoard({ roomCode, me, onLeave }) {
               myPosition={myPosition}
               className="pv-buzzer-status-compact"
             />
-            <BuzzQueue queue={queue} activePlayerId={activePlayer?.id} meId={buzzerMe.id} />
-            <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} compact />
+            <button
+              className={"pv-buzz-btn pv-buzz-btn-side" + (buzzDisabled ? " pv-buzz-disabled" : "")}
+              disabled={buzzDisabled}
+              onClick={buzz}
+            >
+              BUZZ
+            </button>
+            <div className="pv-scoreboard-title">SCOREBOARD</div>
+            <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzPositionByTeam={buzzPositionByTeam} compact />
           </div>
         </div>
       )}
@@ -825,36 +878,10 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       </div>
 
       {!openClue && (
-        <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} />
+        <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzPositionByTeam={buzzPositionByTeam} />
       )}
 
-      <div className={"pv-buzz-bar-spacer" + (buzzBarActive ? "" : " pv-buzz-bar-spacer-collapsed")} />
-
       <PlayerBgmWidget roomCode={roomCode} bgm={bgm} />
-
-      <div className={"pv-buzz-bar" + (buzzBarActive ? "" : " pv-buzz-collapsed")}>
-        {buzzBarActive ? (
-          <>
-            <BuzzQueue queue={queue} activePlayerId={activePlayer?.id} meId={buzzerMe.id} />
-            <BuzzStatusText
-              buzzerLive={buzzerLive}
-              iHaveFloor={iHaveFloor}
-              alreadyBuzzed={alreadyBuzzed}
-              myPosition={myPosition}
-            />
-
-            <button
-              className={"pv-buzz-btn" + (buzzDisabled ? " pv-buzz-disabled" : "")}
-              disabled={buzzDisabled}
-              onClick={buzz}
-            >
-              BUZZ
-            </button>
-          </>
-        ) : (
-          <BuzzStatusText idle className="pv-buzzer-status-idle" />
-        )}
-      </div>
     </div>
   );
 }

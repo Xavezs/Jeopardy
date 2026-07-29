@@ -99,11 +99,13 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
   }, [selectedScoreTeamId, editMode, activeClue]);
 
   function renameTeam(team, name) {
-    team.name = name || "Team";
+    const d = sessionRef.current.data;
+    d.teams = d.teams.map((t) => (t.id === team.id ? { ...t, name: name || "Team" } : t));
     persist();
   }
   function adjustTeamScore(team, delta) {
-    team.score += delta;
+    const d = sessionRef.current.data;
+    d.teams = d.teams.map((t) => (t.id === team.id ? { ...t, score: (t.score ?? 0) + delta } : t));
     firePulse(team.id, delta >= 0 ? "pulse-up" : "pulse-down");
     touch();
     persist();
@@ -112,7 +114,8 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
     const parsed = parseInt(rawValue, 10);
     const newScore = Number.isNaN(parsed) ? 0 : parsed;
     if (newScore !== team.score) firePulse(team.id, newScore > team.score ? "pulse-up" : "pulse-down");
-    team.score = newScore;
+    const d = sessionRef.current.data;
+    d.teams = d.teams.map((t) => (t.id === team.id ? { ...t, score: newScore } : t));
     touch();
     persist();
   }
@@ -152,17 +155,22 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
       : team.discordUserId
       ? [team.discordUserId] // migrate old single-assignment data on first edit
       : [];
-    team.discordUserIds = current.includes(discordUserId)
+    const nextIds = current.includes(discordUserId)
       ? current.filter((id) => id !== discordUserId)
       : [...current, discordUserId];
-    delete team.discordUserId;
+    const d = sessionRef.current.data;
+    d.teams = d.teams.map((t) => {
+      if (t.id !== team.id) return t;
+      const { discordUserId: _legacy, ...rest } = t;
+      return { ...rest, discordUserIds: nextIds };
+    });
     touch();
     persist();
   }
 
   function resetAllScores() {
     const d = sessionRef.current.data;
-    d.teams.forEach((t) => (t.score = 0));
+    d.teams = d.teams.map((t) => ({ ...t, score: 0 }));
     touch();
     persist();
   }

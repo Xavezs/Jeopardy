@@ -30,6 +30,9 @@ export default function TeamCard({
   renameTeam,
   setTeamScore,
   scorePulse,
+  buzzPosition, // 1-based queue position if this team has a player buzzed
+                 // in on the current clue, null/undefined otherwise —
+                 // rendered as a small badge to the left of the card.
 }) {
   const assignedIds = Array.isArray(team.discordUserIds)
     ? team.discordUserIds
@@ -57,6 +60,12 @@ export default function TeamCard({
         <button className="team-remove" title="Remove this team" onClick={() => removeTeam(team)}>
           ✕
         </button>
+      )}
+
+      {!editMode && buzzPosition != null && (
+        <div className="team-buzz-badge" title={`Buzzed in — #${buzzPosition} in line`}>
+          {buzzPosition}
+        </div>
       )}
 
       {editMode ? (

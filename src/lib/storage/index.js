@@ -17,6 +17,9 @@ export {
   detectMediaTypeFromFile,
   detectMediaTypeFromUrl,
   getMediaUrl,
+  isGoogleDriveUrl,
+  extractGoogleDriveFileId,
+  resolveGoogleDriveMediaType,
 } from "./mediaStore";
 
 export {

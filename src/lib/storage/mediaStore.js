@@ -54,6 +54,50 @@ export function isMediaRef(value) {
 }
 
 /* =========================================================================
+   GOOGLE DRIVE LINKS
+   A Drive share link never has a useful file extension (e.g.
+   ".../file/d/1AbC.../view"), so unlike a plain URL we can't sniff
+   image/video/audio from the link itself. That's fine — ClueModal already
+   falls back image -> video -> audio on load error (see its onError
+   chain), so detectMediaTypeFromUrl() below intentionally returns "" for
+   Drive links and lets that existing cascade sort it out at render time.
+   ========================================================================= */
+export function isGoogleDriveUrl(url) {
+  return typeof url === "string" && /drive\.google\.com/i.test(url);
+}
+
+// Pulls the file id out of the handful of share-link shapes Drive hands out:
+//   https://drive.google.com/file/d/<ID>/view?usp=sharing
+//   https://drive.google.com/open?id=<ID>
+//   https://drive.google.com/uc?export=download&id=<ID>
+export function extractGoogleDriveFileId(url) {
+  if (!url) return "";
+  const pathMatch = url.match(/\/file\/d\/([a-zA-Z0-9_-]+)/);
+  if (pathMatch) return pathMatch[1];
+  const paramMatch = url.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (paramMatch) return paramMatch[1];
+  return "";
+}
+
+// Asks the server for a Drive file's real mimeType (via the metadata route,
+// not alt=media — no file body downloaded) and buckets it into
+// "image"/"video"/"audio". Returns "" if the lookup fails or the type is
+// something else entirely (e.g. a PDF) — callers should fall back to the
+// existing image->video->audio guess cascade in that case.
+export async function resolveGoogleDriveMediaType(fileId) {
+  if (!fileId) return "";
+  try {
+    const res = await fetch(`${API_BASE}/api/media/gdrive/${fileId}/meta`);
+    if (!res.ok) return "";
+    const { mimeType } = await res.json();
+    const kind = (mimeType || "").split("/")[0];
+    return kind === "image" || kind === "video" || kind === "audio" ? kind : "";
+  } catch {
+    return "";
+  }
+}
+
+/* =========================================================================
    MEDIA TYPE DETECTION — unchanged, doesn't touch storage at all
    ========================================================================= */
 const EXT_MAP = {
@@ -72,6 +116,7 @@ export function detectMediaTypeFromFile(file) {
 export function detectMediaTypeFromUrl(url) {
   if (!url) return "";
   if (/youtu\.?be/i.test(url)) return "video";
+  if (isGoogleDriveUrl(url)) return ""; // see note above — resolved by ClueModal's fallback cascade instead
   const cleaned = url.split(/[?#]/)[0];
   const ext = (cleaned.split(".").pop() || "").toLowerCase();
   for (const [kind, exts] of Object.entries(EXT_MAP)) {
@@ -99,6 +144,30 @@ export async function getMediaUrl(ref) {
 
     urlCache.set(key, url);
     return url;
+  }
+  if (isGoogleDriveUrl(ref)) {
+    const fileId = extractGoogleDriveFileId(ref);
+    // No parseable id -- most commonly a folder link ("/drive/folders/...")
+    // instead of a link to one specific file. That could never load here
+    // anyway (folders aren't in the CSP allowlist and have no single file
+    // to proxy), so return "" rather than the raw link, which would just
+    // fail with a confusing raw cross-origin fetch error instead of a
+    // clean "no media" state.
+    if (!fileId) return "";
+    // Same-origin proxy on our own server (like /api/media/upload above),
+    // so it just needs API_BASE — no discordsays.com special-casing needed,
+    // that's only required when hitting a third-party host like supabase.co
+    // directly instead of going through our own server.
+    return `${API_BASE}/api/media/gdrive/${fileId}`;
+  }
+  // Any other plain http(s) link (news CDNs, imgur, random image hosts...):
+  // route it through our own server too. Discord's Activity CSP only
+  // allowlists 'self', discordsays.com, and a couple of discordapp.com
+  // hosts for img-src/media-src/connect-src, so a raw third-party URL gets
+  // blocked outright rather than actually failing to load — same-origin
+  // proxying is the only way to get it past that CSP.
+  if (/^https?:\/\//i.test(ref)) {
+    return `${API_BASE}/api/media/proxy?url=${encodeURIComponent(ref)}`;
   }
   return ref;
 }

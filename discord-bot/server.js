@@ -23,6 +23,38 @@ app.use(
 app.use(cookieParser());
 app.use(express.json());
 
+// =========================================================================
+// IMAGE PROXY ROUTE (Bypasses Discord Activity CSP for external images)
+// =========================================================================
+app.get('/api/proxy-image', async (req, res) => {
+  const imageUrl = req.query.url;
+  if (!imageUrl) {
+    return res.status(400).send('Missing url query parameter');
+  }
+
+  try {
+    const response = await fetch(imageUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+      },
+    });
+
+    if (!response.ok) {
+      return res.status(response.status).send('Failed to fetch remote image');
+    }
+
+    const contentType = response.headers.get('content-type') || 'image/jpeg';
+    const arrayBuffer = await response.arrayBuffer();
+    
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+    return res.send(Buffer.from(arrayBuffer));
+  } catch (err) {
+    console.error('[Proxy Image Error]:', err);
+    return res.status(500).send('Internal Server Error while proxying image');
+  }
+});
+
 app.use('/auth', authRouter);
 app.use('/api/boards', boardsRouter);
 app.use('/api/media', mediaRouter);

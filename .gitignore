@@ -4,3 +4,4 @@ dist
 .env
 discord-bot/.env
 discord-bot/jeopardy.db
+discord-bot/service-account.json

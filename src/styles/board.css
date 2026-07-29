@@ -9,8 +9,9 @@
   }
   .jp-root{
     background: radial-gradient(ellipse at top, #131c4d 0%, var(--bg) 45%, var(--bg-deep) 100%);
-    color: var(--text); font-family: var(--font-body); min-height: 100vh; padding: 14px; box-sizing: border-box;
+    color: var(--text); font-family: var(--font-body); min-height: 100vh; padding: 10px 14px 8px; box-sizing: border-box;
     position: relative; isolation: isolate; overflow-x: hidden;
+    display: flex; flex-direction: column;
   }
   .jp-root *{ box-sizing: border-box; }
 
@@ -61,9 +62,9 @@
   
   /* Marquee title — styled as a lit stage sign */
   .marquee{
-    text-align:center; margin: 4px auto 26px; position:relative;
+    text-align:center; margin: 4px auto 10px; position:relative;
     width: fit-content; max-width:100%;
-    padding: 22px 20px 18px;
+    padding: 16px 20px 12px;
   }
   .marquee::before{
     content:""; position:absolute; inset:0; z-index:0; border-radius:16px;
@@ -107,10 +108,10 @@
     cursor: default;
   }
   .session-bar{
-    width: fit-content; margin: 0 auto 20px; text-align:center; letter-spacing:.4px;
+    width: fit-content; margin: 0 auto 8px; text-align:center; letter-spacing:.4px;
     font-size:9px; color:var(--text-dim);
     background: rgba(0,0,0,0.32); border: 1px solid rgba(240,185,66,0.28);
-    border-radius: 999px; padding: 6px 18px;
+    border-radius: 999px; padding: 4px 16px;
     box-shadow: 0 4px 12px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
   }
   .session-bar b{ color:var(--gold); }
@@ -179,8 +180,8 @@
     flex-wrap: wrap;
     align-items: center;
     justify-content: center;
-    gap: 12px;
-    margin: 0 auto 12px;
+    gap: 8px;
+    margin: 0 auto 8px;
     max-width: 100%;
   }
   .jp-control-bar .toolbar{
@@ -217,8 +218,8 @@
   button.btn.gold:hover{ box-shadow: 0 4px 16px rgba(240,185,66,0.4); }
   button.btn:disabled{ opacity:.35; cursor:not-allowed; transform:none; box-shadow:none; }
 
-  #boardWrap{ overflow-x:auto; padding:10px 40px 4px; }
-  #board{ display:grid; gap:7px; min-width: 520px; margin: 0 auto 16px auto; max-width:1200px; }
+  #boardWrap{ overflow-x:auto; padding:6px 20px 4px; }
+  #board{ display:grid; gap:6px; min-width: 520px; margin: 0 auto 8px auto; max-width:1200px; }
   /* Round-switch transition — EACH category header + clue cell shrinks
      and fades out individually (not the board as one piece), then pops
      back in at the new round's content. Delay is staggered per-column
@@ -362,37 +363,65 @@
     background: linear-gradient(180deg, rgba(240,185,66,0.16), var(--cell-dark));
   }
 
+  /* ── Scoreboard section (host main board) ────────────────────────── */
+  #scoreboardSection{
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 0 16px 8px;
+  }
+  .scoreboard-header{
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin-bottom: 8px;
+  }
   #teamsWrap{ 
     display: flex;
-    flex-wrap: wrap;
+    flex-wrap: nowrap;
     justify-content: center;
     align-items: stretch;
-    gap: 14px;
-    max-width: 1400px;
-    margin: 20px auto;
-    padding: 0 20px;
+    gap: 8px;
+    overflow-x: auto;
+    padding: 4px;
   }
+  #teamsWrap::-webkit-scrollbar{ height: 4px; }
+  #teamsWrap::-webkit-scrollbar-track{ background: rgba(4,7,22,0.3); border-radius: 999px; }
+  #teamsWrap::-webkit-scrollbar-thumb{ background: rgba(240,185,66,0.3); border-radius: 999px; }
   .team-card{
     position: relative;
     background: linear-gradient(135deg, rgba(16, 24, 48, 0.95) 0%, rgba(10, 15, 36, 0.95) 100%);
     border: 1px solid rgba(240,185,66,0.35);
-    border-radius: 14px;
-    padding: 13px 10px;
-    min-width: 130px;
+    border-radius: 12px;
+    padding: 8px 14px;
+    min-width: 110px;
     flex: 1;
-    max-width: 170px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    max-width: 200px;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     align-items: center;
     justify-content: space-between;
+    gap: 10px;
   }
 
   .team-card:hover {
     border-color: var(--gold);
   }
   .team-card[role="button"]{ cursor: pointer; }
+
+  /* Edit mode: stack name / discord avatars / score vertically instead of
+     cramming them side-by-side in the default row layout. That row layout
+     is what squeezed the avatar picker into a near-zero-width sliver,
+     forcing its chips to wrap into a tall column (or vanish once nowrap
+     was applied). Stacking gives each piece its own full-width row. */
+  .team-card.is-editing{
+    flex-direction: column;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 4px;
+    padding-top: 16px;
+  }
 
   /* Armed via click (or number key 1-9) for the ↑/↓ +/- shortcut on the
      main scoreboard — highlights the whole card, same gold-glow language
@@ -404,14 +433,17 @@
     animation: kb-selected-pulse 0.4s ease-out;
   }
   .team-name-display{
-    width:100%; color:var(--gold); font-family:var(--font-display); text-align:center; font-size:17px;
-    letter-spacing:.4px; margin-top:1px; opacity:.9;  
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; border-bottom: 1px solid var(--gold); padding-bottom:2px;
+    flex: 1; min-width: 0;
+    color:var(--gold); font-family:var(--font-display); text-align:left; font-size:14px;
+    letter-spacing:.3px; opacity:.9;  
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    display: flex; align-items: center; gap: 6px;
   }
   .team-name-input{
     width:100%; background: transparent; border: 2px dashed var(--gold-dim) ; border-radius:4px; 
     color:var(--gold); font-family:var(--font-display); text-align:center; font-size:13px;
-    letter-spacing:.4px; padding-bottom:3px; margin-top:8px; margin-bottom:8px;
+    letter-spacing:.4px; padding-bottom:3px; margin: 0;
+    flex-shrink: 0;
   }
   .team-name-input:focus {
     outline: none;
@@ -427,21 +459,43 @@
   }
   .team-remove:hover{ filter:brightness(1.12); transform:scale(1.1); }
   .team-remove:active{ transform:scale(0.9); filter:brightness(0.85); }
+
+  /* Buzz-order badge — sits on the outer-left edge of a team card,
+     mirroring .team-remove's placement on the right, so at a glance you
+     can see which team(s) are in the buzz queue and in what order
+     without needing to open the separate buzz-queue list. */
+  .team-buzz-badge{
+    position:absolute; top:-6px; left:-6px; width:22px; height:22px; border-radius:50%;
+    display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; line-height:1;
+    font-family: var(--font-display);
+    background: linear-gradient(180deg, #ffd54a, #f0b942); color:#141a2e; border: 1px solid rgba(0,0,0,0.25);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 10px rgba(255,213,74,0.5);
+    animation: buzzBadgePop 0.25s ease-out;
+  }
+  @keyframes buzzBadgePop{
+    0%{ transform: scale(0.4); opacity:0; }
+    70%{ transform: scale(1.15); opacity:1; }
+    100%{ transform: scale(1); }
+  }
   .team-score-row{ 
     display: flex;
     align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    flex-shrink: 0;
+  }
+  .team-card.is-editing .team-score-row{
     justify-content: center;
-    gap: 8px;
     width: 100%;
   }
   .team-score-display{
     font-family: var(--font-display);
-    font-size: 24px;
+    font-size: 20px;
     font-weight: 900;
     color: var(--gold);
     text-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
-    text-align: center;
-    min-width: 50px;
+    text-align: right;
+    min-width: 44px;
     transition: transform 0.18s ease, box-shadow 0.12s ease, outline-color 0.12s ease;
     cursor: pointer;
     border-radius: 8px;
@@ -451,8 +505,10 @@
   }
   .team-score-display:hover{ transform: translateY(-1px); }
   .team-score-display:active{ transform: scale(0.94); }
-  .team-score-display.pulse-up{ animation: scorePulseUp 0.5s ease; }
-  .team-score-display.pulse-down{ animation: scorePulseDown 0.5s ease; }
+  .team-score-display.pulse-up,
+  .host-sidebar-team-score.pulse-up{ animation: scorePulseUp 0.5s ease; }
+  .team-score-display.pulse-down,
+  .host-sidebar-team-score.pulse-down{ animation: scorePulseDown 0.5s ease; }
 
   @keyframes scorePulseUp{
     0%{ transform: scale(1); color: var(--gold); }
@@ -472,9 +528,11 @@
     transform: translateY(-2px);
   }
   .team-score-input{
+    width: 70px;
     background: rgba(0,0,0,0.3); border:1px solid var(--gold-dim); border-radius:6px;
     -moz-appearance: textfield; appearance: textfield;
     border: 2px dashed var(--gold-dim);
+    text-align: center;
   }
   .team-score-input:focus{
     outline: none;
@@ -485,7 +543,7 @@
   .team-score-input::-webkit-inner-spin-button{
     -webkit-appearance: none; margin: 0;
   }
-  .team-add-card{ display:flex; align-items:center; justify-content:center; width:40px; height:90px; flex:0 0 auto; align-self: center; justify-self: center;}
+  .team-add-card{ display:flex; align-items:center; justify-content:center; width:36px; height:50px; flex:0 0 auto; align-self: center; justify-self: center;}
 
   @keyframes overlayFadeIn{ from{ opacity:0; } to{ opacity:1; } }
   @keyframes overlayFadeOut{ from{ opacity:1; } to{ opacity:0; } }
@@ -543,6 +601,16 @@
      but for the flip card that chrome needs to live on the faces themselves so the
      whole card (frame included) rotates — otherwise only the inner content spins
      inside a static border, which looks broken. So we strip the chrome here... */
+  .modal-overlay.clue-modal-overlay {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 24px;
+    padding: 20px 32px;
+    overflow-y: auto;
+    box-sizing: border-box;
+  }
+
 .modal.clue-modal-flip-outer {
   perspective: 1600px;
   background: transparent;
@@ -550,6 +618,211 @@
   padding: 0;
   box-shadow: none;
   overflow: visible;
+  flex: 0 1 800px;
+  width: 100%;
+  max-width: 800px;
+  height: min(600px, calc(100vh - 64px));
+}
+
+.host-clue-sidebar {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  width: 250px;
+  min-width: 220px;
+  max-width: 270px;
+  max-height: min(600px, calc(100vh - 48px));
+  overflow-y: auto;
+  padding: 16px;
+  background: linear-gradient(180deg, rgba(16, 24, 48, 0.92) 0%, rgba(8, 12, 30, 0.96) 100%);
+  border: 1px solid rgba(240, 185, 66, 0.35);
+  border-radius: 18px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  flex-shrink: 0;
+  box-sizing: border-box;
+  animation: modalPopIn 0.22s cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+
+.host-clue-sidebar::-webkit-scrollbar {
+  width: 5px;
+}
+.host-clue-sidebar::-webkit-scrollbar-track {
+  background: rgba(4, 7, 22, 0.4);
+  border-radius: 999px;
+}
+.host-clue-sidebar::-webkit-scrollbar-thumb {
+  background: rgba(240, 185, 66, 0.3);
+  border-radius: 999px;
+}
+
+.host-sidebar-top-block {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: rgba(18, 32, 122, 0.45);
+  border: 1px solid rgba(240, 185, 66, 0.22);
+  border-radius: 12px;
+  padding: 8px 10px;
+}
+
+.host-buzzer-status-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.host-sidebar-timer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.host-sidebar-timer .clue-timer-ring-btn {
+  width: 42px;
+  height: 42px;
+}
+
+.host-sidebar-timer .clue-timer-value {
+  font-size: 12px;
+}
+
+.host-sidebar-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 100%;
+}
+
+.host-action-btn {
+  width: 100%;
+  padding: 10px 12px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 10px;
+}
+
+.host-complete-btn {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(240, 185, 66, 0.25);
+  color: var(--text);
+}
+.host-complete-btn:hover {
+  background: rgba(240, 185, 66, 0.15);
+  border-color: var(--gold);
+}
+
+.host-reopen-btn {
+  font-size: 11px;
+  padding: 2px 6px;
+  margin-left: 6px;
+}
+
+.host-sidebar-scoreboard-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 1.5px;
+  color: var(--gold-dim);
+  text-transform: uppercase;
+  text-align: center;
+  margin: 4px 0 2px;
+  opacity: 0.85;
+}
+
+.host-sidebar-score-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  width: 100%;
+}
+
+.host-sidebar-team-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: linear-gradient(135deg, rgba(20, 30, 65, 0.9) 0%, rgba(12, 18, 42, 0.9) 100%);
+  border: 1px solid rgba(240, 185, 66, 0.2);
+  gap: 8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.host-sidebar-team-card:hover {
+  border-color: var(--gold);
+  background: linear-gradient(135deg, rgba(28, 42, 90, 0.95) 0%, rgba(16, 24, 55, 0.95) 100%);
+}
+
+.host-sidebar-team-card.kb-selected {
+  border-color: var(--gold);
+  box-shadow: 0 0 12px rgba(240, 185, 66, 0.45);
+  background: linear-gradient(135deg, rgba(35, 52, 110, 0.95) 0%, rgba(20, 30, 70, 0.95) 100%);
+}
+
+.host-sidebar-team-card.buzzed-in {
+  border-color: #ffd54a;
+  box-shadow: 0 0 14px rgba(255, 213, 74, 0.4);
+}
+
+.host-sidebar-team-card.discord-speaking {
+  border-color: #23a55a !important;
+  box-shadow: 0 0 16px rgba(35, 165, 90, 0.7), inset 0 0 8px rgba(35, 165, 90, 0.35) !important;
+  background: linear-gradient(135deg, rgba(16, 45, 30, 0.95) 0%, rgba(10, 30, 20, 0.95) 100%) !important;
+}
+
+.host-sidebar-team-card.discord-speaking .host-sidebar-team-name {
+  color: #3ba55c !important;
+}
+
+.host-sidebar-team-info {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+}
+
+.host-sidebar-team-name {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gold);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.host-sidebar-team-score {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 800;
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(240, 185, 66, 0.3);
+  flex-shrink: 0;
+}
+
+@media (max-width: 820px) {
+  .modal-overlay.clue-modal-overlay {
+    flex-direction: column;
+    justify-content: flex-start;
+    align-items: center;
+    gap: 16px;
+    padding: 12px;
+  }
+  .modal.clue-modal-flip-outer {
+    margin-left: 0;
+    max-width: 100%;
+    height: auto;
+    min-height: 340px;
+  }
+  .host-clue-sidebar {
+    margin-right: 0;
+    width: 100%;
+    max-width: 420px;
+    max-height: none;
+  }
 }
 
 .clue-flip-inner {
@@ -1057,9 +1330,6 @@
   width: 100%;
   max-width: 640px;
   margin: 24px auto;
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
 }
 
 .player-video-frame {
@@ -1073,9 +1343,34 @@
 }
 
 .player-video-el {
+  /* Three approaches were tried here, each with a real tradeoff — you
+     can't have "fills full box width" + "no cropping" + "no black bars"
+     all at once when a clip's aspect ratio doesn't match the box's, full
+     stop, in any video player:
+       1. width:100% + tight max-height (340px), no object-fit → mismatch
+          between the forced box and the video's real ratio → visible
+          bars (original bug: max-height clamped this specific box's
+          shape very differently from the source clip's real ratio).
+       2. object-fit: cover → fills the box completely, but crops/zooms
+          into the clip to do it.
+       3. width/height: auto (shrink-wrap to intrinsic size) → no crop, no
+          bars, but doesn't scale UP a small source video to fill
+          available space, so it renders tiny.
+     This settles on width:100% (scales even small source clips up to
+     fill the available box width, fixing #3's "too small" problem) with
+     height: auto so it follows the video's real aspect ratio at that
+     width, and a much more generous max-height than #1 had — so the
+     mismatch-clamp (and its bars) only actually triggers for genuinely
+     unusual aspect ratios (e.g. a square or portrait clip), not for
+     ordinary widescreen/4:3 content. object-fit: contain is kept as the
+     default specifically for that rare clamp case, so an unusual clip
+     letterboxes gently instead of being harshly cropped — this is
+     standard behavior in any video player (YouTube included), not a bug. */
   width: 100%;
-  max-height: 340px;
+  height: auto;
+  max-height: min(55vh, 480px);
   display: block;
+  object-fit: contain;
 }
 
 .player-video-overlay {
@@ -1100,17 +1395,47 @@
   filter: drop-shadow(0 0 10px rgba(240, 185, 66, 0.6));
 }
 
+/* YouTube-style bottom overlay bar: pinned inside the video frame instead
+   of flowing as a separate element below it. A gradient (rather than a
+   solid pill) keeps it legible over bright video without a hard edge. */
 .custom-video-controls {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 3;
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 14px;
   width: 100%;
-  padding: 10px 20px;
-  background-color: rgba(15, 23, 42, 0.8);
-  border: 1px solid rgba(240, 185, 66, 0.35);
-  border-radius: 9999px;
-  box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3);
-  backdrop-filter: blur(4px);
+  padding: 22px 14px 10px;
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.82), rgba(0, 0, 0, 0.45) 70%, transparent);
+  cursor: default;
+  box-sizing: border-box;
+}
+
+/* Video controls sit on a plain gradient, not the pill background the
+   standalone audio player uses, and their play button should look native
+   to that dark strip rather than a bright disc. */
+.custom-video-controls .player-play-btn {
+  width: 34px;
+  height: 34px;
+  background-color: transparent;
+  color: var(--gold);
+}
+
+.custom-video-controls .player-play-btn:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  transform: none;
+}
+
+.custom-video-controls .player-icon {
+  width: 22px;
+  height: 22px;
+}
+
+.custom-video-controls .player-time {
+  color: #cbd5e1;
 }
 
 .volume-slider {
@@ -1322,14 +1647,50 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   transition: transform 0.12s ease, filter 0.12s ease;
 }
 .bgm-clear-btn:hover{ filter: brightness(1.12); transform: scale(1.1); }
+.bgm-source-row{ display: flex; gap: 8px; margin-bottom: 12px; }
 .bgm-upload-btn{
-  display: block; width: 100%; text-align: center; box-sizing: border-box;
+  flex: 1; text-align: center; box-sizing: border-box;
   font-family: var(--font-body); font-weight: bold; font-size: 11.5px; letter-spacing: 0.3px;
-  padding: 8px 10px; border-radius: 6px; border: 1px dashed var(--gold-dim);
+  padding: 8px 6px; border-radius: 6px; border: 1px dashed var(--gold-dim);
   background: rgba(0,0,0,0.2); color: var(--text); cursor: pointer;
-  margin-bottom: 12px; transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color 0.15s ease, background 0.15s ease;
 }
 .bgm-upload-btn:hover{ border-color: var(--gold); background: rgba(240,185,66,0.08); }
+.bgm-link-btn{
+  flex: 1; text-align: center; box-sizing: border-box;
+  font-family: var(--font-body); font-weight: bold; font-size: 11.5px; letter-spacing: 0.3px;
+  padding: 8px 6px; border-radius: 6px; border: 1px solid rgba(240,185,66,0.25);
+  background: rgba(0,0,0,0.2); color: var(--text-dim); cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.bgm-link-btn:hover{ border-color: var(--gold); color: var(--text); background: rgba(240,185,66,0.08); }
+
+.bgm-url-row{ display: flex; align-items: center; gap: 6px; margin-bottom: 12px; }
+.bgm-url-input{
+  flex: 1; min-width: 0; font-family: var(--font-body); font-size: 11.5px;
+  padding: 7px 8px; border-radius: 6px; border: 1px solid rgba(240,185,66,0.3);
+  background: rgba(0,0,0,0.3); color: var(--text);
+  transition: border-color 0.15s ease;
+}
+.bgm-url-input::placeholder{ color: var(--text-dim); opacity: 0.6; }
+.bgm-url-input:focus{ outline: none; border-color: var(--gold); }
+.bgm-url-load-btn{
+  flex-shrink: 0; font-family: var(--font-body); font-weight: bold; font-size: 11px;
+  padding: 7px 10px; border-radius: 6px; border: none; cursor: pointer;
+  background: linear-gradient(180deg, var(--gold), #c8932c); color: #1a1200;
+  transition: filter 0.12s ease, transform 0.12s ease;
+}
+.bgm-url-load-btn:hover{ filter: brightness(1.08); }
+.bgm-url-load-btn:active{ transform: scale(0.94); }
+.bgm-url-cancel-btn{
+  width: 26px; height: 26px; border-radius: 50%; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; font-size: 10px;
+  background: rgba(0,0,0,0.25); color: var(--text-dim);
+  border: 1px solid rgba(240,185,66,0.25); cursor: pointer;
+  transition: transform 0.12s ease, color 0.15s ease, border-color 0.15s ease;
+}
+.bgm-url-cancel-btn:hover{ border-color: var(--gold); color: var(--text); }
+.bgm-url-cancel-btn:active{ transform: scale(0.92); }
 .bgm-controls-row{ display: flex; align-items: center; gap: 8px; }
 .bgm-play-btn{
   width: 30px; height: 30px; border-radius: 50%; flex-shrink: 0; font-size: 12px;
@@ -1385,9 +1746,6 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   width: 100%;
   height: 100%;
   border: none;
-<<<<<<< Updated upstream
-}
-=======
 }
 
 /* =========================================================================
@@ -1403,15 +1761,16 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   box-shadow: 0 0 0 2px #23a55a, 0 0 16px 2px rgba(35, 165, 90, 0.5), 0 8px 32px rgba(0,0,0,0.4);
   transition: border-color 100ms ease, box-shadow 100ms ease;
 }
+
 .team-discord-avatar{
-  width: 100%;
-  height: 100%;
+  width: 20px;
+  height: 20px;
   border-radius: 50%;
   display: block;
   object-fit: cover;
 }
 .team-discord-avatar.is-speaking {
-  transform: scale(1.15);
+  transform: scale(1.05);
 }
 .team-discord-muted-badge{
   position: absolute;
@@ -1432,10 +1791,10 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
    number of members, so this scales by wrapping rather than growing a
    single row indefinitely. */
 .team-name-display{
-  width:100%; color:var(--gold); font-family:var(--font-display); text-align:center; font-size:17px;
-  letter-spacing:.4px; margin-top:1px; opacity:.9;
-  border-bottom: 1px solid var(--gold); padding-bottom:2px;
-  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+  flex: 1; min-width: 0;
+  color:var(--gold); font-family:var(--font-display); text-align:left; font-size:14px;
+  letter-spacing:.3px; opacity:.9;
+  display: flex; flex-direction: row; align-items: center; gap: 6px;
 }
 .team-name-display .team-name-text{
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%;
@@ -1445,7 +1804,7 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 1px;
 }
 .team-discord-facepile .team-discord-avatar-wrap{
   position: relative;
@@ -1466,13 +1825,13 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   flex-wrap: wrap;
   align-items: center;
   justify-content: center;
-  gap: 4px;
+  gap: 1px;
   margin-bottom: 6px;
 }
 .score-team-discord-facepile .score-team-discord-avatar-wrap{
   position: relative;
   width: 26px;
-  height: 26px;
+  height: 17px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
@@ -1498,18 +1857,28 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
    swelling past the picker's row and overlapping the boxes above/below it. */
 .team-discord-picker{
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  flex-shrink: 0;
   align-items: center;
-  justify-content: center;
-  gap: 8px;
+  justify-content: flex-start;
+  gap: 5px;
   width: 100%;
-  margin: 10px 0;
+  max-width: 100%;
+  margin: 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 1px 1px 4px;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(240,185,66,0.35) rgba(0,0,0,0.25);
 }
+.team-discord-picker::-webkit-scrollbar{ height: 4px; }
+.team-discord-picker::-webkit-scrollbar-track{ background: rgba(4,7,22,0.3); border-radius: 999px; }
+.team-discord-picker::-webkit-scrollbar-thumb{ background: rgba(240,185,66,0.35); border-radius: 999px; }
 .team-discord-chip{
   box-sizing: border-box;
   position: relative;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   margin: 0;
   border-radius: 50%;
@@ -1571,11 +1940,12 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   border-radius: 6px;
   font-weight: bold;
   box-sizing: border-box;
-  margin: 1px 90px 8px 90px;
+  margin: 0 ;
+  font-size: 13px;
 }
 
 .buzzer-status.is-live {
-  color: #ffffff;
+  color: var(--teal);
 }
 
 .buzzer-status.has-winner {
@@ -1656,4 +2026,18 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
     line-height: 1;
     color: #ffd700;
   }
->>>>>>> Stashed changes
+
+  .clue-youtube-external {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 32px;
+  cursor: pointer;
+  border-radius: 8px;
+  background: rgba(0,0,0,0.2);
+}
+.clue-youtube-external-label {
+  font-weight: 700;
+  color: #fff;
+}
