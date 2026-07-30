@@ -18,14 +18,22 @@ const DUCK_FADE_MS = 700;
 export default function BackgroundMusicPlayer({
   settings,
   onUploadFile,
+  onUrlChange,
   onClear,
   onVolumeChange,
   onToggleLoop,
   ducking = false,
+  // Called with { fileRef, fileName, loop, playing, positionSeconds,
+  // updatedAt } whenever any of those change — lets JeopardyBoard
+  // broadcast "now playing" state to players via useBgmSync. Deliberately
+  // excludes volume: each client's volume is local-only, never synced.
+  onPlaybackChange,
 }) {
   const [open, setOpen] = useState(false);
   const [playing, setPlaying] = useState(false); // never persisted — browsers block autoplay anyway, so this always starts paused on load
   const [mediaUrl, setMediaUrl] = useState("");
+  const [urlMode, setUrlMode] = useState(false);
+  const [urlInput, setUrlInput] = useState("");
   const audioRef = useRef(null);
   const fadeRafRef = useRef(null);
 
@@ -122,6 +130,25 @@ export default function BackgroundMusicPlayer({
   // Clean up any in-flight fade on unmount.
   useEffect(() => cancelFade, []);
 
+  // Report "now playing" state up to the parent whenever it actually
+  // changes — play/pause toggling, track swap, or loop toggle. This is
+  // the single source JeopardyBoard uses to broadcast bgmUpdate to
+  // players, so it needs to fire on every state change, not just clicks:
+  // it also covers the audio naturally ending (see onEnded below) and a
+  // fresh track load resetting `playing` back to false.
+  useEffect(() => {
+    if (!onPlaybackChange) return;
+    onPlaybackChange({
+      fileRef: settings.fileRef || "",
+      fileName: settings.fileName || "",
+      loop: !!settings.loop,
+      playing,
+      positionSeconds: audioRef.current ? audioRef.current.currentTime : 0,
+      updatedAt: Date.now(),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [playing, settings.fileRef, settings.loop]);
+
   function togglePlay() {
     const audio = audioRef.current;
     if (!audio || !mediaUrl) return;
@@ -137,6 +164,21 @@ export default function BackgroundMusicPlayer({
     const file = e.target.files && e.target.files[0];
     e.target.value = ""; // allow picking the same file again later
     if (file) onUploadFile(file);
+  }
+
+  // Direct audio link (mp3/ogg/etc — not YouTube/Spotify, those need a
+  // real embedded player which Discord's Activity CSP blocks). getMediaUrl
+  // already knows how to route a plain http(s) URL through our own
+  // server's /api/media/proxy route, same as clue media, so this just
+  // needs to hand the raw URL to the parent as the new fileRef — no
+  // upload step, no MediaStore involved.
+  function handleUrlSubmit() {
+    const trimmed = urlInput.trim();
+    if (!trimmed || !/^https?:\/\//i.test(trimmed)) return;
+    const name = trimmed.split("/").pop().split(/[?#]/)[0] || "External track";
+    onUrlChange(trimmed, decodeURIComponent(name));
+    setUrlInput("");
+    setUrlMode(false);
   }
 
   const trackLabel = settings.fileName || "No track loaded";
@@ -158,10 +200,38 @@ export default function BackgroundMusicPlayer({
             )}
           </div>
 
-          <label className="bgm-upload-btn">
-            {settings.fileRef ? "Replace Track" : "Upload Track"}
-            <input type="file" accept="audio/*" onChange={handleFileChange} style={{ display: "none" }} />
-          </label>
+          {urlMode ? (
+            <div className="bgm-url-row">
+              <input
+                type="url"
+                className="bgm-url-input"
+                placeholder="https://example.com/track.mp3"
+                value={urlInput}
+                onChange={(e) => setUrlInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") handleUrlSubmit();
+                  if (e.key === "Escape") setUrlMode(false);
+                }}
+                autoFocus
+              />
+              <button type="button" className="bgm-url-load-btn" onClick={handleUrlSubmit}>
+                Load
+              </button>
+              <button type="button" className="bgm-url-cancel-btn" onClick={() => setUrlMode(false)}>
+                ✕
+              </button>
+            </div>
+          ) : (
+            <div className="bgm-source-row">
+              <label className="bgm-upload-btn">
+                {settings.fileRef ? "Replace Track" : "Upload Track"}
+                <input type="file" accept="audio/*" onChange={handleFileChange} style={{ display: "none" }} />
+              </label>
+              <button type="button" className="bgm-link-btn" onClick={() => setUrlMode(true)}>
+                Paste link
+              </button>
+            </div>
+          )}
 
           <div className="bgm-controls-row">
             <button

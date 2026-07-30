@@ -1,13 +1,68 @@
 import React, { useRef, useState, useEffect } from 'react';
 
-export default function CustomAudioPlayer({ src, onPlayStateChange }) {
+export default function CustomAudioPlayer({ 
+  src, 
+  onError,
+  onPlayStateChange, 
+  isPlaying: externalIsPlaying, 
+  currentTime: externalCurrentTime, 
+  disablePlayPause = false, 
+  disableSeeking = false 
+}) {
   const audioRef = useRef(null);
-  const [isPlaying, setIsPlaying] = useState(false);
+  const [internalIsPlaying, setInternalIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(0.8); // Default 80% volume
   const [isMuted, setIsMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(0.8);
+  // Same class of autoplay-policy issue as the video player, just less
+  // likely to hit in practice for audio-only elements. Tracked so we can
+  // surface a tap-to-unlock affordance instead of silently stalling.
+  const [autoplayBlocked, setAutoplayBlocked] = useState(false);
+  // Same reasoning as the video player: Discord's Activity proxy doesn't
+  // reliably forward Range-request streaming for larger files, so we fetch
+  // once as a whole blob and play from a local blob URL instead of letting
+  // the <audio> element stream the proxied URL directly.
+  const [resolvedSrc, setResolvedSrc] = useState('');
+  const [prefetching, setPrefetching] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let blobUrl = null;
+    setResolvedSrc('');
+
+    if (!src) return;
+
+    if (src.startsWith('blob:') || src.startsWith('data:')) {
+      setResolvedSrc(src);
+      return;
+    }
+
+    setPrefetching(true);
+    (async () => {
+      try {
+        const res = await fetch(src);
+        if (!res.ok) throw new Error('HTTP ' + res.status);
+        const blob = await res.blob();
+        if (cancelled) return;
+        blobUrl = URL.createObjectURL(blob);
+        setResolvedSrc(blobUrl);
+      } catch (err) {
+        console.error('[CustomAudioPlayer] blob prefetch failed, falling back to direct src:', err, src);
+        if (!cancelled) setResolvedSrc(src);
+      } finally {
+        if (!cancelled) setPrefetching(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [src]);
+
+  const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
 
   // Keep audio volume in sync with React state
   useEffect(() => {
@@ -16,25 +71,70 @@ export default function CustomAudioPlayer({ src, onPlayStateChange }) {
     }
   }, [volume, isMuted]);
 
-  // Safety net: if this player unmounts (modal closed, clue swapped, or
-  // renderAs falls back to a different media kind) while still playing,
-  // make sure the parent knows playback stopped so it can un-duck.
+  // Sync external isPlaying state from host
+  useEffect(() => {
+    if (!audioRef.current || !resolvedSrc || externalIsPlaying === undefined) return;
+    if (externalIsPlaying) {
+      const playPromise = audioRef.current.play();
+      if (playPromise && typeof playPromise.catch === 'function') {
+        playPromise
+          .then(() => setAutoplayBlocked(false))
+          .catch(() => setAutoplayBlocked(true));
+      }
+    } else {
+      audioRef.current.pause();
+      setAutoplayBlocked(false);
+    }
+    // Keep the internal toggle-button state lined up with whatever the
+    // parent just forced (e.g. auto-pausing on a buzz-in). Without this,
+    // internalIsPlaying goes stale after an external override, and the
+    // play/pause button's own click handler (which only reads
+    // internalIsPlaying, not the external prop) ends up doing nothing —
+    // or the opposite of what the icon shows — on the next click.
+    setInternalIsPlaying(externalIsPlaying);
+  }, [externalIsPlaying, resolvedSrc]);
+
+  // Sync external currentTime from host (corrects drift > 0.5s)
+  useEffect(() => {
+    if (!audioRef.current || !resolvedSrc || externalCurrentTime === undefined) return;
+    if (Math.abs(audioRef.current.currentTime - externalCurrentTime) > 0.5) {
+      audioRef.current.currentTime = externalCurrentTime;
+      setCurrentTime(externalCurrentTime);
+    }
+  }, [externalCurrentTime, resolvedSrc]);
+
+  // Safety net on unmount
   useEffect(() => {
     return () => onPlayStateChange && onPlayStateChange(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const togglePlay = () => {
+    if (disablePlayPause) return; // Prevent manual toggle for players
     if (!audioRef.current) return;
-    if (isPlaying) {
+    if (internalIsPlaying) {
       audioRef.current.pause();
-      onPlayStateChange && onPlayStateChange(false);
+      onPlayStateChange && onPlayStateChange(false, audioRef.current.currentTime);
+      setInternalIsPlaying(false);
     } else {
       audioRef.current.play();
-      onPlayStateChange && onPlayStateChange(true);
+      onPlayStateChange && onPlayStateChange(true, audioRef.current.currentTime);
+      setInternalIsPlaying(true);
     }
-    setIsPlaying(!isPlaying);
   };
+
+  // Heartbeat: periodically re-broadcast current position while playing, so
+  // late-joining or drifted players get corrected without needing a fresh
+  // play/pause/seek event to happen first.
+  useEffect(() => {
+    if (!isPlaying || !onPlayStateChange) return;
+    const id = setInterval(() => {
+      if (audioRef.current) {
+        onPlayStateChange(true, audioRef.current.currentTime);
+      }
+    }, 2000);
+    return () => clearInterval(id);
+  }, [isPlaying, onPlayStateChange]);
 
   const handleTimeUpdate = () => {
     if (audioRef.current) {
@@ -49,10 +149,12 @@ export default function CustomAudioPlayer({ src, onPlayStateChange }) {
   };
 
   const handleSeek = (e) => {
+    if (disableSeeking) return; // Prevent manual scrubbing for players
     const time = parseFloat(e.target.value);
     if (audioRef.current) {
       audioRef.current.currentTime = time;
       setCurrentTime(time);
+      onPlayStateChange && onPlayStateChange(isPlaying, time);
     }
   };
 
@@ -82,7 +184,9 @@ export default function CustomAudioPlayer({ src, onPlayStateChange }) {
   };
 
   const handleEnded = () => {
-    setIsPlaying(false);
+    if (externalIsPlaying === undefined) {
+      setInternalIsPlaying(false);
+    }
     setCurrentTime(0);
     onPlayStateChange && onPlayStateChange(false);
   };
@@ -91,14 +195,33 @@ export default function CustomAudioPlayer({ src, onPlayStateChange }) {
     <div className="custom-audio-player">
       <audio
         ref={audioRef}
-        src={src}
+        {...(resolvedSrc ? { src: resolvedSrc } : {})}
         onTimeUpdate={handleTimeUpdate}
         onLoadedMetadata={handleLoadedMetadata}
         onEnded={handleEnded}
+        onError={(e) => {
+          const mediaError = e?.currentTarget?.error;
+          console.error(
+            '[CustomAudioPlayer] audio failed to load/decode:',
+            'code=' + (mediaError?.code ?? 'unknown'),
+            mediaError?.message || '(no message)',
+            'src=' + resolvedSrc
+          );
+          onError && onError(e);
+        }}
       />
+      {prefetching && (
+        <span className="player-time" style={{ opacity: 0.7 }}>Loading…</span>
+      )}
 
       {/* Play/Pause Button */}
-      <button onClick={togglePlay} className="player-play-btn" title={isPlaying ? "Pause" : "Play"}>
+      <button 
+        onClick={togglePlay} 
+        disabled={disablePlayPause || prefetching} 
+        className="player-play-btn" 
+        title={isPlaying ? "Pause" : "Play"}
+        style={disablePlayPause ? { cursor: 'not-allowed', opacity: 0.8 } : {}}
+      >
         {isPlaying ? (
           <svg viewBox="0 0 24 24" className="player-icon">
             <path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z" />
@@ -110,6 +233,22 @@ export default function CustomAudioPlayer({ src, onPlayStateChange }) {
         )}
       </button>
 
+      {autoplayBlocked && disablePlayPause && (
+        <button
+          className="player-play-btn"
+          onClick={() => {
+            audioRef.current
+              ?.play()
+              .then(() => setAutoplayBlocked(false))
+              .catch(() => {});
+          }}
+          title="Tap to enable audio"
+          style={{ background: '#f59e0b', color: '#000' }}
+        >
+          Tap to enable audio
+        </button>
+      )}
+
       {/* Track & Timers */}
       <div className="player-timeline">
         <span className="player-time">{formatTime(currentTime)}</span>
@@ -119,8 +258,10 @@ export default function CustomAudioPlayer({ src, onPlayStateChange }) {
           max={duration || 100}
           value={currentTime}
           onChange={handleSeek}
+          disabled={disableSeeking}
           className="player-slider timeline-slider"
           style={{
+            cursor: disableSeeking ? 'not-allowed' : 'pointer',
             background: `linear-gradient(to right, #f59e0b 0%, #f59e0b ${(currentTime / (duration || 1)) * 100}%, #1e293b ${(currentTime / (duration || 1)) * 100}%, #1e293b 100%)`
           }}
         />

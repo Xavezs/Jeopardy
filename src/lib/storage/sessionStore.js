@@ -1,15 +1,19 @@
-import { storeGet, storeSet, storeRemove } from "./kvStore";
+import { api } from "../api";
 
 /* =========================================================================
    SESSION STORE
-   Session CRUD (create/load/save/delete/duplicate) plus the session data
-   shape (blank clue/category, default board) and schema migration. Reads
-   and writes go through kvStore's storeGet/storeSet/storeRemove — this
-   file doesn't touch localStorage directly.
+   Board CRUD lives on the server, scoped to whoever is logged in via
+   Discord. Boards can now be shared: an owner generates a room code via
+   inviteToBoard(), a friend uses joinBoard() with that code to get editor
+   access, and the board's buzzer can be bound to a Discord voice channel
+   via setDiscordChannel() so /buzz there feeds the same room as the web
+   Buzz button.
+
+   getCurrentId/setCurrentId are the one exception — "which board did I
+   have open last" is local UI convenience, not board data, so that still
+   lives in localStorage.
    ========================================================================= */
-const INDEX_KEY = "jp_sessions_index";
 const CURRENT_KEY = "jp_current_session_id";
-const SESSION_KEY = (id) => "jp_session_" + id;
 
 export function newId() {
   return "sess_" + Date.now().toString(36) + "_" + Math.random().toString(36).slice(2, 7);
@@ -59,78 +63,87 @@ export function defaultSessionData() {
     ],
     settings: {
       timerEnabled: true,
-      timerDuration: 30, // global default, in seconds — per-clue timerSeconds overrides this
+      timerDuration: 30,
     },
   };
 }
 
 export const SessionStore = {
+  // GET /api/boards — boards you own or were added to
   async getIndex() {
-    const raw = await storeGet(INDEX_KEY);
-    return raw ? JSON.parse(raw) : [];
+    return await api("/api/boards");
   },
-  async saveIndex(index) {
-    await storeSet(INDEX_KEY, JSON.stringify(index));
-  },
+
   async getCurrentId() {
-    return await storeGet(CURRENT_KEY);
+    return localStorage.getItem(CURRENT_KEY);
   },
   async setCurrentId(id) {
-    await storeSet(CURRENT_KEY, id);
+    localStorage.setItem(CURRENT_KEY, id);
   },
+
+  // GET /api/boards/:id — now also returns isOwner, roomCode (owner-only), discordChannelId
   async loadSession(id) {
-    const raw = await storeGet(SESSION_KEY(id));
-    return raw ? JSON.parse(raw) : null;
+    try {
+      return await api("/api/boards/" + id);
+    } catch {
+      return null;
+    }
   },
+
   async saveSession(session) {
-    session.updatedAt = timestamp();
-    const result = await storeSet(SESSION_KEY(session.id), JSON.stringify(session));
-    const index = await this.getIndex();
-    const meta = {
-      id: session.id,
-      name: session.name,
-      createdAt: session.createdAt,
-      updatedAt: session.updatedAt,
-      categoryCount: session.data.rounds.reduce((sum, r) => sum + r.categories.length, 0),
-      roundCount: session.data.rounds.length,
-      teamCount: session.data.teams.length,
-    };
-    const idx = index.findIndex((e) => e.id === session.id);
-    if (idx >= 0) index[idx] = meta;
-    else index.push(meta);
-    await this.saveIndex(index);
-    // degraded === true means this save only landed in memory (localStorage
-    // failed) and will be LOST on refresh/tab close — surface it to the UI.
-    return { degraded: result.degraded };
+    const result = await api("/api/boards/" + session.id, {
+      method: "PUT",
+      body: JSON.stringify({ name: session.name, data: session.data }),
+    });
+    session.updatedAt = result.updatedAt;
+    return { degraded: false };
   },
+
   async deleteSession(id) {
-    await storeRemove(SESSION_KEY(id));
-    const index = (await this.getIndex()).filter((e) => e.id !== id);
-    await this.saveIndex(index);
+    await api("/api/boards/" + id, { method: "DELETE" });
   },
+
   async createSession(name, data) {
-    const session = {
-      id: newId(),
-      name,
-      createdAt: timestamp(),
-      updatedAt: timestamp(),
-      data: data || defaultSessionData(),
-    };
-    await this.saveSession(session);
-    return session;
+    return await api("/api/boards", {
+      method: "POST",
+      body: JSON.stringify({ name, data: data || defaultSessionData() }),
+    });
   },
+
   async duplicateSession(id, newName) {
-    const original = await this.loadSession(id);
-    if (!original) return null;
-    const copy = {
-      id: newId(),
-      name: newName,
-      createdAt: timestamp(),
-      updatedAt: timestamp(),
-      data: JSON.parse(JSON.stringify(original.data)),
-    };
-    await this.saveSession(copy);
-    return copy;
+    try {
+      return await api("/api/boards/" + id + "/duplicate", {
+        method: "POST",
+        body: JSON.stringify({ name: newName }),
+      });
+    } catch {
+      return null;
+    }
+  },
+
+  // POST /api/boards/:id/invite — owner only. Returns the board's room
+  // code, generating one the first time. Share this with a friend so they
+  // can join with joinBoard() below.
+  async inviteToBoard(id) {
+    return await api("/api/boards/" + id + "/invite", { method: "POST" });
+  },
+
+  // POST /api/boards/join — a friend enters a room code and gets editor
+  // access. Returns the full board (same shape as loadSession()).
+  async joinBoard(roomCode) {
+    return await api("/api/boards/join", {
+      method: "POST",
+      body: JSON.stringify({ roomCode }),
+    });
+  },
+
+  // PUT /api/boards/:id/channel — owner only. Binds/unbinds the Discord
+  // voice channel whose /buzz feeds this board's buzzer.
+  async setDiscordChannel(id, discordChannelId) {
+    return await api("/api/boards/" + id + "/channel", {
+      method: "PUT",
+      body: JSON.stringify({ discordChannelId }),
+    });
   },
 };
 
@@ -139,12 +152,6 @@ export function migrateClueSchemaIfNeeded(data) {
   if (data.settings.timerEnabled === undefined) data.settings.timerEnabled = true;
   if (!data.settings.timerDuration) data.settings.timerDuration = 30;
 
-  // --- Introduce `rounds` (Double Jeopardy support) ---
-  // Older sessions store a single flat board as data.categories/data.values.
-  // Wrap that existing board as round 1 ("Single Jeopardy") exactly as-is —
-  // nothing about it is touched or regenerated — and add a brand new,
-  // blank round 2 ("Double Jeopardy") with the same row count but doubled
-  // point values, matching real Jeopardy's format.
   if (!data.rounds) {
     const legacyValues = data.values || [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
     const legacyCategories =
@@ -175,10 +182,6 @@ export function migrateClueSchemaIfNeeded(data) {
           cat.clues[v] = blankClue();
           return;
         }
-        // Migrate from the old three-field (imageUrl/videoUrl/audioUrl) schema
-        // to a single mediaUrl/mediaType. If a clue had more than one set
-        // (the old editor allowed combos), keep just one — image, then
-        // video, then audio — since a clue can now only hold one media item.
         if (clue.mediaUrl === undefined) {
           const legacy = [
             ["image", clue.imageUrl],
