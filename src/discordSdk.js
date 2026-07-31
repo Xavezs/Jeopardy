@@ -42,6 +42,31 @@ export const activityChannelId = hasFrameId
 // promise instead of starting a new one.
 let setupPromise = null;
 
+// Separate, permanent cache for the ready() handshake itself. Promise.race
+// against a timeout only makes OUR code stop waiting — it does not cancel
+// discordSdk.ready(), which keeps resolving in the background regardless.
+// Without this cache, every retry (manual retry button, or closing and
+// reopening the whole Activity) called discordSdk.ready() again from
+// scratch, stacking up multiple concurrent handshakes and making later
+// attempts less likely to succeed, not more. Caching it means: if the
+// first attempt "times out" from our side but the handshake actually
+// completes a moment later, every subsequent retry immediately reuses
+// that already-resolved promise instead of starting a new one.
+let readyPromise = null;
+function getReadyPromise() {
+  if (!readyPromise) {
+    readyPromise = discordSdk.ready().catch((err) => {
+      // If the underlying handshake itself rejects, don't leave that
+      // rejection cached forever — clear it so the next call (e.g. the
+      // Retry button) issues a genuinely fresh ready() instead of
+      // re-awaiting a promise that's already dead.
+      readyPromise = null;
+      throw err;
+    });
+  }
+  return readyPromise;
+}
+
 export async function setupDiscordSdk() {
   if (!discordSdk) {
     console.warn("Discord SDK skipped: no frame_id (not running inside Discord) or VITE_DISCORD_CLIENT_ID is missing.");
@@ -53,10 +78,22 @@ export async function setupDiscordSdk() {
   setupPromise = (async () => {
     try {
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Discord SDK ready timeout')), 6000)
+        setTimeout(() => reject(new Error('Discord SDK ready timeout')), 15000)
       );
 
-      await Promise.race([discordSdk.ready(), timeoutPromise]);
+      try {
+        await Promise.race([getReadyPromise(), timeoutPromise]);
+      } catch (raceErr) {
+        // Our side gave up waiting, but discordSdk.ready() itself may
+        // still be pending forever in the background (a genuine hang, not
+        // just slow) — Promise.race doesn't cancel it. If we leave
+        // readyPromise cached, every future retry (including the Retry
+        // button) just re-awaits that same dead promise and times out
+        // again, forever. Discard it so the next attempt starts a
+        // completely fresh ready() call instead.
+        readyPromise = null;
+        throw raceErr;
+      }
       console.log("Discord SDK is ready!");
 
       const { code } = await discordSdk.commands.authorize({
@@ -154,11 +191,24 @@ export function getDiscordIdentity() {
   identityPromise = (async () => {
     const code = await setupDiscordSdk();
     console.log("[speaking-debug] setupDiscordSdk code:", code ? "(got code)" : code);
-    if (!code) return null;
+    if (!code) {
+      // Don't leave a failed attempt cached forever. Discord frequently
+      // suspends/hides the Activity iframe instead of destroying it when
+      // the panel is closed, so this module's state can outlive a single
+      // "session" from the user's perspective. Without this reset, one
+      // failed ready()/authorize() (e.g. a slow tunnel) permanently blocks
+      // every future retry with a cached `null` — closing and reopening
+      // the Activity panel would never work again without a hard reload.
+      identityPromise = null;
+      return null;
+    }
 
     const identity = await authenticateDiscordUser(code);
     console.log("[speaking-debug] authenticateDiscordUser identity:", identity ? { ...identity, access_token: identity.access_token ? "(present)" : identity.access_token } : identity);
-    if (!identity) return null;
+    if (!identity) {
+      identityPromise = null;
+      return null;
+    }
 
     const { access_token, ...user } = identity;
 

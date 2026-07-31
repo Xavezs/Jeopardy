@@ -1,13 +1,16 @@
 // src/components/LoginGate.jsx
-import { useEffect, useState, createContext, useContext } from "react";
+import { useEffect, useState } from "react";
 import { discordSdk, getDiscordIdentity } from "../discordSdk";
 import { API_BASE } from "../lib/api";
-
-export const DiscordContext = createContext(null);
+import { DiscordContext } from "./DiscordContext";
 
 export default function LoginGate({ children }) {
   const [status, setStatus] = useState("initializing");
   const [authData, setAuthData] = useState(null);
+  // Bumping this re-runs the effect below, letting the Retry button below
+  // re-attempt the whole flow in place — no more closing and reopening the
+  // entire Activity window just to get a fresh attempt.
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
     async function setupDiscordActivity() {
@@ -94,7 +97,7 @@ export default function LoginGate({ children }) {
     }
 
     setupDiscordActivity();
-  }, []);
+  }, [retryCount]);
 
   if (status === "initializing") {
     return (
@@ -106,9 +109,18 @@ export default function LoginGate({ children }) {
 
   if (status === "error") {
     return (
-      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column" }}>
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column", gap: "12px" }}>
         <h3>Failed to connect to Discord</h3>
         <p>Make sure this app is running inside Discord as an Activity or backend server is active.</p>
+        <button
+          onClick={() => {
+            setStatus("initializing");
+            setRetryCount((n) => n + 1);
+          }}
+          style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "#5865F2", color: "#fff", cursor: "pointer", fontSize: "14px" }}
+        >
+          Retry
+        </button>
       </main>
     );
   }
@@ -119,5 +131,3 @@ export default function LoginGate({ children }) {
     </DiscordContext.Provider>
   );
 }
-
-export const useDiscordAuth = () => useContext(DiscordContext);
