@@ -653,6 +653,34 @@ export default function ClueModal({
           </div>
         )}
 
+        {flipped && (
+          <div
+            className="host-answer-preview"
+            style={{
+              background: "rgba(0,0,0,0.25)",
+              border: "1px dashed rgba(255,255,255,0.25)",
+              borderRadius: "8px",
+              padding: "8px 10px",
+              marginBottom: "10px",
+            }}
+          >
+            <div
+              style={{
+                fontSize: "0.65rem",
+                textTransform: "uppercase",
+                letterSpacing: "0.06em",
+                opacity: 0.6,
+                marginBottom: "4px",
+              }}
+            >
+              Answer (host only){revealed ? " · Revealed" : ""}
+            </div>
+            <div style={{ whiteSpace: "pre-line", fontSize: "0.9rem" }}>
+              {clue.answer || "(no answer set)"}
+            </div>
+          </div>
+        )}
+
         <div className="host-sidebar-actions">
           {!flipped ? (
             <button

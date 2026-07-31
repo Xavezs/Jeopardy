@@ -608,8 +608,9 @@
     background: var(--gold);
     background-clip: padding-box;
   }
-  .clue-modal-header{ text-align:center; color:var(--gold); font-family:var(--font-display); letter-spacing:1.5px; font-size:14px; margin-bottom:14px; opacity:.85; }
-  .clue-value-big{ text-align:center; font-family:var(--font-display); font-size:20px; color:var(--gold); margin-bottom:20px; text-shadow:0 0 20px rgba(240,185,66,0.3); }
+  .clue-cat-value{ display:flex; flex-direction:row; align-items:baseline; justify-content:center; gap:10px; margin-bottom:14px; }
+  .clue-modal-header{ text-align:right; color:var(--gold); font-family:var(--font-display); letter-spacing:1.5px; font-size:14px; margin-bottom:0; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .clue-value-big{ text-align:left; font-family:var(--font-display); font-size:20px; color:var(--gold); margin-bottom:0; text-shadow:0 0 20px rgba(240,185,66,0.3); flex-shrink:0; }
 
   /* ---- Clue flip-card: front shows category+value, click flips to the real clue ---- */
   /* The outer .modal box normally carries the card chrome (bg/border/padding/shadow),
@@ -1995,7 +1996,7 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 }
 
 .room-code-input {
-  width: 78px;
+  width: 90px;
   padding: 7px 8px;
   letter-spacing: 0.08em;
   text-align: center;
@@ -2016,38 +2017,33 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
     z-index: 1000;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     padding: 8px 16px;
-    font-family: inherit;
+    font-family: var(--pv-font-body, 'Quicksand', sans-serif);
     font-size: 13px;
     font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: #ffffff;
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    border: 2px solid rgba(255, 215, 0, 0.4);
-    border-radius: 8px;
+    color: #1a1200;
+    background: linear-gradient(180deg, #f0b942, #c8932c);
+    border: none;
+    border-radius: 12px;
     cursor: pointer;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    transition: all 0.15s ease-in-out;
+    box-shadow: 0 4px 14px rgba(240, 185, 66, 0.25);
+    transition: transform 0.12s ease, box-shadow 0.12s ease;
   }
 
   .jp-role-back-btn:hover {
-    background: linear-gradient(135deg, #334155 1px, #1e293b 100%);
-    border-color: rgba(255, 215, 0, 0.8);
-    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 215, 0, 0.2);
     transform: translateY(-1px);
+    box-shadow: 0 6px 18px rgba(240, 185, 66, 0.35);
   }
 
   .jp-role-back-btn:active {
-    transform: translateY(1px) scale(0.97);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    transform: translateY(0) scale(0.97);
+    box-shadow: 0 4px 14px rgba(240, 185, 66, 0.25);
   }
 
   .jp-role-back-arrow {
     font-size: 15px;
     line-height: 1;
-    color: #ffd700;
   }
 
   .clue-youtube-external {

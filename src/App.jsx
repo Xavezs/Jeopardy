@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import JeopardyBoard from './JeopardyBoard';
 import LoginGate from "./components/LoginGate";
 import PlayerView from "./components/PlayerView";
+import RoleSelect from "./components/RoleSelect";
 import { getDiscordIdentity } from './discordSdk';
 import '@fontsource/quicksand/300.css';
 import '@fontsource/quicksand/700.css';
@@ -11,8 +12,6 @@ import "./styles/player.css";
 export default function App() {
   // 1. ALL HOOKS MUST BE AT THE VERY TOP (Never conditional or after an early return)
   const [currentPath, setCurrentPath] = useState(window.location.pathname);
-  const [roomCodeInput, setRoomCodeInput] = useState('');
-  const [nameInput, setNameInput] = useState('');
   const [hostMode, setHostMode] = useState(false);
 
   const [joining, setJoining] = useState(false);
@@ -37,11 +36,7 @@ export default function App() {
   }
 
   // 3. EVENT HANDLERS
-  const handleJoinClick = async () => {
-    const code = roomCodeInput.trim().toUpperCase();
-    const name = nameInput.trim();
-    if (!code || !name) return;
-
+  const handleSelectPlayer = async (code, name) => {
     let id = localStorage.getItem(`jeopardy:player:${code}:id`);
     if (!id) {
       id = 'p_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
@@ -82,64 +77,11 @@ export default function App() {
     setCurrentPath(`/play?room=${code}`);
   };
 
-  const canJoin = roomCodeInput.trim() && nameInput.trim() && !joining;
-
   return (
-    <div className="pv-root pv-center app-landing-root">
-      <div className="pv-join-card app-landing-card">
-        <h1 className="app-landing-title">JEOPARDY!</h1>
-        <p className="app-landing-subtitle">Discord Activity Game Show</p>
-
-        <button
-          onClick={() => setHostMode(true)}
-          className="pv-btn pv-btn-primary app-host-btn"
-        >
-          Host / Manage Board
-        </button>
-
-        <div className="app-divider">
-          <div className="app-divider-line" />
-          <span>OR</span>
-          <div className="app-divider-line" />
-        </div>
-
-        <div className="app-join-section">
-          <label className="app-join-label">
-            Room Code
-            <input
-              type="text"
-              placeholder="e.g. 7FE4SE"
-              value={roomCodeInput}
-              onChange={(e) => setRoomCodeInput(e.target.value.toUpperCase())}
-              maxLength={8}
-              className="app-room-input"
-            />
-          </label>
-
-          <label className="app-join-label">
-            Your Name
-            <input
-              type="text"
-              placeholder="How you'll appear on the buzzer"
-              value={nameInput}
-              onChange={(e) => setNameInput(e.target.value)}
-              maxLength={24}
-              className="app-room-input"
-              style={{ textAlign: 'left', textTransform: 'none', letterSpacing: 'normal' }}
-            />
-          </label>
-
-          <button
-            type="button"
-            onClick={handleJoinClick}
-            disabled={!canJoin}
-            className="pv-btn pv-btn-primary app-join-btn"
-            style={{ opacity: canJoin ? 1 : 0.5, cursor: canJoin ? 'pointer' : 'not-allowed', marginTop: '0.5rem' }}
-          >
-            {joining ? 'Joining…' : 'Join Game'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <RoleSelect
+      onSelectHost={() => setHostMode(true)}
+      onSelectPlayer={handleSelectPlayer}
+      isJoining={joining}
+    />
   );
 }

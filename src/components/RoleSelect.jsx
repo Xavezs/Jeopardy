@@ -1,77 +1,89 @@
 import React, { useState } from "react";
+import "../styles/RoleSelect.css";
 
-export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamName = "" }) {
+export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamName = "", isJoining = false }) {
   const [inputCode, setInputCode] = useState("");
   const [teamName, setTeamName] = useState(defaultTeamName);
 
   return (
-    <div className="flex flex-col items-center justify-center h-screen bg-slate-950 text-white p-6">
-      <div className="bg-slate-900 border border-slate-800 p-8 rounded-2xl shadow-2xl w-full max-w-md flex flex-col gap-6">
-        <div className="text-center">
-          <h1 className="text-3xl font-black text-yellow-400 tracking-wide mb-2">JEOPARDY!</h1>
-          <p className="text-slate-400 text-sm">Choose how you want to enter this session</p>
-        </div>
+    <div className="role-select-root">
+      {/* Marquee-style title, matching the board's lit-sign header */}
+      <div className="role-select-title-wrap">
+        <h1 className="role-select-title">JEOPARDY!</h1>
+        <p className="role-select-subtitle">Choose how you want to enter this session</p>
+      </div>
 
-        {/* Host Option */}
-        <div className="flex flex-col gap-2">
-          <button
-            onClick={onSelectHost}
-            className="w-full bg-yellow-500 hover:bg-yellow-400 text-slate-950 font-bold py-3.5 px-4 rounded-xl transition shadow-lg text-center"
-          >
-            Host / Manage Board
+      {/* Horizontal split card: Host on the left, Join on the right */}
+      <div className="role-select-card">
+        {/* Host panel */}
+        <div className="role-select-panel host">
+          <div>
+            <h2 className="role-select-panel-title">Host / Manage Board</h2>
+            <p className="role-select-panel-desc">
+              Create or edit questions and run the game show.
+            </p>
+          </div>
+          <button onClick={onSelectHost} className="role-select-host-btn">
+            Enter as Host
           </button>
-          <span className="text-xs text-slate-500 text-center">Create or edit questions and run the game show.</span>
         </div>
 
-        <div className="flex items-center gap-4 my-2">
-          <div className="flex-1 h-px bg-slate-800" />
-          <span className="text-xs text-slate-600 uppercase font-bold">OR</span>
-          <div className="flex-1 h-px bg-slate-800" />
+        {/* Divider — vertical on desktop, horizontal on mobile, with an OR pill */}
+        <div className="role-select-divider">
+          <div className="role-select-divider-line" />
+          <span className="role-select-divider-badge">OR</span>
         </div>
 
-        {/* Player Option */}
-        <form
-          onSubmit={(e) => {
-            e.preventDefault();
-            const trimmedCode = inputCode.trim();
-            const trimmedName = teamName.trim();
-            if (trimmedCode && trimmedName) onSelectPlayer(trimmedCode.toUpperCase(), trimmedName);
-          }}
-          className="flex flex-col gap-3"
-        >
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Your Team Name</label>
-            <input
-              type="text"
-              placeholder={defaultTeamName || "e.g. The Buzzer Beaters"}
-              value={teamName}
-              onChange={(e) => setTeamName(e.target.value)}
-              className="bg-slate-950 border border-slate-800 p-3 rounded-xl text-white text-center focus:outline-none focus:border-yellow-500 transition"
-              maxLength={24}
-            />
-            <span className="text-[11px] text-slate-500 text-center">
+        {/* Player panel */}
+        <div className="role-select-panel player">
+          <div className="role-select-player-header">
+            <h2 className="role-select-panel-title">Join as Player</h2>
+          </div>
+
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const trimmedCode = inputCode.trim();
+              const trimmedName = teamName.trim();
+              if (trimmedCode && trimmedName) onSelectPlayer(trimmedCode.toUpperCase(), trimmedName);
+            }}
+            className="role-select-form"
+          >
+            <div className="role-select-input-row">
+              <div className="role-select-field">
+                <label>Team Name</label>
+                <input
+                  type="text"
+                  placeholder={defaultTeamName || "e.g. Buzzer Beaters"}
+                  value={teamName}
+                  onChange={(e) => setTeamName(e.target.value)}
+                  maxLength={24}
+                />
+              </div>
+              <div className="role-select-field">
+                <label>Room Code</label>
+                <input
+                  type="text"
+                  placeholder="7FE4SE"
+                  value={inputCode}
+                  onChange={(e) => setInputCode(e.target.value)}
+                  maxLength={8}
+                  className="code-input"
+                />
+              </div>
+            </div>
+            <span className="role-select-hint">
               Joining an existing team name adds you to it — new names create a new team.
             </span>
-          </div>
-          <div className="flex flex-col gap-1">
-            <label className="text-xs font-semibold text-slate-400 uppercase tracking-wider">Join a Room</label>
-            <input
-              type="text"
-              placeholder="Enter Room Code (e.g. 7FE4SE)"
-              value={inputCode}
-              onChange={(e) => setInputCode(e.target.value)}
-              className="bg-slate-950 border border-slate-800 p-3 rounded-xl text-white uppercase tracking-widest text-center placeholder:normal-case placeholder:tracking-normal focus:outline-none focus:border-yellow-500 transition"
-              maxLength={8}
-            />
-          </div>
-          <button
-            type="submit"
-            disabled={!inputCode.trim() || !teamName.trim()}
-            className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:opacity-40 disabled:hover:bg-indigo-600 text-white font-bold py-3.5 px-4 rounded-xl transition shadow-lg"
-          >
-            Join as Player
-          </button>
-        </form>
+            <button
+              type="submit"
+              disabled={!inputCode.trim() || !teamName.trim() || isJoining}
+              className="role-select-join-btn"
+            >
+              {isJoining ? "Joining…" : "Join Game"}
+            </button>
+          </form>
+        </div>
       </div>
     </div>
   );
