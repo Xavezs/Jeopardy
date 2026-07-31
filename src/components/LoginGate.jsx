@@ -1,6 +1,6 @@
 // src/components/LoginGate.jsx
 import { useEffect, useState } from "react";
-import { discordSdk, getDiscordIdentity } from "../discordSdk";
+import { discordSdk, getDiscordIdentity, resetDiscordSdk } from "../discordSdk";
 import { API_BASE } from "../lib/api";
 import { DiscordContext } from "./DiscordContext";
 
@@ -114,6 +114,7 @@ export default function LoginGate({ children }) {
         <p>Make sure this app is running inside Discord as an Activity or backend server is active.</p>
         <button
           onClick={() => {
+            resetDiscordSdk();
             setStatus("initializing");
             setRetryCount((n) => n + 1);
           }}
