@@ -53,7 +53,7 @@ export async function setupDiscordSdk() {
   setupPromise = (async () => {
     try {
       const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Discord SDK ready timeout')), 2000)
+        setTimeout(() => reject(new Error('Discord SDK ready timeout')), 6000)
       );
 
       await Promise.race([discordSdk.ready(), timeoutPromise]);

@@ -4,9 +4,10 @@ import "../styles/board.css"; // TeamCard's classes (.team-card, .team-discord-a
 import { usePlayerSync } from "../lib/hooks/usePlayerSync";
 import { useBuzzer } from "../lib/hooks/useBuzzer";
 import { useSpeakingState } from "../lib/hooks/useSpeakingState";
+import { useDiscordMembers } from "../lib/hooks/useDiscordMembers";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
 import { youTubeEmbed } from "../lib/utils";
-import { getDiscordIdentity } from "../discordSdk";
+import { getDiscordIdentity, activityChannelId } from "../discordSdk";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
 import TeamCard from "./TeamCard";
 import {
@@ -61,7 +62,7 @@ function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, myPosition, idl
 // setTeamScore, toggleTeamDiscordUser) is a no-op since players never
 // touch team management — those controls simply never render because
 // TeamCard only shows them when editMode is true.
-function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersByTeam, buzzPositionByTeam }) {
+function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersByTeam, buzzStateByTeam }) {
   if (!teams?.length) return null;
   const sortedTeams = useMemo(() => {
     return [...teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
@@ -69,29 +70,34 @@ function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersBy
 
   return (
     <div className={"pv-teams" + (compact ? " pv-teams-compact" : "")}>
-      {sortedTeams.map((team, i) => (
-        <div
-          key={team.id}
-          className={"pv-team-card-wrap" + (joinedTeamId === team.id ? " pv-team-mine" : "")}
-        >
-          <TeamCard
-            team={team}
-            teamIndex={i}
-            editMode={false}
-            selectedScoreTeamId={null}
-            setSelectedScoreTeamId={() => {}}
-            discordDisplayMode="discord"
-            discordTeamMembers={discordMembersByTeam?.[team.id] || []}
-            discordMembers={[]}
-            toggleTeamDiscordUser={() => {}}
-            removeTeam={() => {}}
-            renameTeam={() => {}}
-            setTeamScore={() => {}}
-            scorePulse={pulseMap}
-            buzzPosition={buzzPositionByTeam?.[team.id] ?? null}
-          />
-        </div>
-      ))}
+      {sortedTeams.map((team, i) => {
+        const buzzState = buzzStateByTeam?.[team.id];
+        return (
+          <div
+            key={team.id}
+            className={"pv-team-card-wrap" + (joinedTeamId === team.id ? " pv-team-mine" : "")}
+          >
+            <TeamCard
+              team={team}
+              teamIndex={i}
+              editMode={false}
+              selectedScoreTeamId={null}
+              setSelectedScoreTeamId={() => {}}
+              discordDisplayMode="discord"
+              discordTeamMembers={discordMembersByTeam?.[team.id] || []}
+              discordMembers={[]}
+              toggleTeamDiscordUser={() => {}}
+              removeTeam={() => {}}
+              renameTeam={() => {}}
+              setTeamScore={() => {}}
+              scorePulse={pulseMap}
+              buzzPosition={buzzState?.position ?? null}
+              buzzIsActive={buzzState?.isActive ?? false}
+              buzzIsStruck={buzzState?.isStruck ?? false}
+            />
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -162,19 +168,28 @@ export default function PlayerView() {
   // any other reason (re-auth, different account, etc.).
   useEffect(() => {
     if (!discordChecked || !me) return;
-    const cachedId = me.discordUser?.id || null;
-    const freshId = discordUser?.id || null;
-    if (cachedId === freshId) return;
+    const cached = me.discordUser;
+    const fresh = discordUser;
+    // Deep-compare, not just id — id staying the same doesn't mean nothing
+    // changed. A prior session can have cached a discordUser with a missing
+    // avatarUrl (e.g. identity resolution failed or raced last time), and
+    // comparing ids only would leave that stale/blank avatar stuck forever
+    // even after a fresh, fully-populated identity resolves this time.
+    const changed =
+      (cached?.id || null) !== (fresh?.id || null) ||
+      (cached?.avatarUrl || null) !== (fresh?.avatarUrl || null) ||
+      (cached?.username || null) !== (fresh?.username || null);
+    if (!changed) return;
 
     const code = roomCode?.trim().toUpperCase();
     if (code) {
-      if (discordUser) {
-        localStorage.setItem(`jeopardy:player:${code}:discordUser`, JSON.stringify(discordUser));
+      if (fresh) {
+        localStorage.setItem(`jeopardy:player:${code}:discordUser`, JSON.stringify(fresh));
       } else {
         localStorage.removeItem(`jeopardy:player:${code}:discordUser`);
       }
     }
-    setMe((prev) => (prev ? { ...prev, discordUser } : prev));
+    setMe((prev) => (prev ? { ...prev, discordUser: fresh } : prev));
   }, [discordChecked, discordUser, me, roomCode]);
 
   const [joining, setJoining] = useState(false);
@@ -352,13 +367,28 @@ function PlayerBoard({ roomCode, me, onLeave }) {
     return map;
   }, [players]);
 
-  // Maps each team to the queue position (1-based) of the earliest of its
-  // members currently buzzed in, so the TeamCard badge always shows that
-  // team's best/first spot in line rather than every member's position.
-  // Queue entries key off `buzzerMe.id` (a Discord id when linked,
-  // otherwise the local `p_...` id — see buzzerMe above), so a roster
-  // entry can match on either its own id or its discordUserId.
-  const buzzPositionByTeam = useMemo(() => {
+  // 0-based index of whoever currently holds the buzzer, derived from
+  // `activePlayer` the same way ClueModal derives `buzzerActiveIndex` on
+  // the host side (queue.findIndex against the winner's id) — the player
+  // hook doesn't expose activeIndex directly since it's built for a
+  // single participant's perspective, not an observer's.
+  const buzzActiveIndex = useMemo(
+    () => (activePlayer ? queue.findIndex((p) => p.id === activePlayer.id) : -1),
+    [queue, activePlayer]
+  );
+
+  // Maps each team to its buzz-queue state: position (1-based) of the
+  // earliest of its members currently buzzed in, whether that member is
+  // the one currently holding the floor, and whether they've already had
+  // their turn and been passed over. Mirrors the per-avatar badge logic
+  // ClueModal runs on the host side, just rolled up to one badge per team
+  // (TeamCard shows a single corner badge, not one per member) — if any
+  // of the team's queued members is the active one, that member's spot
+  // wins over an earlier-but-now-inactive one. Queue entries key off
+  // `buzzerMe.id` (a Discord id when linked, otherwise the local
+  // `p_...` id — see buzzerMe above), so a roster entry can match on
+  // either its own id or its discordUserId.
+  const buzzStateByTeam = useMemo(() => {
     if (!queue.length) return {};
     const idToTeam = {};
     for (const p of players) {
@@ -369,10 +399,15 @@ function PlayerBoard({ roomCode, me, onLeave }) {
     const map = {};
     queue.forEach((q, i) => {
       const teamId = idToTeam[q.id];
-      if (teamId && map[teamId] === undefined) map[teamId] = i + 1;
+      if (!teamId) return;
+      const isActive = !!activePlayer && activePlayer.id === q.id;
+      const isStruck = !isActive && i < buzzActiveIndex;
+      if (!map[teamId] || isActive) {
+        map[teamId] = { position: i + 1, isActive, isStruck };
+      }
     });
     return map;
-  }, [queue, players]);
+  }, [queue, players, activePlayer, buzzActiveIndex]);
 
   // Live "who's talking" — same client-side SDK source useTeams.js uses on
   // the host side (see useSpeakingState.js). Every client independently
@@ -380,28 +415,40 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   // socket relay to stay in sync with the host's view.
   const speakingIds = useSpeakingState();
 
+  // Real mute/deafen state for everyone in the voice channel, sourced from
+  // the bot server the same way the host does (useDiscordMembers) — not a
+  // self-only check, so a teammate's mute badge shows up here too, live,
+  // without needing a separate detection path. Degrades gracefully to an
+  // empty list (badges just don't show, same as before) in standalone
+  // browser mode where activityChannelId is null.
+  const { members: voiceMembers } = useDiscordMembers(activityChannelId);
+  const voiceStateById = useMemo(() => {
+    const map = {};
+    voiceMembers.forEach((m) => { map[m.id] = m; });
+    return map;
+  }, [voiceMembers]);
+
   // Reshapes playersByTeam (roster entries keyed by socket/team) into what
   // TeamCard expects: { id, avatarUrl, speaking, muted, deafened } per
-  // member, keyed by teamId. muted/deafened default to false here since
-  // this view has no bot voiceState feed to source them from — only
-  // speaking (via the SDK) is live on the player side. If mute/deafen
-  // badges are wanted here too, watchVoiceChannel + a voiceState listener
-  // would need to be added, mirroring useDiscordMembers on the host side.
+  // member, keyed by teamId.
   const discordMembersByTeam = useMemo(() => {
     const map = {};
     Object.entries(playersByTeam).forEach(([teamId, roster]) => {
       map[teamId] = roster
         .filter((p) => p.discordUserId)
-        .map((p) => ({
-          id: p.discordUserId,
-          avatarUrl: p.discordAvatarUrl,
-          speaking: speakingIds.has(p.discordUserId),
-          muted: false,
-          deafened: false,
-        }));
+        .map((p) => {
+          const voiceState = voiceStateById[p.discordUserId];
+          return {
+            id: p.discordUserId,
+            avatarUrl: p.discordAvatarUrl,
+            speaking: speakingIds.has(p.discordUserId),
+            muted: !!voiceState?.muted,
+            deafened: !!voiceState?.deafened,
+          };
+        });
     });
     return map;
-  }, [playersByTeam, speakingIds]);
+  }, [playersByTeam, speakingIds, voiceStateById]);
 
   const openClue = useMemo(() => {
     if (!activeClue || !boardData || !boardData.rounds) return null;
@@ -840,7 +887,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
               BUZZ
             </button>
             <div className="pv-scoreboard-title">SCOREBOARD</div>
-            <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzPositionByTeam={buzzPositionByTeam} compact />
+            <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzStateByTeam={buzzStateByTeam} compact />
           </div>
         </div>
       )}
@@ -878,7 +925,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       </div>
 
       {!openClue && (
-        <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzPositionByTeam={buzzPositionByTeam} />
+        <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzStateByTeam={buzzStateByTeam} />
       )}
 
       <PlayerBgmWidget roomCode={roomCode} bgm={bgm} />

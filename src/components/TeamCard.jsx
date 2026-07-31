@@ -33,6 +33,10 @@ export default function TeamCard({
   buzzPosition, // 1-based queue position if this team has a player buzzed
                  // in on the current clue, null/undefined otherwise —
                  // rendered as a small badge to the left of the card.
+  buzzIsActive, // true if the team's queued member is the one currently
+                // holding the buzzer — badge renders gold instead of navy.
+  buzzIsStruck, // true if that member already had their turn and got
+                // passed over — badge renders grey + struck-through.
 }) {
   const assignedIds = Array.isArray(team.discordUserIds)
     ? team.discordUserIds
@@ -63,7 +67,20 @@ export default function TeamCard({
       )}
 
       {!editMode && buzzPosition != null && (
-        <div className="team-buzz-badge" title={`Buzzed in — #${buzzPosition} in line`}>
+        <div
+          className={
+            "team-buzz-badge" +
+            (buzzIsActive ? " is-active" : "") +
+            (buzzIsStruck ? " is-struck" : "")
+          }
+          title={
+            buzzIsActive
+              ? `Buzzed in — #${buzzPosition}, currently answering`
+              : buzzIsStruck
+              ? `Buzzed in — #${buzzPosition}, already tried`
+              : `Buzzed in — #${buzzPosition} in line`
+          }
+        >
           {buzzPosition}
         </div>
       )}

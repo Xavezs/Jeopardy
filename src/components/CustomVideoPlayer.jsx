@@ -92,6 +92,13 @@ export default function CustomVideoPlayer({
       videoRef.current.pause();
       setAutoplayBlocked(false);
     }
+    // Keep the internal toggle-button state lined up with whatever the
+    // parent just forced (e.g. auto-pausing on a buzz-in). Without this,
+    // internalIsPlaying goes stale after an external override, and the
+    // play/pause button's own click handler (which only reads
+    // internalIsPlaying, not the external prop) ends up doing nothing —
+    // or the opposite of what the icon shows — on the next click.
+    setInternalIsPlaying(externalIsPlaying);
   }, [externalIsPlaying, resolvedSrc]);
 
   // Sync external currentTime from host (corrects drift > 0.5s)

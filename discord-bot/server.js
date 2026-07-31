@@ -45,7 +45,7 @@ app.get('/api/proxy-image', async (req, res) => {
 
     const contentType = response.headers.get('content-type') || 'image/jpeg';
     const arrayBuffer = await response.arrayBuffer();
-    
+
     res.setHeader('Content-Type', contentType);
     res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
     return res.send(Buffer.from(arrayBuffer));
@@ -55,7 +55,14 @@ app.get('/api/proxy-image', async (req, res) => {
   }
 });
 
-app.use('/auth', authRouter);
+// FIX: was mounted at '/auth', but every frontend caller (discordSdk.js,
+// LoginGate.jsx, sessionStore.js's api()) requests '/api/auth/...' —
+// e.g. POST /api/auth/token, POST /api/auth/dev-login. The mismatch meant
+// those calls 404'd against this server. Mounting here under '/api/auth'
+// matches the routes actually defined inside auth.js (/token, /discord,
+// /discord/callback, /logout, /me, /dev-login) with what the client
+// already calls, with no client-side changes needed.
+app.use('/api/auth', authRouter);
 app.use('/api/boards', boardsRouter);
 app.use('/api/media', mediaRouter);
 

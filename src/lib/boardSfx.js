@@ -1,4 +1,4 @@
-import { createSfx, getSharedAudioCtx } from "./sfx";
+import { createSfx, getSharedAudioCtx, withRunningCtx } from "./sfx";
 
 /* =========================================================================
    BOARD SOUND EFFECTS
@@ -23,7 +23,7 @@ function playSynthHoverTick() {
   try {
     const ctx = getSharedAudioCtx();
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume();
+    withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
 
     // Low "thock" body — a quick pitch-drop thump, like a muted kick, gives
@@ -71,6 +71,7 @@ function playSynthHoverTick() {
     };
     noise.start(t0);
     noise.stop(t0 + 0.03);
+    });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
@@ -90,7 +91,7 @@ function playSynthClickTone() {
   try {
     const ctx = getSharedAudioCtx(); // reuse the same shared AudioContext as the hover tick
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume();
+    withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
 
     // A brighter, snappier tick than the hover sound — higher pitch, shorter
@@ -111,6 +112,7 @@ function playSynthClickTone() {
     };
     osc.start(t0);
     osc.stop(t0 + 0.07);
+    });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
@@ -131,7 +133,7 @@ function playSynthCorrectTone() {
   try {
     const ctx = getSharedAudioCtx();
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume();
+    withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
     // Quick ascending two-note "ding-ding"
     [0, 0.1].forEach((delay, i) => {
@@ -147,6 +149,7 @@ function playSynthCorrectTone() {
       osc.start(t0 + delay);
       osc.stop(t0 + delay + 0.2);
     });
+    });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
@@ -156,7 +159,7 @@ function playSynthIncorrectTone() {
   try {
     const ctx = getSharedAudioCtx();
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume();
+    withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
     // Descending "buzz"
     const osc = ctx.createOscillator();
@@ -171,6 +174,7 @@ function playSynthIncorrectTone() {
     gain.connect(ctx.destination);
     osc.start(t0);
     osc.stop(t0 + 0.3);
+    });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
@@ -197,7 +201,7 @@ function playSynthCatRevealTone() {
   try {
     const ctx = getSharedAudioCtx(); // reuse the same shared AudioContext
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume();
+    withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
 
     // Ascending bright chime — C5 to C6
@@ -219,6 +223,7 @@ function playSynthCatRevealTone() {
     };
     osc.start(t0);
     osc.stop(t0 + 0.22);
+    });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
@@ -238,7 +243,7 @@ function playSynthBuzzTone() {
   try {
     const ctx = getSharedAudioCtx();
     if (!ctx) return;
-    if (ctx.state === "suspended") ctx.resume();
+    withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
 
     // Sharp, urgent buzzer — a fast square-wave blast, distinct from the
@@ -260,6 +265,7 @@ function playSynthBuzzTone() {
     };
     osc.start(t0);
     osc.stop(t0 + 0.2);
+    });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }

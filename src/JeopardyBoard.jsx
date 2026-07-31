@@ -97,7 +97,7 @@ export default function JeopardyBoard({ onBack }) {
     }
   }, [session.ready, session.session]);
 
-  const { buzzerLive, queue: buzzerQueue, activeIndex: buzzerActiveIndex, winner: buzzerWinner, armBuzzer, resetBuzzer, nextBuzzer } = useBuzzer(roomCode, null);
+  const { buzzerLive, queue: buzzerQueue, activeIndex: buzzerActiveIndex, winner: buzzerWinner, armBuzzer, resetBuzzer, nextBuzzer, prevBuzzer } = useBuzzer(roomCode, null);
 
   const { publishActiveClue } = useClueSync(roomCode);
   const { publishRevealedCats } = useCategoryRevealSync(roomCode);
@@ -563,6 +563,7 @@ export default function JeopardyBoard({ onBack }) {
               onArmBuzzer={armBuzzer}
               onResetBuzzer={resetBuzzer}
               onNextBuzzer={nextBuzzer}
+              onPrevBuzzer={prevBuzzer}
               resolveTeamForDiscordUser={teams.resolveTeamForDiscordUser}
             />
           )}

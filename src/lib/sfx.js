@@ -24,6 +24,25 @@ export function getSharedAudioCtx() {
 }
 
 /**
+ * Runs `schedule` once `ctx` is actually running — not just once resume()
+ * has been *called*. AudioContext.resume() is async; scheduling nodes
+ * against ctx.currentTime in the same tick as an unresolved resume() call
+ * is a race — most of the time the browser catches up fast enough that it
+ * "just works", but whenever it doesn't (context was suspended — common
+ * right after a modal opens, tab regains focus, etc., especially inside a
+ * Discord Activity iframe), the scheduled sound silently never plays.
+ * Every synthesized fallback tone below goes through this instead of
+ * calling ctx.resume() and scheduling in the same breath.
+ */
+export function withRunningCtx(ctx, schedule) {
+  if (ctx.state === "suspended") {
+    ctx.resume().then(schedule).catch(() => {});
+  } else {
+    schedule();
+  }
+}
+
+/**
  * Build a player function for one sound effect.
  *
  * @param {string} url - Asset URL, e.g. `new URL("./assets/click.mp3", import.meta.url).href`

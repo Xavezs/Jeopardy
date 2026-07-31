@@ -14,6 +14,25 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173'; //[cit
 const COOKIE_NAME = 'jeopardy_session'; //[cite: 2]
 const SCOPES = 'identify'; //[cite: 2]
 
+// Builds a per-user avatar URL from a Discord user object. Handles animated
+// avatars (hash prefixed "a_" needs .gif, not .png — a .png request against
+// an animated hash 404s) and, when there's no custom avatar, computes
+// Discord's actual per-user default avatar instead of hardcoding everyone
+// to embed/avatars/0.png (which made every avatar-less user look identical,
+// like nothing had loaded). Modern (migrated) accounts have
+// discriminator "0" and use (id >> 22) % 6; legacy accounts still on a
+// 4-digit discriminator use discriminator % 5.
+function buildAvatarUrl(discordUser) {
+  if (discordUser.avatar) {
+    const ext = discordUser.avatar.startsWith('a_') ? 'gif' : 'png';
+    return `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.${ext}`;
+  }
+  const discriminator = Number(discordUser.discriminator || 0);
+  const defaultIndex =
+    discriminator > 0 ? discriminator % 5 : Number((BigInt(discordUser.id) >> 22n) % 6n);
+  return `https://cdn.discordapp.com/embed/avatars/${defaultIndex}.png`;
+}
+
 // A localhost page cannot store a Secure cookie. Discord Activities, on the
 // other hand, are embedded cross-site and require a Secure, partitioned cookie.
 function cookieOptions(req) {
@@ -69,13 +88,21 @@ router.post('/token', async (req, res) => { //[cite: 2]
     });
 
     const userData = await userResponse.json(); //[cite: 2]
+    if (!userResponse.ok) {
+      // Without this check, a failed/rate-limited/unauthorized call here
+      // (userData becomes something like { message: "401: Unauthorized" })
+      // silently fell through into building a `user` object with
+      // id/username = undefined — which then made the player's avatar (and
+      // even their whole entry) vanish for everyone, not just them, since
+      // this is what gets broadcast to the room via joinAsPlayer.
+      console.error('Discord /users/@me failed:', userResponse.status, userData); // TEMP DEBUG
+      throw new Error(userData.message || 'Failed to fetch Discord user profile');
+    }
 
     const user = { //[cite: 2]
       id: userData.id, //[cite: 2]
       username: userData.global_name || userData.username, //[cite: 2]
-      avatarUrl: userData.avatar //[cite: 2]
-        ? `https://cdn.discordapp.com/avatars/${userData.id}/${userData.avatar}.png` //[cite: 2]
-        : `https://cdn.discordapp.com/embed/avatars/0.png`, //[cite: 2]
+      avatarUrl: buildAvatarUrl(userData),
     };
 
     // --- CRITICAL FIX: Sign JWT & Attach Cookie ---
@@ -133,15 +160,15 @@ router.get('/discord/callback', async (req, res) => { //[cite: 2]
       headers: { Authorization: `Bearer ${access_token}` }, //[cite: 2]
     });
     const discordUser = await userRes.json(); //[cite: 2]
-
-    const avatarUrl = discordUser.avatar //[cite: 2]
-      ? `https://cdn.discordapp.com/avatars/${discordUser.id}/${discordUser.avatar}.png` //[cite: 2]
-      : `https://cdn.discordapp.com/embed/avatars/${Number(discordUser.discriminator || 0) % 5}.png`; //[cite: 2]
+    if (!userRes.ok) {
+      console.error('Discord /users/@me failed:', userRes.status, discordUser); // TEMP DEBUG
+      return res.status(502).send('Failed to fetch Discord user profile');
+    }
 
     const sessionUser = { //[cite: 2]
       id: discordUser.id, //[cite: 2]
       username: discordUser.username, //[cite: 2]
-      avatarUrl, //[cite: 2]
+      avatarUrl: buildAvatarUrl(discordUser),
     };
 
     const token = jwt.sign(sessionUser, SESSION_SECRET, { expiresIn: '30d' }); //[cite: 2]

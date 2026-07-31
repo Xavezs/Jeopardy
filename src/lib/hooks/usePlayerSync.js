@@ -102,13 +102,19 @@ export function usePlayerSync(roomCode, me) {
 
   // Re-send if the room code or player identity shows up after connect, or
   // changes (e.g. Discord identity resolves a moment after the initial
-  // anonymous joinRoom already fired).
+  // anonymous joinRoom already fired). Watches avatarUrl/username too, not
+  // just discordUser.id — the id can stay the same while a stale/blank
+  // avatarUrl from an earlier failed resolution gets replaced by a fresh
+  // one, and that needs to reach the server (and everyone else, since the
+  // roster/avatar broadcast to the host + other players is keyed off
+  // whatever was last sent here) or the whole app stays stuck on the old
+  // value even though PlayerView already has the correct one locally.
   useEffect(() => {
     if (roomCode && socketRef.current?.connected) {
       sendJoin(socketRef.current);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomCode, me?.username, me?.discordUser?.id]);
+  }, [roomCode, me?.username, me?.discordUser?.id, me?.discordUser?.avatarUrl]);
 
   // Deliberate leave. Tells the server first (so the team/roster update
   // reaches the host immediately, no 12s grace-period wait), THEN tears

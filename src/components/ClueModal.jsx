@@ -189,6 +189,8 @@ export default function ClueModal({
   buzzerActiveIndex = -1,
   onArmBuzzer,
   onResetBuzzer,
+  onNextBuzzer,
+  onPrevBuzzer,
   resolveTeamForDiscordUser,
   flipped: propFlipped,
   onFlip,
@@ -376,11 +378,38 @@ export default function ClueModal({
           playIncorrectSfx();
           onAdjustTeamScore(team, -value);
         }
+        // If the team we just scored is whoever currently has the buzzer,
+        // automatically advance to the next person in line — scoring them
+        // means their turn is over, so the host shouldn't have to also
+        // press the "next" shortcut separately. Doesn't fire when the
+        // selected team was picked manually (digit key) and isn't who
+        // actually buzzed in.
+        const buzzedTeam = buzzerWinner && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(buzzerWinner.id) : null;
+        if (onNextBuzzer && buzzedTeam && buzzedTeam.id === team.id) {
+          onNextBuzzer();
+        }
+        return;
+      }
+
+      // Left/Right: manually step through the buzz-in queue without
+      // touching anyone's score. Right mirrors the same "next" the
+      // auto-advance above uses; Left steps back via the matching
+      // prevBuzzer server event (bot-server.js) for correcting an
+      // accidental advance.
+      if (e.key === "ArrowRight") {
+        if (!onNextBuzzer) return;
+        e.preventDefault();
+        onNextBuzzer();
+      }
+      if (e.key === "ArrowLeft") {
+        if (!onPrevBuzzer) return;
+        e.preventDefault();
+        onPrevBuzzer();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer]);
+  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser]);
 
   // Auto-arm the buzzed-in team's scoreboard slot
   useEffect(() => {
@@ -656,6 +685,24 @@ export default function ClueModal({
             const discordTeamMembers = resolveDiscordMembersForTeam ? resolveDiscordMembersForTeam(team) : [];
             const isBuzzedIn = winningTeam && winningTeam.id === team.id;
             const isSelected = selectedTeamId === team.id;
+
+            // One badge per team card, not one per avatar — mirrors
+            // PlayerView's buzzStateByTeam so host and player render the
+            // exact same badge in the exact same spot (card corner, not
+            // hugging the profile picture). If more than one of the
+            // team's members is in the queue, whichever is currently
+            // active wins over an earlier-but-now-inactive member.
+            let teamBuzzState = null;
+            discordTeamMembers.forEach((dm) => {
+              const queuePos = buzzerQueue.findIndex((p) => p.id === dm.id);
+              if (queuePos === -1) return;
+              const isActive = !!(buzzerWinner && buzzerWinner.id === dm.id);
+              const isStruck = !isActive && queuePos < buzzerActiveIndex;
+              if (!teamBuzzState || isActive) {
+                teamBuzzState = { position: queuePos + 1, isActive, isStruck };
+              }
+            });
+
             return (
               <div
                 key={team.id}
@@ -670,60 +717,40 @@ export default function ClueModal({
                 tabIndex={0}
                 aria-label={`Select ${team.name} (${i + 1})`}
               >
+                {teamBuzzState && (
+                  <div
+                    className={
+                      "team-buzz-badge" +
+                      (teamBuzzState.isActive ? " is-active" : "") +
+                      (teamBuzzState.isStruck ? " is-struck" : "")
+                    }
+                    title={
+                      teamBuzzState.isActive
+                        ? `Buzzed in — #${teamBuzzState.position}, currently answering`
+                        : teamBuzzState.isStruck
+                        ? `Buzzed in — #${teamBuzzState.position}, already tried`
+                        : `Buzzed in — #${teamBuzzState.position} in line`
+                    }
+                  >
+                    {teamBuzzState.position}
+                  </div>
+                )}
                 <div className="host-sidebar-team-info">
                   {discordTeamMembers.length > 0 && (
                     <div className="score-team-discord-facepile">
-                      {discordTeamMembers.map((dm) => {
-                        const queuePos = buzzerQueue.findIndex((p) => p.id === dm.id);
-                        const hasBuzzed = queuePos !== -1;
-                        const isActive = buzzerWinner && buzzerWinner.id === dm.id;
-                        const struckOut = hasBuzzed && !isActive && queuePos < buzzerActiveIndex;
-
-                        return (
-                          <div className="score-team-discord-avatar-wrap" key={dm.id}>
-                            <img
-                              src={dm.avatarUrl}
-                              alt=""
-                              className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
-                              style={{ opacity: dm.deafened ? 0.4 : 1 }}
-                            />
-                            {dm.muted && (
-                              <div className="team-discord-muted-badge score-team-discord-muted-badge" title="Muted" />
-                            )}
-                            {hasBuzzed && (
-                              <div
-                                className="score-team-buzz-order-badge"
-                                title={
-                                  isActive
-                                    ? `Buzzed in — #${queuePos + 1}, currently answering`
-                                    : struckOut
-                                    ? `Buzzed in — #${queuePos + 1}, already tried`
-                                    : `Buzzed in — #${queuePos + 1}, waiting`
-                                }
-                                style={{
-                                  position: "absolute",
-                                  top: -4,
-                                  left: -4,
-                                  minWidth: 16,
-                                  height: 16,
-                                  padding: "0 3px",
-                                  borderRadius: "50%",
-                                  background: isActive ? "#ffd54a" : struckOut ? "#666" : "#4a90d9",
-                                  color: isActive ? "#222" : "#fff",
-                                  fontSize: 10,
-                                  fontWeight: 700,
-                                  lineHeight: "16px",
-                                  textAlign: "center",
-                                  boxShadow: "0 0 0 1.5px rgba(0,0,0,0.6)",
-                                  textDecoration: struckOut ? "line-through" : "none",
-                                }}
-                              >
-                                {queuePos + 1}
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
+                      {discordTeamMembers.map((dm) => (
+                        <div className="score-team-discord-avatar-wrap" key={dm.id}>
+                          <img
+                            src={dm.avatarUrl}
+                            alt=""
+                            className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
+                            style={{ opacity: dm.deafened ? 0.4 : 1 }}
+                          />
+                          {dm.muted && (
+                            <div className="team-discord-muted-badge score-team-discord-muted-badge" title="Muted" />
+                          )}
+                        </div>
+                      ))}
                     </div>
                   )}
                   <span className="host-sidebar-team-name">{team.name}</span>

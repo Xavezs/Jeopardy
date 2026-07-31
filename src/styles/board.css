@@ -392,17 +392,20 @@
     background: linear-gradient(135deg, rgba(16, 24, 48, 0.95) 0%, rgba(10, 15, 36, 0.95) 100%);
     border: 1px solid rgba(240,185,66,0.35);
     border-radius: 12px;
-    padding: 8px 14px;
-    min-width: 110px;
+    padding: 10px 12px 8px;
+    min-width: 92px;
     flex: 1;
-    max-width: 200px;
+    max-width: 160px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    display: flex;
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "facepile score"
+      "name name";
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    row-gap: 4px;
+    column-gap: 8px;
   }
 
   .team-card:hover {
@@ -414,8 +417,11 @@
      cramming them side-by-side in the default row layout. That row layout
      is what squeezed the avatar picker into a near-zero-width sliver,
      forcing its chips to wrap into a tall column (or vanish once nowrap
-     was applied). Stacking gives each piece its own full-width row. */
+     was applied). Stacking gives each piece its own full-width row. Also
+     switches back to flex — the grid above is only meant for the
+     read-only facepile/score/name arrangement. */
   .team-card.is-editing{
+    display: flex;
     flex-direction: column;
     align-items: stretch;
     justify-content: flex-start;
@@ -431,13 +437,6 @@
     box-shadow: 0 0 0 2px rgba(240,185,66,0.35), 0 0 20px rgba(240,185,66,0.4), 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
     transform: translateY(-2px);
     animation: kb-selected-pulse 0.4s ease-out;
-  }
-  .team-name-display{
-    flex: 1; min-width: 0;
-    color:var(--gold); font-family:var(--font-display); text-align:left; font-size:14px;
-    letter-spacing:.3px; opacity:.9;  
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    display: flex; align-items: center; gap: 6px;
   }
   .team-name-input{
     width:100%; background: transparent; border: 2px dashed var(--gold-dim) ; border-radius:4px; 
@@ -468,19 +467,35 @@
     position:absolute; top:-6px; left:-6px; width:22px; height:22px; border-radius:50%;
     display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; line-height:1;
     font-family: var(--font-display);
-    background: linear-gradient(180deg, #ffd54a, #f0b942); color:#141a2e; border: 1px solid rgba(0,0,0,0.25);
-    box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 10px rgba(255,213,74,0.5);
+    background: var(--cell-light); color:#fff; border: 1px solid rgba(0,0,0,0.35);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     animation: buzzBadgePop 0.25s ease-out;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  }
+  /* Whoever currently holds the buzzer — same gold as everything else
+     "active" on the board (kb-selected, score pulses, etc). */
+  .team-buzz-badge.is-active{
+    background: linear-gradient(180deg, #ffd54a, var(--gold));
+    color:#141a2e;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 10px rgba(255,213,74,0.5);
+  }
+  /* Already had their turn and got passed over. */
+  .team-buzz-badge.is-struck{
+    background:#555; color:#ccc; text-decoration:line-through;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
   }
   @keyframes buzzBadgePop{
     0%{ transform: scale(0.4); opacity:0; }
     70%{ transform: scale(1.15); opacity:1; }
     100%{ transform: scale(1); }
   }
+
   .team-score-row{ 
+    grid-area: score;
+    justify-self: end;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: center;
     gap: 4px;
     flex-shrink: 0;
   }
@@ -490,11 +505,11 @@
   }
   .team-score-display{
     font-family: var(--font-display);
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 900;
     color: var(--gold);
     text-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
-    text-align: right;
+    text-align: center;
     min-width: 44px;
     transition: transform 0.18s ease, box-shadow 0.12s ease, outline-color 0.12s ease;
     cursor: pointer;
@@ -739,6 +754,7 @@
 }
 
 .host-sidebar-team-card {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1763,8 +1779,8 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 }
 
 .team-discord-avatar{
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   display: block;
   object-fit: cover;
@@ -1791,25 +1807,32 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
    number of members, so this scales by wrapping rather than growing a
    single row indefinitely. */
 .team-name-display{
-  flex: 1; min-width: 0;
-  color:var(--gold); font-family:var(--font-display); text-align:left; font-size:14px;
-  letter-spacing:.3px; opacity:.9;
-  display: flex; flex-direction: row; align-items: center; gap: 6px;
+  display: contents;
+  /* display:contents keeps this element in the inheritance chain (no box
+     of its own, but still a parent for CSS purposes) — so setting these
+     here, instead of directly on .team-name-text, lets the compact
+     open-clue scoreboard's own .team-name-display override (player.css,
+     .pv-teams-compact .team-name-display) win there via normal
+     inheritance instead of colliding with an equal-specificity rule. */
+  color:var(--gold); font-family:var(--font-display); font-size:13px;
+  letter-spacing:.3px; opacity:.9; text-align:center;
 }
 .team-name-display .team-name-text{
+  grid-area: name;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%;
 }
 .team-discord-facepile{
+  grid-area: facepile;
+  justify-self: start;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
   gap: 1px;
 }
 .team-discord-facepile .team-discord-avatar-wrap{
   position: relative;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
