@@ -194,6 +194,7 @@ export default function ClueModal({
   resolveTeamForDiscordUser,
   flipped: propFlipped,
   onFlip,
+  onJudgeAnswer,
 }) {
   const [mediaUrl, setMediaUrl] = useState("");
   const [renderAs, setRenderAs] = useState("");
@@ -388,6 +389,16 @@ export default function ClueModal({
         if (onNextBuzzer && buzzedTeam && buzzedTeam.id === team.id) {
           onNextBuzzer();
         }
+        // Board control transfers to whoever specifically answered
+        // correctly — that's buzzerWinner, an individual player, not the
+        // team as a whole (a team can have multiple members). Only fires
+        // on a genuine correct-answer judgment of the person who actually
+        // buzzed in, same condition as the auto-advance above, so manually
+        // adjusting some other team's score (digit key + arrow, unrelated
+        // to who buzzed) never accidentally hands over control.
+        if (e.key === "ArrowUp" && onJudgeAnswer && buzzedTeam && buzzedTeam.id === team.id && buzzerWinner) {
+          onJudgeAnswer(buzzerWinner.id, true);
+        }
         return;
       }
 
@@ -409,7 +420,7 @@ export default function ClueModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser]);
+  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser, onJudgeAnswer]);
 
   // Auto-arm the buzzed-in team's scoreboard slot
   useEffect(() => {

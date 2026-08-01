@@ -197,6 +197,9 @@
   .jp-control-bar .toolbar > .room-code-container{
     order: 3; /* room code + copy last */
   }
+  .jp-control-bar .toolbar > .control-assign-container{
+    order: 4; /* board-control assign, after room code */
+  }
   .jp-control-bar .timer-settings-bar{
     flex-basis: 100%; /* always its own line below, never squeezed into the row */
     order: 5;
@@ -2007,6 +2010,40 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   color: var(--text);
 }
 
+.control-assign-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-assign-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.control-assign-select {
+  max-width: 200px;
+  padding: 7px 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(240,185,66,0.28);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.control-assign-select:hover {
+  border-color: rgba(240,185,66,0.5);
+}
+
+.control-assign-select option {
+  background: #0e1550;
+  color: var(--text);
+}
+
 /* =========================================================================
      JEOPARDY BOARD BACK BUTTON
      ========================================================================= */
@@ -2018,27 +2055,28 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 8px 16px;
-    font-family: var(--pv-font-body, 'Quicksand', sans-serif);
-    font-size: 13px;
-    font-weight: 700;
-    color: #1a1200;
-    background: linear-gradient(180deg, #f0b942, #c8932c);
-    border: none;
-    border-radius: 12px;
+    padding: 7px 13px;
+    font-family: var(--font-body);
+    font-weight: bold;
+    font-size: 12px;
+    letter-spacing: .4px;
+    color: var(--text);
+    background: linear-gradient(180deg, #1a2570, #0e1550);
+    border: 1px solid rgba(240,185,66,0.4);
+    border-radius: 6px;
     cursor: pointer;
-    box-shadow: 0 4px 14px rgba(240, 185, 66, 0.25);
-    transition: transform 0.12s ease, box-shadow 0.12s ease;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
   }
 
   .jp-role-back-btn:hover {
     transform: translateY(-1px);
-    box-shadow: 0 6px 18px rgba(240, 185, 66, 0.35);
+    box-shadow: 0 4px 14px rgba(240,185,66,0.18);
+    background: linear-gradient(180deg, #212c86, #121a5c);
   }
 
   .jp-role-back-btn:active {
-    transform: translateY(0) scale(0.97);
-    box-shadow: 0 4px 14px rgba(240, 185, 66, 0.25);
+    transform: translateY(0) scale(0.96);
+    filter: brightness(0.92);
   }
 
   .jp-role-back-arrow {

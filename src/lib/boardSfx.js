@@ -290,7 +290,7 @@ export function installGlobalBoardSfx() {
 
   let lastHoveredBtn = null;
   const handleGlobalMouseOver = (e) => {
-    const btn = e.target.closest && e.target.closest("button");
+    const btn = e.target.closest && e.target.closest("button, [role='button']");
     if (btn && !btn.disabled) {
       if (btn !== lastHoveredBtn) {
         lastHoveredBtn = btn;

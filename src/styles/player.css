@@ -205,6 +205,34 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   cursor: pointer;
 }
 
+.pv-control-indicator {
+  width: fit-content;
+  max-width: calc(100% - 32px);
+  margin: 0 auto 10px;
+  padding: 6px 18px;
+  border-radius: 999px;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.3px;
+  color: var(--pv-text-dim);
+  background: rgba(18, 32, 122, 0.4);
+  border: 1px solid rgba(240, 185, 66, 0.18);
+}
+
+.pv-control-indicator.pv-control-mine {
+  color: #1a1200;
+  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  border-color: transparent;
+  box-shadow: 0 0 16px rgba(240, 185, 66, 0.45);
+  animation: pvControlMinePulse 1.6s ease-in-out infinite;
+}
+
+@keyframes pvControlMinePulse {
+  0%, 100% { box-shadow: 0 0 16px rgba(240, 185, 66, 0.45); }
+  50% { box-shadow: 0 0 26px rgba(240, 185, 66, 0.75); }
+}
+
 .pv-board {
   display: flex;
   gap: 8px;
@@ -283,6 +311,34 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   opacity: 0.28;
   color: transparent;
   text-shadow: none;
+}
+
+/* My turn (or control is open to everyone) — this cell is actually
+   tappable. Adds affordance on top of the base .pv-cell look; cells that
+   aren't pickable intentionally stay unstyled/uniform (no dimming), per
+   request — the turn indicator banner above is what communicates that
+   state instead. */
+.pv-cell.pv-pickable {
+  cursor: pointer;
+  border-color: rgba(240, 185, 66, 0.55);
+  box-shadow: 0 0 0 1px rgba(240, 185, 66, 0.25), 0 0 14px rgba(240, 185, 66, 0.18);
+  animation: pvPickablePulse 1.8s ease-in-out infinite;
+}
+
+@keyframes pvPickablePulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(240, 185, 66, 0.25), 0 0 14px rgba(240, 185, 66, 0.18); }
+  50% { box-shadow: 0 0 0 1px rgba(240, 185, 66, 0.45), 0 0 22px rgba(240, 185, 66, 0.32); }
+}
+
+.pv-cell.pv-pickable:active {
+  transform: scale(0.94);
+}
+
+@media (hover: hover) {
+  .pv-cell.pv-pickable:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 0 0 1px var(--pv-gold), 0 0 18px rgba(240, 185, 66, 0.35);
+  }
 }
 
 .pv-teams {

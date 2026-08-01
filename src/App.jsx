@@ -4,6 +4,7 @@ import LoginGate from "./components/LoginGate";
 import PlayerView from "./components/PlayerView";
 import RoleSelect from "./components/RoleSelect";
 import { getDiscordIdentity } from './discordSdk';
+import { installGlobalBoardSfx } from './lib/boardSfx';
 import '@fontsource/quicksand/300.css';
 import '@fontsource/quicksand/700.css';
 import '@fontsource/comfortaa/700.css';
@@ -21,6 +22,12 @@ export default function App() {
     window.addEventListener('popstate', handlePopState);
     return () => window.removeEventListener('popstate', handlePopState);
   }, []);
+
+  // Click/hover sfx for every button in the app, wired up once here since
+  // App is the one component that's always mounted regardless of route or
+  // auth status — covers RoleSelect and LoginGate's loading/error screens
+  // too, not just once PlayerView/JeopardyBoard get to render.
+  useEffect(() => installGlobalBoardSfx(), []);
 
   // 2. CONDITIONAL RETURNS (Safe now because hooks have already run)
   if (currentPath.startsWith("/play")) {

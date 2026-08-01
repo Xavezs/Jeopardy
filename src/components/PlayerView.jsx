@@ -3,6 +3,7 @@ import "../styles/player.css";
 import "../styles/board.css"; // TeamCard's classes (.team-card, .team-discord-avatar, etc.) are defined here — this file never needed them before it built its own team markup.
 import { usePlayerSync } from "../lib/hooks/usePlayerSync";
 import { useBuzzer } from "../lib/hooks/useBuzzer";
+import { useControlSync } from "../lib/hooks/useControlSync";
 import { useSpeakingState } from "../lib/hooks/useSpeakingState";
 import { useDiscordMembers } from "../lib/hooks/useDiscordMembers";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
@@ -14,7 +15,6 @@ import {
   playCorrectSfx,
   playIncorrectSfx,
   playCatRevealSfx,
-  installGlobalBoardSfx,
 } from "../lib/boardSfx";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
@@ -113,6 +113,8 @@ export default function PlayerView() {
     window.focus();
   }, []);
 
+  // Click/hover sfx is installed once at the App root (covers this join
+  // form and every other screen in the app) — see App.jsx, not here.
   const [roomCode, setRoomCode] = useState(readRoomCodeFromUrl());
   const [nameInput, setNameInput] = useState("");
   const [me, setMe] = useState(null);
@@ -284,9 +286,9 @@ function PlayerBoard({ roomCode, me, onLeave }) {
     onLeave();
   }
 
-  // Gives the player's own button clicks/hovers the same click/hover sfx
-  // the host gets — this was never wired up on the player side at all.
-  useEffect(() => installGlobalBoardSfx(), []);
+  // Click/hover sfx is installed once at the PlayerView root (covers the
+  // join form too) — see there, not here.
+
 
   // The host plays a "reveal" sound locally (inside ClueModal) whenever it
   // flips the question card or toggles the answer — but that's a direct
@@ -333,6 +335,23 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   );
 
   const { queue, activePlayer, alreadyBuzzed, buzz, buzzerLive } = useBuzzer(roomCode, buzzerMe);
+
+  // Board control: who's currently allowed to pick the next category/clue.
+  // Keyed by discordUserId (same stable id buzzerMe already uses), NOT this
+  // player's local `me.id` — see useControlSync.js for why.
+  const { controlDiscordUserId, isMyTurn, selectClue } = useControlSync(roomCode, {
+    discordUserId: buzzerMe.id,
+  });
+
+  // Display name for whoever currently holds the board, for the "whose
+  // turn" indicator — resolved from the synced players roster rather than
+  // carried separately, since the roster already has discordUserId +
+  // discordUsername for everyone connected.
+  const controlHolderName = useMemo(() => {
+    if (!controlDiscordUserId) return null;
+    const holder = players.find((p) => p.discordUserId === controlDiscordUserId);
+    return holder?.discordUsername || null;
+  }, [controlDiscordUserId, players]);
 
   // If the room code is wrong (or points at a board the host hasn't
   // opened yet), the socket still connects fine but boardData never
@@ -760,6 +779,16 @@ function PlayerBoard({ roomCode, me, onLeave }) {
         </button>
       </div>
 
+      {!openClue && (
+        <div className={"pv-control-indicator" + (isMyTurn ? " pv-control-mine" : "")}>
+          {isMyTurn
+            ? "Your turn to pick a clue"
+            : controlDiscordUserId
+            ? `Waiting on ${controlHolderName || "another player"} to pick`
+            : "Waiting for the host to open the board"}
+        </div>
+      )}
+
       {/* Floating Leave button — the room bar above gets covered by
           .pv-clue-overlay whenever a clue is open, which made "Leave"
           unreachable mid-question. This renders on top of the overlay
@@ -912,8 +941,21 @@ function PlayerBoard({ roomCode, me, onLeave }) {
               <div className="pv-cells">
                 {rd.values.map((v) => {
                   const clue = cat.clues?.[v];
+                  const pickable = !clue?.used && isMyTurn;
                   return (
-                    <div key={v} className={"pv-cell" + (clue?.used ? " pv-used" : "")}>
+                    <div
+                      key={v}
+                      className={"pv-cell" + (clue?.used ? " pv-used" : "") + (pickable ? " pv-pickable" : "")}
+                      role={pickable ? "button" : undefined}
+                      onClick={() => {
+                        // Client-side gating is just for UX (cursor/dim
+                        // state) — the server re-validates against
+                        // controlDiscordUserId regardless, so this can't be
+                        // bypassed by forcing the click through.
+                        if (!pickable) return;
+                        selectClue({ catId: cat.id, value: v });
+                      }}
+                    >
                       {clue?.used ? "" : `$${v}`}
                     </div>
                   );

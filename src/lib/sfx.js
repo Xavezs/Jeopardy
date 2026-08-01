@@ -76,7 +76,14 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
         const playPromise = node.play();
         if (playPromise && typeof playPromise.catch === "function") {
           playPromise.catch(() => {
-            fileAvailable = false;
+            // A cloned node failing to play (often just cold cache / slow
+            // network right after the activity first opens, not enough
+            // data buffered yet) is a ONE-OFF hiccup, not proof the file is
+            // missing. Don't touch `fileAvailable` here — that's reserved
+            // for the audioTemplate's own 'error' event below, which is
+            // the only reliable signal the file itself is broken. Just
+            // fall back for this single play so the next call still gets
+            // a fair shot at the real audio.
             fallbackTone();
           });
         }

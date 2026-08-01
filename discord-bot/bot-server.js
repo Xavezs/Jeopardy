@@ -187,6 +187,32 @@ function detachFromTeamIfAbandoned(roomCode, leaving) {
   io.to(roomCode).emit('boardUpdate', room.board);
 }
 
+// Sentinel stored in room.controlDiscordUserId to mean "control is open —
+// any connected player may pick", as opposed to null ("locked, host only")
+// or an actual discordUserId ("assigned to that one player"). Deliberately
+// not a value that could collide with a real Discord snowflake id.
+const OPEN_CONTROL = '__OPEN__';
+
+/* =========================================================================
+   BOARD CONTROL (who gets to pick the next category/clue)
+   Keyed by discordUserId, NOT socket.id — socket.id changes on every
+   reconnect (tab refresh, brief network drop), so anything keyed on it
+   reproduces the exact "team resurrection" class of bug: the rightful
+   control holder reconnects, gets a new socket.id, and the server no
+   longer recognizes them as the one who's allowed to pick.
+
+   room.controlDiscordUserId: string | null
+   - null means nobody has been assigned control yet (e.g. round just
+     started, or the host hasn't handed the board to anyone) — selectClue
+     is LOCKED in that case, not open. Only the host has a free pick until
+     it's explicitly assigned via hostSetControl or a correct judgeAnswer.
+   - OPEN_CONTROL means the host explicitly opened the board to everyone —
+     see hostSetControl.
+   ========================================================================= */
+function emitControlState(roomCode, room) {
+  io.to(roomCode).emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
+}
+
 // 5. Unified Socket.io Real-time Game Coordination
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -205,6 +231,7 @@ io.on('connection', (socket) => {
     if (room?.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room?.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+    if (room) socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
   });
 
   socket.on('activeClueUpdate', ({ roomCode: rawRoomCode, activeClue }) => {
@@ -216,6 +243,93 @@ io.on('connection', (socket) => {
     room.activeClue = activeClue || null;
     gameRooms.set(roomCode, room);
     socket.to(roomCode).emit('activeClueUpdate', room.activeClue);
+  });
+
+  // Player-initiated clue pick. Only the current control holder may open a
+  // clue — validated server-side against their stable discordUserId, not
+  // trusted from the client (client-side disabling alone can be bypassed by
+  // emitting the event directly). If nobody holds control yet (start of a
+  // round, or host hasn't assigned anyone), NO player may pick — that's a
+  // deliberate flip from "unrestricted until assigned": leaving it open by
+  // default let every player pick immediately on join, before the host had
+  // a chance to hand control to anyone. The host still always has a free
+  // pick (that path never goes through this handler at all — see
+  // JeopardyBoard.jsx's inline board click), and can open the board up to a
+  // specific player via the "Board control" dropdown (hostSetControl).
+  //
+  // Deliberately does NOT set room.activeClue itself. The host's local
+  // clueEditor state (JeopardyBoard.jsx) is the single source of truth for
+  // the actual clue session — reveal state, timer, media playback — all of
+  // that only exists on the host's screen. Setting activeClue directly here
+  // would show the clue to players while the host's own modal never opens,
+  // leaving nobody able to run reveal/judge for it. Instead this just
+  // relays "someone picked this cell" to the host, who opens their own
+  // ClueModal in response (see JeopardyBoard.jsx's useControlSync
+  // onClueSelected), which THEN publishes activeClue as normal.
+  socket.on('selectClue', ({ roomCode: rawRoomCode, catId, value, discordUserId }) => {
+    if (typeof rawRoomCode !== 'string' || !catId || value == null) return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode);
+    if (!room) return;
+
+    const isOpen = room.controlDiscordUserId === OPEN_CONTROL;
+    if (!isOpen) {
+      // useControlSync keeps its own socket connection, separate from
+      // whichever socket actually ran joinAsPlayer — so socket.id can't be
+      // used to find "me" in room.players here anymore. Trust the
+      // discordUserId the client sends instead (same as judgeAnswer /
+      // hostSetControl already do), but still require it to belong to a
+      // player actually registered in this room, so an arbitrary/spoofed
+      // id can't claim someone else's turn.
+      const isRegisteredPlayer =
+        !!discordUserId && room.players?.some((p) => p.discordUserId === discordUserId);
+      if (!room.controlDiscordUserId || !isRegisteredPlayer || discordUserId !== room.controlDiscordUserId) {
+        socket.emit('errorMsg', 'Not your turn to pick a clue.');
+        return;
+      }
+    }
+
+    io.to(roomCode).emit('clueSelected', { catId, value });
+  });
+
+  // Host (or whatever judges the answer) reports the outcome. Control only
+  // moves on a correct answer, to whoever answered it — everything else
+  // (wrong / nobody answered) leaves controlDiscordUserId exactly as-is, so
+  // the same player keeps the board until someone actually gets one right.
+  socket.on('judgeAnswer', ({ roomCode: rawRoomCode, discordUserId, correct }) => {
+    if (typeof rawRoomCode !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode);
+    if (!room) return;
+
+    if (correct && discordUserId) {
+      room.controlDiscordUserId = discordUserId;
+      gameRooms.set(roomCode, room);
+      emitControlState(roomCode, room);
+    }
+  });
+
+  // Host override — manual assign, used as the fallback when the current
+  // control holder disconnects and doesn't come back within the grace
+  // window (see the 'disconnect' handler below), whenever the host wants
+  // to hand the board to someone else, or to open it up to everyone by
+  // passing OPEN_CONTROL (falls straight through — this handler doesn't
+  // care what the string is, it just stores it).
+  socket.on('hostSetControl', ({ roomCode: rawRoomCode, discordUserId }) => {
+    if (typeof rawRoomCode !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode);
+    if (!room) return;
+
+    room.controlDiscordUserId = discordUserId || null;
+    gameRooms.set(roomCode, room);
+    emitControlState(roomCode, room);
   });
 
   // Live "for the show" state, same treatment as activeClue — which
@@ -349,6 +463,7 @@ io.on('connection', (socket) => {
       if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
       if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
       if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+      socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
       return;
     }
 
@@ -392,6 +507,7 @@ io.on('connection', (socket) => {
     if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+    socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
   });
 
   // Deliberate "Leave" click, as opposed to a disconnect (tab close,
@@ -477,6 +593,14 @@ io.on('connection', (socket) => {
     leaving.connected = false;
     gameRooms.set(roomCode, room);
     io.to(roomCode).emit('playersUpdate', room.players);
+
+    // NOTE: controlDiscordUserId is deliberately left untouched here. It's
+    // keyed by discordUserId, not socketId, so a disconnect doesn't
+    // invalidate it — if they reconnect within the grace window they still
+    // hold the board. If the host wants to hand control to someone else
+    // while this player is gone, that's what hostSetControl is for; we
+    // don't auto-reassign it, same reasoning as detachFromTeamIfAbandoned
+    // not auto-picking a new team.
 
     room.pendingRemovals = room.pendingRemovals || new Map();
     const key = leaving.discordUserId;

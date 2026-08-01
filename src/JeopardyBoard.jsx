@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useMemo } from "react";
 import "./styles/board.css";
 import { blankClue } from "./lib/storage";
+import ClueGrid from "./components/ClueGrid";
 import ClueModal from "./components/ClueModal";
 import EditClueModal from "./components/EditClueModal";
 import SessionsModal from "./components/SessionsModal";
@@ -22,8 +23,9 @@ import { useClueEditor } from "./lib/hooks/useClueEditor";
 import { useBgmSettings } from "./lib/hooks/useBgmSettings";
 import { useBuzzer } from "./lib/hooks/useBuzzer";
 import { useClueSync } from "./lib/hooks/useClueSync";
+import { useControlSync } from "./lib/hooks/useControlSync";
 import { useBgmSync } from "./lib/hooks/useBgmSync";
-import { playClickSfx, playHoverTick, playCatRevealSfx, installGlobalBoardSfx } from "./lib/boardSfx";
+import { playCatRevealSfx } from "./lib/boardSfx";
 
 export default function JeopardyBoard({ onBack }) {
   const [editMode, setEditMode] = useState(false);
@@ -100,6 +102,26 @@ export default function JeopardyBoard({ onBack }) {
   const { buzzerLive, queue: buzzerQueue, activeIndex: buzzerActiveIndex, winner: buzzerWinner, armBuzzer, resetBuzzer, nextBuzzer, prevBuzzer } = useBuzzer(roomCode, null);
 
   const { publishActiveClue } = useClueSync(roomCode);
+
+  // Board control: who's allowed to pick the next clue. The host itself
+  // always has free pick (that's the inline board grid below, unchanged);
+  // this is what lets a PLAYER'S pick actually open something. When a
+  // player's selectClue is validated server-side, it comes back here as
+  // `clueSelected`, and the host responds by opening its own clueEditor
+  // modal exactly as if it had clicked the cell itself — the host's local
+  // state stays the single source of truth for reveal/timer/judging, a
+  // player pick is just a remote trigger for it. `judgeAnswer` is handed
+  // to ClueModal below so scoring a correct, buzzed-in answer transfers
+  // control to that player.
+  const { controlDiscordUserId, judgeAnswer, hostSetControl } = useControlSync(roomCode, null, {
+    onClueSelected: ({ catId, value }) => {
+      const data = session.data;
+      if (!data) return;
+      const currentRd = data.rounds?.[data.currentRound] || data.rounds?.[0];
+      const cat = currentRd?.categories.find((c) => c.id === catId);
+      if (cat) clueEditor.openClueModal(cat, value);
+    },
+  });
   const { publishRevealedCats } = useCategoryRevealSync(roomCode);
   const { publishRoundBanner } = useRoundBannerSync(roomCode);
   const { publishBgm } = useBgmSync(roomCode);
@@ -146,7 +168,8 @@ export default function JeopardyBoard({ onBack }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, persistence.setRoomCode]);
 
-  useEffect(() => installGlobalBoardSfx(), []);
+  // Click/hover sfx is installed once at the App root (covers every
+  // screen: RoleSelect, LoginGate, and this board) — see App.jsx, not here.
 
   async function resetRound() {
     if (!(await appConfirm("Reset all scores to 0 and mark all clues unused (both rounds)? Your questions/answers/media stay."))) return;
@@ -200,7 +223,7 @@ export default function JeopardyBoard({ onBack }) {
 
   return (
     <div className="jp-root" style={{ position: "relative" }}>
-      {onBack && (
+      {onBack && view !== "randomizer" && (
         <button
           type="button"
           onClick={onBack}
@@ -251,170 +274,38 @@ export default function JeopardyBoard({ onBack }) {
               onToggleTimerEnabled={toggleTimerEnabled}
               onSetTimerDuration={setGlobalTimerDuration}
               roomCode={roomCode}
+              players={persistence.players}
+              teams={data.teams}
+              controlDiscordUserId={controlDiscordUserId}
+              onHostSetControl={hostSetControl}
             />
           </div>
 
-          <div id="boardWrap">
-            <div id="board" style={boardGridStyle}>
-              {rd.categories.map((cat, catIndex) => {
-                const isRevealed = editMode || board.revealedCats.has(cat.id);
-                return (
-                  <div
-                    key={cat.id}
-                    className={
-                      "cat-cell" +
-                      (board.boardFlip === "out" ? " flip-out" : "") +
-                      (board.boardFlip === "in-start" ? " flip-in-start" : "") +
-                      (!isRevealed ? " cat-locked" : "")
-                    }
-                    style={{
-                      gridRow: "1",
-                      gridColumn: editMode ? catIndex + 2 : catIndex + 1,
-                      transitionDelay: board.flipDelay(catIndex),
-                    }}
-                  >
-                    {editMode ? (
-                      <>
-                        <input
-                          className="cat-name-input"
-                          maxLength={30}
-                          defaultValue={cat.name}
-                          key={cat.id + "-name"}
-                          onBlur={(e) => board.renameCategory(cat, e.target.value)}
-                        />
-                        <button className="cat-remove" title="Remove this category" onClick={() => board.removeCategory(cat)}>
-                          ✕
-                        </button>
-                      </>
-                    ) : isRevealed ? (
-                      <div className="cat-name cat-name-reveal">{cat.name}</div>
-                    ) : (
-                      <button
-                        className="cat-reveal-btn"
-                        title="Click to reveal this category"
-                        onClick={() => board.revealCategory(cat, playCatRevealSfx)}
-                      >
-                        <span className="cat-reveal-mark">?</span>
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-
-              {editMode && (
-                <div className="grid-add-column-cell" style={{ gridColumn: nCats + 2, gridRow: `1 / span ${nRows + 1}` }}>
-                  <button title="Add Category Column" onClick={board.addCategory}>
-                    +
-                  </button>
-                </div>
-              )}
-
-              {rd.values.map((v, rowIndex) => {
-                const gridRowPosition = rowIndex + 2;
-                return (
-                  <React.Fragment key={v}>
-                    {editMode && (
-                      <div className="row-control-cell" style={{ gridRow: gridRowPosition, gridColumn: 1 }}>
-                        <input
-                          className="row-value-input"
-                          type="number"
-                          min="1"
-                          defaultValue={v}
-                          key={v + "-value"}
-                          title="Point value for this row"
-                          onBlur={(e) => board.changeRowValue(v, e.target.value)}
-                          onWheel={(e) => e.target.blur()}
-                        />
-                        <button className="row-delete-btn" title="Delete this row value pattern" onClick={() => board.removeRow(v)}>
-                          <span className="icon">✕</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {rd.categories.map((cat, catIndex) => {
-                      const clue = cat.clues[v] || blankClue();
-                      const cellKey = cat.id + "-" + v;
-                      return (
-                        <div
-                          key={cellKey}
-                          className={
-                            "clue-cell" +
-                            (clue.used ? " used" : "") +
-                            (editMode ? " edit-mode-cell" : "") +
-                            (board.boardFlip === "out" ? " flip-out" : "") +
-                            (board.boardFlip === "in-start" ? " flip-in-start" : "") +
-                            (editMode && board.dragSource && board.dragSource.catId === cat.id && board.dragSource.value === v ? " drag-source" : "") +
-                            (editMode &&
-                            board.dragOverKey === cellKey &&
-                            !(board.dragSource && board.dragSource.catId === cat.id && board.dragSource.value === v)
-                              ? " drag-over"
-                              : "")
-                          }
-                          style={{
-                            gridRow: gridRowPosition,
-                            gridColumn: editMode ? catIndex + 2 : catIndex + 1,
-                            transitionDelay: board.flipDelay(catIndex),
-                          }}
-                          draggable={editMode}
-                          onDragStart={(e) => {
-                            if (!editMode) return;
-                            board.setDragSource({ catId: cat.id, value: v });
-                            e.dataTransfer.effectAllowed = "move";
-                            e.dataTransfer.setData("text/plain", cellKey);
-                          }}
-                          onDragOver={(e) => {
-                            if (!editMode || !board.dragSource) return;
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = "move";
-                            if (board.dragOverKey !== cellKey) board.setDragOverKey(cellKey);
-                          }}
-                          onDragLeave={() => {
-                            board.setDragOverKey((k) => (k === cellKey ? null : k));
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (!editMode || !board.dragSource) return;
-                            board.swapClueCells(board.dragSource, { catId: cat.id, value: v });
-                            board.setDragSource(null);
-                            board.setDragOverKey(null);
-                          }}
-                          onDragEnd={() => {
-                            board.setDragSource(null);
-                            board.setDragOverKey(null);
-                          }}
-                          onClick={() => {
-                            if (editMode) {
-                              playClickSfx();
-                              clueEditor.openEditModal(cat, v);
-                            } else if (!clue.used) {
-                              playClickSfx();
-                              clueEditor.openClueModal(cat, v);
-                            }
-                          }}
-                          onMouseEnter={() => {
-                            if (editMode || !clue.used) playHoverTick();
-                          }}
-                        >
-                          <div className="clue-value">${v}</div>
-                          {editMode && clue.question?.trim() && clue.answer?.trim() && (
-                            <div className={`media-dot ${clue.mediaUrl ? "has-media" : ""}`}>●</div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </React.Fragment>
-                );
-              })}
-
-              {editMode && (
-                <div className="grid-add-row-cell" style={{ gridColumn: `1 / span ${nCats + 1}`, gridRow: nRows + 2 }}>
-                  <button title="Add Value Row" onClick={board.addRow}>
-                    +
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
+          <ClueGrid
+            rd={rd}
+            nCats={nCats}
+            nRows={nRows}
+            boardGridStyle={boardGridStyle}
+            editMode={editMode}
+            boardFlip={board.boardFlip}
+            flipDelay={board.flipDelay}
+            revealedCats={board.revealedCats}
+            revealCategory={(cat) => board.revealCategory(cat, playCatRevealSfx)}
+            renameCategory={board.renameCategory}
+            removeCategory={board.removeCategory}
+            addCategory={board.addCategory}
+            changeRowValue={board.changeRowValue}
+            removeRow={board.removeRow}
+            addRow={board.addRow}
+            dragSource={board.dragSource}
+            setDragSource={board.setDragSource}
+            dragOverKey={board.dragOverKey}
+            setDragOverKey={board.setDragOverKey}
+            swapClueCells={board.swapClueCells}
+            openEditModal={clueEditor.openEditModal}
+            openClueModal={clueEditor.openClueModal}
+            blankClue={blankClue}
+          />
 
           <div id="scoreboardSection">
             <div id="teamsWrap">
@@ -565,6 +456,7 @@ export default function JeopardyBoard({ onBack }) {
               onNextBuzzer={nextBuzzer}
               onPrevBuzzer={prevBuzzer}
               resolveTeamForDiscordUser={teams.resolveTeamForDiscordUser}
+              onJudgeAnswer={judgeAnswer}
             />
           )}
 
