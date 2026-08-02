@@ -37,6 +37,7 @@ export default function ClueGrid({
   swapClueCells,
   openEditModal,
   openClueModal,
+  toggleDailyDouble,
   blankClue,
 }) {
   return (
@@ -181,6 +182,19 @@ export default function ClueGrid({
                       clue.answer?.trim() && (
                         <div className={`media-dot ${clue.mediaUrl ? "has-media" : ""}`}>●</div>
                       )}
+                    {editMode && (
+                      <button
+                        type="button"
+                        className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                        title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          toggleDailyDouble(cat, v);
+                        }}
+                      >
+                        DD
+                      </button>
+                    )}
                   </div>
                 );
               })}

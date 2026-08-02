@@ -3,7 +3,9 @@ import "../styles/player.css";
 import "../styles/board.css"; // TeamCard's classes (.team-card, .team-discord-avatar, etc.) are defined here — this file never needed them before it built its own team markup.
 import { usePlayerSync } from "../lib/hooks/usePlayerSync";
 import { useBuzzer } from "../lib/hooks/useBuzzer";
-import { useControlSync } from "../lib/hooks/useControlSync";
+import { useControlSync, OPEN_CONTROL } from "../lib/hooks/useControlSync";
+import { useWagerSync } from "../lib/hooks/useWagerSync";
+import { useFinalSync } from "../lib/hooks/useFinalSync";
 import { useSpeakingState } from "../lib/hooks/useSpeakingState";
 import { useDiscordMembers } from "../lib/hooks/useDiscordMembers";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
@@ -15,6 +17,8 @@ import {
   playCorrectSfx,
   playIncorrectSfx,
   playCatRevealSfx,
+  playDailyDoubleSfx,
+  playStandingsCelebration,
 } from "../lib/boardSfx";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
@@ -52,6 +56,66 @@ function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, myPosition, idl
     ? `Buzzed in — you're #${myPosition} in line.`
     : "Buzzer is ready!";
   return <div className={"pv-buzzer-status " + className}>{text}</div>;
+}
+
+// Rendered on every player's device (not just the picker's) whenever the
+// open clue is a Daily Double — the surprise/excitement of "it's a Daily
+// Double!" is part of the show for everyone watching, same as it would be
+// on a real broadcast, even though only the specific picker gets to act
+// on it. Reuses board.css's `dd-title`/`dd-subtitle` classes (already
+// imported into this file — see the top of PlayerView.jsx) so the styling
+// matches the host's own Daily Double screen instead of inventing a
+// second, slightly-different-looking treatment.
+function DailyDoubleFront({ value, wager, isSpecificPicker, wagerInput, setWagerInput, wagerJustSubmitted, onSubmitWager }) {
+  const wagerLocked = wager != null;
+  const maxWager = value * 2;
+  const minWager = value
+  const parsed = parseInt(wagerInput, 10);
+  const clamped = isNaN(parsed) ? minWager : Math.max(minWager, Math.min(parsed, maxWager));
+
+  return (
+    <>
+      <div className="dd-title" style={{ fontSize: "1.6rem" }}>DAILY DOUBLE!</div>
+
+      {wagerLocked ? (
+        <div className="pv-clue-front-val">${wager}</div>
+      ) : isSpecificPicker ? (
+        wagerJustSubmitted ? (
+          <div className="pv-clue-front-hint">Wager submitted — waiting for the host…</div>
+        ) : (
+          <div className="pv-dd-wager-form" onClick={(e) => e.stopPropagation()}>
+            <div className="dd-step-label">Your wager (max ${maxWager})</div>
+            <input
+              type="number"
+              className="dd-wager-input"
+              min={minWager}
+              max={maxWager}
+              value={wagerInput}
+              autoFocus
+              onChange={(e) => setWagerInput(e.target.value)}
+              onWheel={(e) => e.target.blur()}
+              onClick={(e) => e.stopPropagation()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  onSubmitWager(clamped);
+                }
+              }}
+            />
+            <button
+              type="button"
+              className="btn dd-confirm-btn"
+              onClick={() => onSubmitWager(clamped)}
+            >
+              Lock In Wager (${clamped})
+            </button>
+          </div>
+        )
+      ) : (
+        <div className="pv-clue-front-hint">Someone's placing their wager…</div>
+      )}
+    </>
+  );
 }
 
 // Team scoreboard — now backed by the same TeamCard component the host
@@ -98,6 +162,232 @@ function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersBy
           </div>
         );
       })}
+    </div>
+  );
+}
+
+// Rendered on every player's device instead of the normal board grid +
+// clue overlay whenever the current round is Final Jeopardy (`rd.type ===
+// "final"`) — that round has no categories/clue grid at all, so it needs
+// its own screen entirely, walked forward by rd.phase the same way the
+// host's FinalJeopardyBoard.jsx is. Wager/answer inputs here submit via
+// useFinalSync (submitFinalWager/submitFinalAnswer, passed down from
+// PlayerBoard below) — same parallel-submission model as this file's own
+// DailyDoubleFront, just without a single "picker" gate since every team
+// wagers/answers at once in Final Jeopardy.
+//
+// "clue" and "answer" are rendered as ONE screen below (no more
+// write-it-on-paper interstitial) — players get the answer box the
+// moment the clue appears and can submit any time up to the host's
+// "Time's Up" click; rd.phase still flips clue -> answer underneath for
+// the host's own flow, it just doesn't change what the player sees.
+// During "reveal", every player's screen mirrors the host's judging
+// card (current team + their answer + wager) plus a running history of
+// already-judged teams (rd.results), so the reveal is a shared moment
+// instead of something only visible on the host's screen.
+function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFinalAnswer }) {
+  const myTeamId = joinedTeam?.teamId;
+  const myTeam = teams.find((t) => t.id === myTeamId);
+  const [wagerInput, setWagerInput] = useState("");
+  const [wagerSubmitted, setWagerSubmitted] = useState(false);
+  const [answerInput, setAnswerInput] = useState("");
+  const [answerSubmitted, setAnswerSubmitted] = useState(false);
+
+  // Reset local draft state whenever we leave the phase group it belongs
+  // to, so a leftover value from a *previous* Final Jeopardy round never
+  // bleeds into the next one (same idea as PlayerBoard's wagerInput reset
+  // on activeClue change). "clue" and "answer" are grouped as one
+  // "collecting" phase here — players now type their answer as soon as
+  // the clue appears, so that transition must NOT wipe their draft.
+  const answerPhaseGroup = rd.phase === "clue" || rd.phase === "answer" ? "collecting" : rd.phase;
+
+  useEffect(() => {
+    setWagerInput("");
+    setWagerSubmitted(false);
+  }, [rd.phase]);
+
+  useEffect(() => {
+    setAnswerInput("");
+    setAnswerSubmitted(false);
+  }, [answerPhaseGroup]);
+
+  // Celebration SFX fires once for every player too, right when Final
+  // Standings appears — mirrors the same guarded effect on the host side
+  // (FinalJeopardyBoard.jsx), each side plays its own copy locally since
+  // rd.standingsRevealed is already synced state, no extra broadcast needed.
+  const standingsSfxFiredRef = useRef(false);
+  useEffect(() => {
+    if (rd.standingsRevealed && !standingsSfxFiredRef.current) {
+      standingsSfxFiredRef.current = true;
+      playStandingsCelebration(rd.standingsSfxUrl);
+    } else if (!rd.standingsRevealed) {
+      standingsSfxFiredRef.current = false;
+    }
+  }, [rd.standingsRevealed]);
+
+  if (!myTeam) {
+    return (
+      <div className="pv-final-panel">
+        <div className="pv-final-title">Final Jeopardy</div>
+        <p className="pv-final-hint">You're not assigned to a team — ask the host to add you before Final Jeopardy.</p>
+      </div>
+    );
+  }
+
+  const maxWager = Math.max(myTeam.score, 0);
+  const myWagerLocked = rd.wagers?.[myTeamId] != null;
+  const myAnswerLocked = rd.answers?.[myTeamId] != null;
+
+  if (rd.phase === "category") {
+    return (
+      <div className="pv-final-panel">
+        <div className="pv-final-title">Final Jeopardy</div>
+        <p className="pv-final-hint pulse">Waiting for the host to reveal the category…</p>
+      </div>
+    );
+  }
+
+  if (rd.phase === "wager") {
+    return (
+      <div className="pv-final-panel">
+        <div className="pv-final-category">{rd.category}</div>
+        {myWagerLocked || wagerSubmitted ? (
+          <p className="pv-final-hint pulse">Wager locked in — waiting for other teams…</p>
+        ) : (
+          <div className="pv-final-form" onClick={(e) => e.stopPropagation()}>
+            <div className="pv-final-label">Your wager (max ${maxWager})</div>
+            <input
+              type="number"
+              min={0}
+              max={maxWager}
+              value={wagerInput}
+              autoFocus
+              onChange={(e) => setWagerInput(e.target.value)}
+              onWheel={(e) => e.target.blur()}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                e.preventDefault();
+                const parsed = parseInt(wagerInput, 10);
+                const clamped = isNaN(parsed) ? 0 : Math.max(0, Math.min(maxWager, parsed));
+                submitFinalWager(clamped);
+                setWagerSubmitted(true);
+              }}
+            />
+            <button
+              type="button"
+              className="pv-btn pv-btn-primary"
+              onClick={() => {
+                const parsed = parseInt(wagerInput, 10);
+                const clamped = isNaN(parsed) ? 0 : Math.max(0, Math.min(maxWager, parsed));
+                submitFinalWager(clamped);
+                setWagerSubmitted(true);
+              }}
+            >
+              Lock In Wager
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (rd.phase === "clue" || rd.phase === "answer") {
+    return (
+      <div className="pv-final-panel">
+        <div className="pv-final-category">{rd.category}</div>
+        <p className="pv-final-clue-text">{rd.clue?.question}</p>
+        {myAnswerLocked || answerSubmitted ? (
+          <p className="pv-final-hint pulse">Answer locked in — waiting for other teams…</p>
+        ) : (
+          <div className="pv-final-form" onClick={(e) => e.stopPropagation()}>
+            <div className="pv-final-label">Your answer</div>
+            <input
+              type="text"
+              value={answerInput}
+              autoFocus
+              maxLength={300}
+              onChange={(e) => setAnswerInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key !== "Enter") return;
+                submitFinalAnswer(answerInput);
+                setAnswerSubmitted(true);
+              }}
+            />
+            <button
+              type="button"
+              className="pv-btn pv-btn-primary"
+              onClick={() => {
+                submitFinalAnswer(answerInput);
+                setAnswerSubmitted(true);
+              }}
+            >
+              Lock In Answer
+            </button>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (rd.phase === "reveal") {
+    const revealTeam = rd.currentRevealTeamId ? teams.find((t) => t.id === rd.currentRevealTeamId) : null;
+    const revealedTeams = (rd.revealedTeamIds || []).map((id) => teams.find((t) => t.id === id)).filter(Boolean);
+    const isMyTurn = revealTeam?.id === myTeamId;
+    return (
+      <div className="pv-final-panel">
+        <div className="pv-final-category">{rd.category}</div>
+        {revealTeam ? (
+          <div className={`pv-final-reveal-card${isMyTurn ? " is-my-turn" : ""}`}>
+            <span className="pv-final-reveal-eyebrow">{isMyTurn ? "It's your team's turn!" : "Now Revealing"}</span>
+            <span className="pv-final-reveal-team">{revealTeam.name}</span>
+            <p className="pv-final-reveal-answer">“{rd.answers[revealTeam.id] || "(no answer)"}”</p>
+            <span className="pv-final-reveal-wager">Wagered ${rd.wagers[revealTeam.id] || 0}</span>
+          </div>
+        ) : (
+          <p className="pv-final-hint pulse">Waiting for the host to choose who's up next…</p>
+        )}
+        {revealedTeams.length > 0 && (
+          <div className="pv-final-reveal-history">
+            {revealedTeams.map((t) => (
+              <div
+                className={`pv-final-reveal-history-row ${rd.results?.[t.id] ? "is-correct" : "is-incorrect"}`}
+                key={t.id}
+              >
+                <span className="pv-final-reveal-history-icon">{rd.results?.[t.id] ? "✓" : "✗"}</span>
+                <span className="pv-final-standing-name">{t.name}</span>
+                <span className="pv-final-standing-score">${t.score}</span>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  // "done"
+  if (!rd.standingsRevealed) {
+    return (
+      <div className="pv-final-panel">
+        <div className="pv-final-title">Final Jeopardy Is Over</div>
+        <div className="pv-final-correct-answer-box">
+          <span className="pv-final-correct-answer-label">The Correct Answer Was</span>
+          <p className="pv-final-correct-answer-text">{rd.clue?.answer || "(no answer set)"}</p>
+        </div>
+        <p className="pv-final-hint pulse">Standings coming up…</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="pv-final-panel">
+      <div className="pv-final-title">Final Standings</div>
+      {[...teams].sort((a, b) => b.score - a.score).map((t, i) => (
+        <div className={`pv-final-standing-row${i === 0 ? " is-winner" : ""}`} key={t.id}>
+          <span className="pv-final-standing-rank">{`${i + 1}`}</span>
+          <span className="pv-final-standing-name">{t.name}</span>
+          <span className="pv-final-standing-score">${t.score}</span>
+        </div>
+      ))}
     </div>
   );
 }
@@ -343,6 +633,22 @@ function PlayerBoard({ roomCode, me, onLeave }) {
     discordUserId: buzzerMe.id,
   });
 
+  // Whether THIS player specifically is the one who picked the current
+  // clue — stricter than isMyTurn, which is also true under OPEN_CONTROL
+  // ("anyone can pick"). A Daily Double wager belongs to one individual,
+  // not "whoever anyone is" — under OPEN_CONTROL there's no single owner
+  // to defer to, so the host falls back to picking a team manually
+  // instead (see ClueModal.jsx), and no player's device should show a
+  // wager form in that case.
+  const isSpecificPicker = !!controlDiscordUserId && controlDiscordUserId !== OPEN_CONTROL && controlDiscordUserId === buzzerMe.id;
+
+  const { submitWager } = useWagerSync(roomCode, { discordUserId: buzzerMe.id });
+
+  // Final Jeopardy wager/answer submission — no "isSpecificPicker" gate
+  // needed here (unlike submitWager above), since every team submits in
+  // parallel. See FinalJeopardyView below for where these get called.
+  const { submitFinalWager, submitFinalAnswer } = useFinalSync(roomCode, { discordUserId: buzzerMe.id });
+
   // Display name for whoever currently holds the board, for the "whose
   // turn" indicator — resolved from the synced players roster rather than
   // carried separately, since the roster already has discordUserId +
@@ -479,14 +785,23 @@ function PlayerBoard({ roomCode, me, onLeave }) {
     if (!cat || !clue) return null;
 
     // activeClue is published verbatim by the host's useClueSync as
-    // { catId, value, revealed, flipped, isPlaying, currentTime } — no
-    // renaming happens in between, so map straight off those fields.
+    // { catId, value, revealed, flipped, isPlaying, currentTime,
+    // dailyDoubleWager } — no renaming happens in between, so map
+    // straight off those fields. isDailyDouble itself isn't part of that
+    // payload — it comes from boardData (already synced separately via
+    // usePlayerSync), same as question/answer/media below.
     const questionRev = Boolean(activeClue.flipped);
     const answerRev = Boolean(activeClue.revealed);
 
     return {
       categoryName: cat.name,
       value: activeClue.value,
+      // Mirrors ClueModal.jsx's `effectiveValue`: once a Daily Double's
+      // wager is locked in, that number replaces the row's $ value
+      // everywhere it's displayed (here, the back face) — `value` itself
+      // is left untouched above since the front-face wager form still
+      // needs the original row value to compute maxWager (2x it).
+      effectiveValue: clue.isDailyDouble && activeClue.dailyDoubleWager != null ? activeClue.dailyDoubleWager : activeClue.value,
       question: clue.question,
       answer: clue.answer,
       questionRevealed: questionRev,
@@ -497,8 +812,26 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       answerMediaType: clue.answerMediaType,
       isPlaying: activeClue.isPlaying,
       currentTime: activeClue.currentTime,
+      isDailyDouble: !!clue.isDailyDouble,
+      dailyDoubleWager: activeClue.dailyDoubleWager ?? null,
     };
   }, [activeClue, boardData]);
+
+  // Same "fire once per clue" Daily Double sting as ClueModal.jsx on the
+  // host side — but host and player are separate processes/browsers, so
+  // each needs its own trigger; this doesn't ride along with the host's.
+  // Keyed off catId+value (mirrors ClueModal's clueId) rather than just
+  // isDailyDouble, so it fires exactly once when the wager screen first
+  // appears and doesn't refire on unrelated re-renders while it's up.
+  const ddSfxFiredForClueRef = useRef(null);
+  useEffect(() => {
+    const clueId = activeClue ? `${activeClue.catId}-${activeClue.value}` : null;
+    const wagerLocked = openClue?.dailyDoubleWager != null;
+    if (openClue?.isDailyDouble && !wagerLocked && clueId && ddSfxFiredForClueRef.current !== clueId) {
+      ddSfxFiredForClueRef.current = clueId;
+      playDailyDoubleSfx();
+    }
+  }, [openClue?.isDailyDouble, openClue?.dailyDoubleWager, activeClue?.catId, activeClue?.value]);
 
   const buzzDisabled = !buzzerLive || iHaveFloor || alreadyBuzzed;
   const buzzBarActive = buzzerLive || alreadyBuzzed || iHaveFloor;
@@ -642,6 +975,21 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   const [answerMediaUrl, setAnswerMediaUrl] = useState("");
   const [answerRenderAs, setAnswerRenderAs] = useState("");
 
+  // Daily Double wager, entered on THIS device by whoever is the specific
+  // picker (see isSpecificPicker above). `wagerJustSubmitted` covers the
+  // gap between tapping "Lock In" and the round trip through the server
+  // and back into openClue.dailyDoubleWager — without it, the form would
+  // flash back open for a moment after submitting. Both reset whenever
+  // the open clue's identity changes, same as the media state below,
+  // so a leftover value/submitted-flag from a previous Daily Double never
+  // bleeds into the next one.
+  const [wagerInput, setWagerInput] = useState("");
+  const [wagerJustSubmitted, setWagerJustSubmitted] = useState(false);
+  useEffect(() => {
+    setWagerInput("");
+    setWagerJustSubmitted(false);
+  }, [activeClue?.catId, activeClue?.value]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -779,7 +1127,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
         </button>
       </div>
 
-      {!openClue && (
+      {!openClue && rd.type !== "final" && (
         <div className={"pv-control-indicator" + (isMyTurn ? " pv-control-mine" : "")}>
           {isMyTurn
             ? "Your turn to pick a clue"
@@ -809,16 +1157,40 @@ function PlayerBoard({ roomCode, me, onLeave }) {
         <div className="pv-clue-overlay">
           <div className="pv-clue-flip-outer">
             <div className={"pv-clue-flip-inner" + (openClue.questionRevealed ? " is-flipped" : "")}>
-              <div className="pv-clue-flip-face pv-clue-flip-front">
+              <div className={"pv-clue-flip-face pv-clue-flip-front" + (openClue.isDailyDouble ? " pv-clue-daily-double" : "")}>
+                {openClue.isDailyDouble && (
+                  <div className="dd-sparkles" aria-hidden="true">
+                    {Array.from({ length: 8 }).map((_, i) => (
+                      <span key={i} className={`dd-sparkle dd-sparkle-${i}`} />
+                    ))}
+                  </div>
+                )}
                 <div className="pv-clue-front-cat">{openClue.categoryName}</div>
-                <div className="pv-clue-front-val">${openClue.value}</div>
-                <div className="pv-clue-front-hint">Waiting for host to reveal...</div>
+                {openClue.isDailyDouble ? (
+                  <DailyDoubleFront
+                    value={openClue.value}
+                    wager={openClue.dailyDoubleWager}
+                    isSpecificPicker={isSpecificPicker}
+                    wagerInput={wagerInput}
+                    setWagerInput={setWagerInput}
+                    wagerJustSubmitted={wagerJustSubmitted}
+                    onSubmitWager={(amount) => {
+                      submitWager(amount);
+                      setWagerJustSubmitted(true);
+                    }}
+                  />
+                ) : (
+                  <>
+                    <div className="pv-clue-front-val">${openClue.value}</div>
+                    <div className="pv-clue-front-hint">Waiting for host to reveal...</div>
+                  </>
+                )}
               </div>
 
               <div className="pv-clue-flip-face pv-clue-flip-back">
                 <div className="pv-clue-cat-value">
                   <div className="pv-clue-cat">{openClue.categoryName}</div>
-                  <div className="pv-clue-value">${openClue.value}</div>
+                  <div className="pv-clue-value">${openClue.effectiveValue}</div>
                 </div>
                 <div className="pv-clue-question">{openClue.question || "(no question text set)"}</div>
 
@@ -921,52 +1293,62 @@ function PlayerBoard({ roomCode, me, onLeave }) {
         </div>
       )}
 
-      <div className="pv-board">
-        {rd.categories.map((cat, catIndex) => {
-          const isRevealed = revealedCats.includes(cat.id);
-          return (
-            <div
-              key={cat.id}
-              className={
-                "pv-cat" +
-                (isRevealed ? "" : " pv-cat-locked") +
-                (boardFlip === "out" ? " flip-out" : "") +
-                (boardFlip === "in-start" ? " flip-in-start" : "")
-              }
-              style={{ transitionDelay: flipDelay(catIndex) }}
-            >
-              <div className={"pv-cat-name" + (isRevealed ? " cat-name-reveal" : "")}>
-                {isRevealed ? cat.name || "—" : <span className="pv-cat-mark">?</span>}
+      {rd.type === "final" ? (
+        <FinalJeopardyView
+          rd={rd}
+          joinedTeam={joinedTeam}
+          teams={boardData.teams}
+          submitFinalWager={submitFinalWager}
+          submitFinalAnswer={submitFinalAnswer}
+        />
+      ) : (
+        <div className="pv-board">
+          {rd.categories.map((cat, catIndex) => {
+            const isRevealed = revealedCats.includes(cat.id);
+            return (
+              <div
+                key={cat.id}
+                className={
+                  "pv-cat" +
+                  (isRevealed ? "" : " pv-cat-locked") +
+                  (boardFlip === "out" ? " flip-out" : "") +
+                  (boardFlip === "in-start" ? " flip-in-start" : "")
+                }
+                style={{ transitionDelay: flipDelay(catIndex) }}
+              >
+                <div className={"pv-cat-name" + (isRevealed ? " cat-name-reveal" : "")}>
+                  {isRevealed ? cat.name || "—" : <span className="pv-cat-mark">?</span>}
+                </div>
+                <div className="pv-cells">
+                  {rd.values.map((v) => {
+                    const clue = cat.clues?.[v];
+                    const pickable = !clue?.used && isMyTurn;
+                    return (
+                      <div
+                        key={v}
+                        className={"pv-cell" + (clue?.used ? " pv-used" : "") + (pickable ? " pv-pickable" : "")}
+                        role={pickable ? "button" : undefined}
+                        onClick={() => {
+                          // Client-side gating is just for UX (cursor/dim
+                          // state) — the server re-validates against
+                          // controlDiscordUserId regardless, so this can't be
+                          // bypassed by forcing the click through.
+                          if (!pickable) return;
+                          selectClue({ catId: cat.id, value: v });
+                        }}
+                      >
+                        {clue?.used ? "" : `$${v}`}
+                      </div>
+                    );
+                  })}
+                </div>
               </div>
-              <div className="pv-cells">
-                {rd.values.map((v) => {
-                  const clue = cat.clues?.[v];
-                  const pickable = !clue?.used && isMyTurn;
-                  return (
-                    <div
-                      key={v}
-                      className={"pv-cell" + (clue?.used ? " pv-used" : "") + (pickable ? " pv-pickable" : "")}
-                      role={pickable ? "button" : undefined}
-                      onClick={() => {
-                        // Client-side gating is just for UX (cursor/dim
-                        // state) — the server re-validates against
-                        // controlDiscordUserId regardless, so this can't be
-                        // bypassed by forcing the click through.
-                        if (!pickable) return;
-                        selectClue({ catId: cat.id, value: v });
-                      }}
-                    >
-                      {clue?.used ? "" : `$${v}`}
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          );
-        })}
-      </div>
+            );
+          })}
+        </div>
+      )}
 
-      {!openClue && (
+      {!openClue && rd.type !== "final" && (
         <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzStateByTeam={buzzStateByTeam} />
       )}
 

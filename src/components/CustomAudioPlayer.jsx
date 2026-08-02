@@ -10,6 +10,7 @@ export default function CustomAudioPlayer({
   disableSeeking = false 
 }) {
   const audioRef = useRef(null);
+  const timelineRef = useRef(null);
   const [internalIsPlaying, setInternalIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -94,14 +95,77 @@ export default function CustomAudioPlayer({
     setInternalIsPlaying(externalIsPlaying);
   }, [externalIsPlaying, resolvedSrc]);
 
-  // Sync external currentTime from host (corrects drift > 0.5s)
+  // Sync external currentTime from host (corrects drift). The tolerance
+  // scales down for short clips — a fixed 0.5s snap is imperceptible on a
+  // 3-minute track but is ~12% of a 4-second clue clip, so every
+  // correction reads as a visible stutter. Floor of 0.15s keeps it from
+  // getting so tight it fights normal network jitter.
   useEffect(() => {
     if (!audioRef.current || !resolvedSrc || externalCurrentTime === undefined) return;
-    if (Math.abs(audioRef.current.currentTime - externalCurrentTime) > 0.5) {
+    const driftTolerance = duration > 0 ? Math.max(0.15, Math.min(0.5, duration * 0.08)) : 0.5;
+    if (Math.abs(audioRef.current.currentTime - externalCurrentTime) > driftTolerance) {
       audioRef.current.currentTime = externalCurrentTime;
       setCurrentTime(externalCurrentTime);
+      paintTimeline(externalCurrentTime);
     }
-  }, [externalCurrentTime, resolvedSrc]);
+  }, [externalCurrentTime, resolvedSrc, duration]);
+
+  // Native range inputs don't let the thumb travel the full 100% of the
+  // track — it's confined to (trackWidth - thumbWidth) so it never pokes
+  // out past either end. A gradient stop set to raw `percent%` ignores
+  // that inset, so it visibly drifts from the thumb's real center as you
+  // approach either edge. Mixing in a px offset (derived from the CSS
+  // thumb width below) corrects for it. Must match .player-slider
+  // ::-webkit-slider-thumb / ::-moz-range-thumb width in board.css.
+  const THUMB_SIZE_PX = 14;
+  function trackFillPosition(percent) {
+    const offsetPx = THUMB_SIZE_PX * (0.5 - percent / 100);
+    return `calc(${percent}% + ${offsetPx}px)`;
+  }
+
+  // Writes both the thumb position and the gradient fill straight to the
+  // slider DOM node. Used everywhere the timeline needs to move (the rAF
+  // loop, seeking, external sync, load, end) so the slider stays
+  // uncontrolled by React — a controlled `value` prop would fight these
+  // direct writes every time React re-renders with a slightly-stale
+  // `currentTime`, undoing the smoothing this is meant to provide.
+  function paintTimeline(time) {
+    const slider = timelineRef.current;
+    if (!slider) return;
+    const pct = (time / (duration || 1)) * 100;
+    slider.value = time;
+    slider.style.background = `linear-gradient(to right, #f59e0b 0%, #f59e0b ${trackFillPosition(pct)}, #1e293b ${trackFillPosition(pct)}, #1e293b 100%)`;
+  }
+
+  // Drive the visible progress (slider thumb + track fill) off a rAF loop
+  // that writes straight to the DOM node, instead of calling setState
+  // every frame. A setState-per-frame approach re-renders this whole
+  // component (and re-runs every inline style computation) up to 60x/sec,
+  // which is exactly the kind of overhead that shows up as a stuttering
+  // thumb rather than a smooth glide — especially once this sits inside a
+  // larger board tree. React's `currentTime` state is still updated, just
+  // throttled to a few times a second — plenty for the digits label and
+  // for handleSeek's baseline, without needing 60 renders/sec.
+  useEffect(() => {
+    if (!isPlaying) return;
+    let rafId;
+    let lastStateSync = 0;
+    const tick = (now) => {
+      const audio = audioRef.current;
+      if (audio) {
+        const t = audio.currentTime;
+        paintTimeline(t);
+        if (now - lastStateSync > 200) {
+          setCurrentTime(t);
+          lastStateSync = now;
+        }
+      }
+      rafId = requestAnimationFrame(tick);
+    };
+    rafId = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(rafId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isPlaying, duration]);
 
   // Safety net on unmount
   useEffect(() => {
@@ -139,12 +203,14 @@ export default function CustomAudioPlayer({
   const handleTimeUpdate = () => {
     if (audioRef.current) {
       setCurrentTime(audioRef.current.currentTime);
+      paintTimeline(audioRef.current.currentTime);
     }
   };
 
   const handleLoadedMetadata = () => {
     if (audioRef.current) {
       setDuration(audioRef.current.duration);
+      paintTimeline(audioRef.current.currentTime);
     }
   };
 
@@ -154,6 +220,7 @@ export default function CustomAudioPlayer({
     if (audioRef.current) {
       audioRef.current.currentTime = time;
       setCurrentTime(time);
+      paintTimeline(time);
       onPlayStateChange && onPlayStateChange(isPlaying, time);
     }
   };
@@ -188,6 +255,7 @@ export default function CustomAudioPlayer({
       setInternalIsPlaying(false);
     }
     setCurrentTime(0);
+    paintTimeline(0);
     onPlayStateChange && onPlayStateChange(false);
   };
 
@@ -256,14 +324,12 @@ export default function CustomAudioPlayer({
           type="range"
           min={0}
           max={duration || 100}
-          value={currentTime}
+          defaultValue={0}
+          ref={timelineRef}
           onChange={handleSeek}
           disabled={disableSeeking}
           className="player-slider timeline-slider"
-          style={{
-            cursor: disableSeeking ? 'not-allowed' : 'pointer',
-            background: `linear-gradient(to right, #f59e0b 0%, #f59e0b ${(currentTime / (duration || 1)) * 100}%, #1e293b ${(currentTime / (duration || 1)) * 100}%, #1e293b 100%)`
-          }}
+          style={{ cursor: disableSeeking ? 'not-allowed' : 'pointer' }}
         />
         <span className="player-time">{formatTime(duration)}</span>
       </div>
@@ -294,7 +360,7 @@ export default function CustomAudioPlayer({
           onChange={handleVolumeChange}
           className="player-slider volume-slider"
           style={{
-            background: `linear-gradient(to right, #f59e0b 0%, #f59e0b ${(isMuted ? 0 : volume) * 100}%, #1e293b ${(isMuted ? 0 : volume) * 100}%, #1e293b 100%)`
+            background: `linear-gradient(to right, #f59e0b 0%, #f59e0b ${trackFillPosition((isMuted ? 0 : volume) * 100)}, #1e293b ${trackFillPosition((isMuted ? 0 : volume) * 100)}, #1e293b 100%)`
           }}
         />
       </div>

@@ -44,7 +44,11 @@ function metaFromRow(row, viewerId) {
     name: row.name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    categoryCount: data.rounds.reduce((sum, r) => sum + r.categories.length, 0),
+    // Final Jeopardy rounds (type: "final") have no .categories grid at
+    // all — guard against that instead of assuming every round is a
+    // normal category×value grid, or this crashes (500) the moment any
+    // board has been migrated to include one.
+    categoryCount: data.rounds.reduce((sum, r) => sum + (r.categories ? r.categories.length : 0), 0),
     roundCount: data.rounds.length,
     teamCount: data.teams.length,
     isOwner: row.owner_id === viewerId,

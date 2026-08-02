@@ -29,7 +29,7 @@ function ControlAssign({ players, teams, controlDiscordUserId, onHostSetControl 
           const teamName = p.teamId ? teamNameById.get(p.teamId) : null;
           return (
             <option key={p.discordUserId} value={p.discordUserId}>
-              {(p.discordUsername || p.discordUserId) + (teamName ? ` — ${teamName}` : "") + (p.connected === false ? " (disconnected)" : "")}
+              {(teamName ? `${teamName} ` : "") + `(${p.discordUsername || p.discordUserId})` + (p.connected === false ? " (disconnected)" : "")}
             </option>
           );
         })}
@@ -54,6 +54,9 @@ export default function Toolbar({
   teams,
   controlDiscordUserId,
   onHostSetControl,
+  onRandomizeDailyDoubles,
+  ddBuzzerEnabled,
+  onToggleDdBuzzerEnabled,
 }) {
   async function copyRoomCode() {
     if (!roomCode) return;
@@ -75,6 +78,15 @@ export default function Toolbar({
         <button className="btn" onClick={onResetRound}>
           ↺ Reset Round
         </button>
+        {editMode && onRandomizeDailyDoubles && (
+          <button
+            className="btn"
+            onClick={() => onRandomizeDailyDoubles()}
+            title="Randomly reassign Daily Double clue(s) for both rounds"
+          >
+            Randomize Daily Doubles
+          </button>
+        )}
         <div className="room-code-container" title="Players enter this code at /play">
           <span className="room-code-label">Room code</span>
           <input
@@ -116,6 +128,12 @@ export default function Toolbar({
             />
             sec
           </label>
+          {onToggleDdBuzzerEnabled && (
+            <label title="Off (default): only the wagering team may answer a Daily Double, no buzzer race. On: the buzzer opens for everyone same as a normal clue.">
+              <input type="checkbox" checked={!!ddBuzzerEnabled} onChange={onToggleDdBuzzerEnabled} />
+              Buzzer on Daily Doubles
+            </label>
+          )}
         </div>
       )}
     </>

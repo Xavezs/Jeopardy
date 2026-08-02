@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useMemo } from "react";
 import "./styles/board.css";
+import "./styles/final-jeopardy.css";
 import { blankClue } from "./lib/storage";
 import ClueGrid from "./components/ClueGrid";
 import ClueModal from "./components/ClueModal";
@@ -11,6 +12,7 @@ import BackgroundMusicPlayer from "./components/BackgroundMusicPlayer";
 import Marquee from "./components/Marquee";
 import RoundTabs from "./components/RoundTabs";
 import Toolbar from "./components/Toolbar";
+import FinalJeopardyBoard from "./components/FinalJeopardyBoard";
 
 import { useConfirmDialog } from "./lib/hooks/useConfirmDialog";
 import { usePersistence } from "./lib/hooks/usePersistence";
@@ -24,6 +26,9 @@ import { useBgmSettings } from "./lib/hooks/useBgmSettings";
 import { useBuzzer } from "./lib/hooks/useBuzzer";
 import { useClueSync } from "./lib/hooks/useClueSync";
 import { useControlSync } from "./lib/hooks/useControlSync";
+import { useWagerSync } from "./lib/hooks/useWagerSync";
+import { useFinalSync } from "./lib/hooks/useFinalSync";
+import { useFinalJeopardy } from "./lib/hooks/useFinalJeopardy";
 import { useBgmSync } from "./lib/hooks/useBgmSync";
 import { playCatRevealSfx } from "./lib/boardSfx";
 
@@ -34,6 +39,11 @@ export default function JeopardyBoard({ onBack }) {
   // this app always runs with buzzing live.
   const buzzerEnabled = true;
   const [questionFlipped, setQuestionFlipped] = useState(false);
+  // Lifted the same way as questionFlipped/revealed — lets the locked-in
+  // wager amount survive re-renders and (later, if you wire useClueSync
+  // to include it) get broadcast to PlayerView the same way revealed/
+  // flipped already are.
+  const [dailyDoubleWager, setDailyDoubleWager] = useState(null);
 
   const { dialog, appConfirm, appAlert, resolveDialog } = useConfirmDialog();
 
@@ -46,6 +56,13 @@ export default function JeopardyBoard({ onBack }) {
     persist: persistence.persist,
     appConfirm,
     appAlert,
+  });
+
+  const final = useFinalJeopardy({
+    sessionRef: persistence.sessionRef,
+    touch: persistence.touch,
+    persist: persistence.persist,
+    currentRoundOf: board.currentRoundOf,
   });
 
   const clueEditor = useClueEditor({
@@ -122,6 +139,41 @@ export default function JeopardyBoard({ onBack }) {
       if (cat) clueEditor.openClueModal(cat, value);
     },
   });
+  // Daily Double wager, submitted by whoever currently holds board control
+  // (the player who picked the clue) from their own device. The server
+  // already validated discordUserId === controlDiscordUserId before
+  // relaying this — the check here is just a defensive re-confirm against
+  // whatever this tab currently thinks controlDiscordUserId is, in case
+  // control moved on (e.g. host used the manual fallback, then a stale/
+  // duplicate event from the player arrives a moment later) between the
+  // clue opening and this event landing.
+  const { submitWager } = useWagerSync(roomCode, null, {
+    onWagerSubmitted: ({ discordUserId, amount }) => {
+      if (discordUserId !== controlDiscordUserId) return;
+      setDailyDoubleWager(amount);
+    },
+  });
+
+  // Final Jeopardy wager/answer submitted from a player's own device —
+  // parallel across all teams, no control-holder gate (see useFinalSync).
+  // Resolves discordUserId -> team the same way judgeAnswer's buzz race
+  // does (teams.resolveTeamForDiscordUser), then clamps the wager against
+  // that team's current score before writing it in, same clamp
+  // FinalJeopardyBoard's own manual input applies.
+  useFinalSync(roomCode, null, {
+    onFinalWagerSubmitted: ({ discordUserId, amount }) => {
+      const team = teams.resolveTeamForDiscordUser(discordUserId);
+      if (!team) return;
+      const clamped = Math.max(0, Math.min(Math.max(team.score, 0), Number(amount) || 0));
+      final.setWager(team.id, clamped);
+    },
+    onFinalAnswerSubmitted: ({ discordUserId, answer }) => {
+      const team = teams.resolveTeamForDiscordUser(discordUserId);
+      if (!team) return;
+      final.setAnswer(team.id, answer);
+    },
+  });
+
   const { publishRevealedCats } = useCategoryRevealSync(roomCode);
   const { publishRoundBanner } = useRoundBannerSync(roomCode);
   const { publishBgm } = useBgmSync(roomCode);
@@ -146,6 +198,7 @@ export default function JeopardyBoard({ onBack }) {
   useEffect(() => {
     setPlaybackState({ isPlaying: false, currentTime: 0 });
     setQuestionFlipped(false);
+    setDailyDoubleWager(null);
   }, [clueEditor.activeClue?.catId, clueEditor.activeClue?.value]);
 
   useEffect(() => {
@@ -157,11 +210,12 @@ export default function JeopardyBoard({ onBack }) {
         flipped: questionFlipped,
         isPlaying: playbackState.isPlaying,
         currentTime: playbackState.currentTime,
+        dailyDoubleWager,
       });
     } else {
       publishActiveClue(null);
     }
-  }, [clueEditor.activeClue, clueEditor.revealed, questionFlipped, playbackState, publishActiveClue]);
+  }, [clueEditor.activeClue, clueEditor.revealed, questionFlipped, playbackState, publishActiveClue, dailyDoubleWager]);
 
   useEffect(() => {
     persistence.setRoomCode(roomCode);
@@ -180,6 +234,17 @@ export default function JeopardyBoard({ onBack }) {
   function toggleTimerEnabled() {
     const d = session.data;
     d.settings.timerEnabled = !d.settings.timerEnabled;
+    session.touch();
+    persistence.persist();
+  }
+
+  // Off by default (undefined -> !undefined -> true on first toggle, same
+  // as toggleTimerEnabled) — that preserves the original Daily Double rule
+  // (only the wagering team may answer, no buzz race) for every board that
+  // hasn't explicitly opted into the house-rule variant.
+  function toggleDdBuzzerEnabled() {
+    const d = session.data;
+    d.settings.ddBuzzerEnabled = !d.settings.ddBuzzerEnabled;
     session.touch();
     persistence.persist();
   }
@@ -211,15 +276,21 @@ export default function JeopardyBoard({ onBack }) {
     );
   }
 
-  const nCats = rd.categories.length;
-  const nRows = rd.values.length;
-  const boardGridStyle = editMode
-    ? { gridTemplateColumns: `74px repeat(${nCats}, minmax(0, 1fr)) 67px`, gridTemplateRows: `74px repeat(${nRows}, minmax(0, 1fr)) 67px` }
-    : { gridTemplateColumns: `repeat(${nCats}, minmax(0, 1fr))`, gridTemplateRows: `auto repeat(${nRows}, minmax(0, 1fr))` };
+  // Final Jeopardy has no categories/values grid at all (see
+  // sessionStore.js's blankFinalRound) — these all fall back to safe
+  // defaults for that round rather than crashing on rd.categories.length.
+  const nCats = rd.type === "final" ? 0 : rd.categories.length;
+  const nRows = rd.type === "final" ? 0 : rd.values.length;
+  const boardGridStyle =
+    rd.type === "final"
+      ? {}
+      : editMode
+      ? { gridTemplateColumns: `74px repeat(${nCats}, minmax(0, 1fr)) 67px`, gridTemplateRows: `74px repeat(${nRows}, minmax(0, 1fr)) 67px` }
+      : { gridTemplateColumns: `repeat(${nCats}, minmax(0, 1fr))`, gridTemplateRows: `auto repeat(${nRows}, minmax(0, 1fr))` };
 
-  const activeCat = clueEditor.activeClue ? rd.categories.find((c) => c.id === clueEditor.activeClue.catId) : null;
+  const activeCat = rd.type !== "final" && clueEditor.activeClue ? rd.categories.find((c) => c.id === clueEditor.activeClue.catId) : null;
   const activeClueObj = activeCat && clueEditor.activeClue ? activeCat.clues[clueEditor.activeClue.value] : null;
-  const editingCat = clueEditor.editingTarget ? rd.categories.find((c) => c.id === clueEditor.editingTarget.catId) : null;
+  const editingCat = rd.type !== "final" && clueEditor.editingTarget ? rd.categories.find((c) => c.id === clueEditor.editingTarget.catId) : null;
 
   return (
     <div className="jp-root" style={{ position: "relative" }}>
@@ -278,34 +349,50 @@ export default function JeopardyBoard({ onBack }) {
               teams={data.teams}
               controlDiscordUserId={controlDiscordUserId}
               onHostSetControl={hostSetControl}
+              onRandomizeDailyDoubles={board.randomizeDailyDoubles}
+              ddBuzzerEnabled={data.settings.ddBuzzerEnabled}
+              onToggleDdBuzzerEnabled={toggleDdBuzzerEnabled}
             />
           </div>
 
-          <ClueGrid
-            rd={rd}
-            nCats={nCats}
-            nRows={nRows}
-            boardGridStyle={boardGridStyle}
-            editMode={editMode}
-            boardFlip={board.boardFlip}
-            flipDelay={board.flipDelay}
-            revealedCats={board.revealedCats}
-            revealCategory={(cat) => board.revealCategory(cat, playCatRevealSfx)}
-            renameCategory={board.renameCategory}
-            removeCategory={board.removeCategory}
-            addCategory={board.addCategory}
-            changeRowValue={board.changeRowValue}
-            removeRow={board.removeRow}
-            addRow={board.addRow}
-            dragSource={board.dragSource}
-            setDragSource={board.setDragSource}
-            dragOverKey={board.dragOverKey}
-            setDragOverKey={board.setDragOverKey}
-            swapClueCells={board.swapClueCells}
-            openEditModal={clueEditor.openEditModal}
-            openClueModal={clueEditor.openClueModal}
-            blankClue={blankClue}
-          />
+          {rd.type === "final" ? (
+            <FinalJeopardyBoard
+              rd={rd}
+              editMode={editMode}
+              teams={data.teams}
+              final={final}
+              adjustTeamScore={teams.adjustTeamScore}
+              appConfirm={appConfirm}
+              appAlert={appAlert}
+            />
+          ) : (
+            <ClueGrid
+              rd={rd}
+              nCats={nCats}
+              nRows={nRows}
+              boardGridStyle={boardGridStyle}
+              editMode={editMode}
+              boardFlip={board.boardFlip}
+              flipDelay={board.flipDelay}
+              revealedCats={board.revealedCats}
+              revealCategory={(cat) => board.revealCategory(cat, playCatRevealSfx)}
+              renameCategory={board.renameCategory}
+              removeCategory={board.removeCategory}
+              addCategory={board.addCategory}
+              changeRowValue={board.changeRowValue}
+              removeRow={board.removeRow}
+              addRow={board.addRow}
+              dragSource={board.dragSource}
+              setDragSource={board.setDragSource}
+              dragOverKey={board.dragOverKey}
+              setDragOverKey={board.setDragOverKey}
+              swapClueCells={board.swapClueCells}
+              openEditModal={clueEditor.openEditModal}
+              openClueModal={clueEditor.openClueModal}
+              toggleDailyDouble={board.toggleDailyDouble}
+              blankClue={blankClue}
+            />
+          )}
 
           <div id="scoreboardSection">
             <div id="teamsWrap">
@@ -446,7 +533,7 @@ export default function JeopardyBoard({ onBack }) {
               onMediaStateChange={(state) => setPlaybackState((prev) => ({ ...prev, ...state }))}
               resolveDiscordMembersForTeam={teams.resolveDiscordMembersForTeam}
               scorePulse={teams.scorePulse}
-              buzzerEnabled={buzzerEnabled}
+              buzzerEnabled={buzzerEnabled && (!activeClueObj.isDailyDouble || !!data.settings.ddBuzzerEnabled)}
               buzzerLive={buzzerLive}
               buzzerWinner={buzzerWinner}
               buzzerQueue={buzzerQueue}
@@ -457,6 +544,9 @@ export default function JeopardyBoard({ onBack }) {
               onPrevBuzzer={prevBuzzer}
               resolveTeamForDiscordUser={teams.resolveTeamForDiscordUser}
               onJudgeAnswer={judgeAnswer}
+              dailyDoubleWager={dailyDoubleWager}
+              onSetWager={setDailyDoubleWager}
+              controlDiscordUserId={controlDiscordUserId}
             />
           )}
 
@@ -497,8 +587,8 @@ export default function JeopardyBoard({ onBack }) {
           onClear={bgm.clearBgm}
           onVolumeChange={bgm.setBgmVolume}
           onToggleLoop={bgm.toggleBgmLoop}
-          onSetSource={bgm.setBgmSource}
-          onSetSpotifyUrl={bgm.setBgmSpotifyUrl}
+          onSetDirectUrl={bgm.setBgmDirectUrl}
+          onSetSoundcloudUrl={bgm.setBgmSoundcloudUrl}
           onPlaybackChange={publishBgm}
           ducking={clueEditor.duckMusic}
         />

@@ -1,4 +1,5 @@
 import { createSfx, getSharedAudioCtx, withRunningCtx } from "./sfx";
+import { getMediaUrl } from "./storage";
 
 /* =========================================================================
    BOARD SOUND EFFECTS
@@ -277,6 +278,149 @@ export const playBuzzSfx = createSfx({
   volume: 0.2,
   minGapMs: 40,
 });
+
+/* ---------------- DAILY DOUBLE ----------------
+   A bigger, more dramatic sting than the plain reveal chime — a rising
+   pitch sweep followed by a bright three-note "ta-da" chord — since this
+   moment is meant to stand out from a normal clue pick. Originally lived
+   in ClueModal.jsx only; moved here so both the host (ClueModal) and
+   player (PlayerView) sides import the same definition instead of each
+   maintaining their own copy. */
+const dailyDoubleSfxUrl = new URL("../assets/daily-double.mp3", import.meta.url).href;
+
+function playSynthDailyDoubleTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    withRunningCtx(ctx, () => {
+    const t0 = ctx.currentTime;
+
+    // Rising sweep — builds anticipation for ~0.5s
+    const sweep = ctx.createOscillator();
+    const sweepGain = ctx.createGain();
+    sweep.type = "sawtooth";
+    sweep.frequency.setValueAtTime(140, t0);
+    sweep.frequency.exponentialRampToValueAtTime(880, t0 + 0.5);
+    sweepGain.gain.setValueAtTime(0.0001, t0);
+    sweepGain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.15);
+    sweepGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
+    sweep.connect(sweepGain);
+    sweepGain.connect(ctx.destination);
+    sweep.start(t0);
+    sweep.stop(t0 + 0.52);
+
+    // Bright landing chord once the sweep peaks
+    [523.25, 659.25, 783.99].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      const start = t0 + 0.48 + i * 0.03;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.6);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.62);
+    });
+    });
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+export const playDailyDoubleSfx = createSfx({
+  url: dailyDoubleSfxUrl,
+  fallbackTone: playSynthDailyDoubleTone,
+  volume: 0.18,
+  minGapMs: 200,
+});
+
+/* ---------------- FINAL STANDINGS ----------------
+   Plays once, for host and every player alike, the moment Final Standings
+   is revealed — the actual "game's over" celebration beat. Bigger and
+   brighter than Daily Double's sting: a rising arpeggio into a sustained
+   major chord, since this needs to feel conclusive rather than just
+   "something exciting is starting". */
+const finalStandingsSfxUrl = new URL("../assets/final-standings.mp3", import.meta.url).href;
+
+function playSynthFinalStandingsTone() {
+  try {
+    const ctx = getSharedAudioCtx();
+    if (!ctx) return;
+    withRunningCtx(ctx, () => {
+    const t0 = ctx.currentTime;
+
+    // Quick ascending sparkle run leading into the landing chord.
+    const sparkleNotes = [523.25, 659.25, 783.99, 1046.5]; // C5 E5 G5 C6
+    sparkleNotes.forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "triangle";
+      osc.frequency.value = freq;
+      const start = t0 + i * 0.07;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.16, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 0.24);
+    });
+
+    // Sustained bright major chord (C5-E5-G5-C6) as the landing — held
+    // noticeably longer than Daily Double's, since this is the finale.
+    const chordStart = t0 + 0.32;
+    [523.25, 659.25, 783.99, 1046.5].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      const start = chordStart + i * 0.015;
+      gain.gain.setValueAtTime(0.0001, start);
+      gain.gain.exponentialRampToValueAtTime(0.2, start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.1);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + 1.12);
+    });
+    });
+  } catch (e) {
+    /* best effort — silently ignore if audio is blocked */
+  }
+}
+
+export const playFinalStandingsSfx = createSfx({
+  url: finalStandingsSfxUrl,
+  fallbackTone: playSynthFinalStandingsTone,
+  volume: 0.2,
+  minGapMs: 500,
+});
+
+// Plays the host's custom celebration sound if one's set on the round
+// (rd.standingsSfxUrl — an uploaded file ref, a direct URL, or a Google
+// Drive link, resolved the same way clue media is via getMediaUrl), or
+// falls back to the built-in playFinalStandingsSfx above. Kept as a plain
+// <audio> element rather than routed through the WebAudio SFX plumbing
+// above, since it's an arbitrary user file rather than a short fixed clip.
+export async function playStandingsCelebration(customRef) {
+  if (customRef) {
+    try {
+      const url = await getMediaUrl(customRef);
+      if (url) {
+        const audio = new Audio(url);
+        audio.volume = 0.6;
+        await audio.play();
+        return;
+      }
+    } catch (e) {
+      /* couldn't load/play the custom sound — fall through to the built-in */
+    }
+  }
+  playFinalStandingsSfx();
+}
 
 /* ---------------- GLOBAL DELEGATED HANDLERS ---------------- */
 // Wires the click/hover SFX to every button (or role="button") in the app

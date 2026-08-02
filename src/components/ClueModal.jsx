@@ -4,7 +4,9 @@ import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleD
 import CustomAudioPlayer from './CustomAudioPlayer';
 import CustomVideoPlayer from './CustomVideoPlayer';
 import { discordSdk } from '../discordSdk';
-import { createSfx, getSharedAudioCtx } from "../lib/sfx";
+import { createSfx, getSharedAudioCtx, withRunningCtx } from "../lib/sfx";
+import { playDailyDoubleSfx } from "../lib/boardSfx";
+import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
 
 /* =========================================================================
    REVEAL SOUND
@@ -195,6 +197,9 @@ export default function ClueModal({
   flipped: propFlipped,
   onFlip,
   onJudgeAnswer,
+  dailyDoubleWager,
+  onSetWager,
+  controlDiscordUserId,
 }) {
   const [mediaUrl, setMediaUrl] = useState("");
   const [renderAs, setRenderAs] = useState("");
@@ -217,6 +222,59 @@ export default function ClueModal({
 
   // Stable string identifier for the active clue to prevent reference-churn resets
   const clueId = activeCat && value ? `${activeCat.id}-${value}` : null;
+
+  /* ---------------- DAILY DOUBLE ----------------
+     `dailyDoubleWager` is lifted to the parent (mirrors the `revealed` /
+     `flipped` pattern) so it survives re-renders and can be broadcast to
+     PlayerView the same way. Until it's set, this clue can't flip yet —
+     a dedicated wager screen (further down) is shown instead of the usual
+     flip-front. `effectiveValue` replaces every use of the raw row
+     `value` below (header display + scoring), so the rest of the
+     component doesn't need to know whether it's looking at a normal clue
+     or a Daily Double.
+
+     The wager is restricted to whichever player currently holds board
+     control (the one who picked this category) — `controlDiscordUserId`
+     is only a single specific player's id when a player, not the host,
+     owns the pick; OPEN_CONTROL ("anyone can pick") and the locked/
+     host-only state don't identify one player, so in those cases we fall
+     back to letting the host pick a team manually. */
+  const isDailyDouble = !!clue?.isDailyDouble;
+  const wagerLocked = dailyDoubleWager != null;
+  const effectiveValue = isDailyDouble ? dailyDoubleWager ?? 0 : value;
+  const maxWager = value * 2;
+
+  const hasSpecificPicker = !!(controlDiscordUserId && controlDiscordUserId !== OPEN_CONTROL);
+  const pickingTeam = hasSpecificPicker && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(controlDiscordUserId) : null;
+
+  const [wagerTeamId, setWagerTeamId] = useState(null);
+  const [wagerInput, setWagerInput] = useState("");
+  // When there's a specific picker, the default is to wait for THEM to
+  // submit the wager from their own device (see useWagerSync/PlayerView) —
+  // the host's number input stays hidden until explicitly requested via
+  // this override, e.g. because the picker disconnected or isn't in
+  // Discord. Reset per clue so a fallback used on one Daily Double doesn't
+  // silently carry over and hide the "waiting" screen on the next one.
+  const [manualWagerOverride, setManualWagerOverride] = useState(false);
+
+  // Fire the Daily Double sting exactly once per clue, right as the wager
+  // screen appears. Keyed off clueId (not just isDailyDouble) so it
+  // doesn't refire on unrelated re-renders while this screen is still up,
+  // and resets cleanly when a new Daily Double clue is opened.
+  const ddSfxFiredForClueRef = React.useRef(null);
+  useEffect(() => {
+    if (isDailyDouble && !wagerLocked && ddSfxFiredForClueRef.current !== clueId) {
+      ddSfxFiredForClueRef.current = clueId;
+      playDailyDoubleSfx();
+    }
+  }, [isDailyDouble, wagerLocked, clueId]);
+
+  // Once a wager is locked in, auto-select that team in the scoreboard
+  // sidebar so the host doesn't have to press the digit key again.
+  useEffect(() => {
+    if (wagerLocked && wagerTeamId) setSelectedTeamId(wagerTeamId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [wagerLocked]);
 
   const sortedTeams = React.useMemo(() => {
     if (!teams) return [];
@@ -248,6 +306,9 @@ export default function ClueModal({
     setSelectedTeamId(null);
     setQuestionPlaying(false);
     setAnswerPlaying(false);
+    setWagerTeamId(pickingTeam ? pickingTeam.id : null);
+    setWagerInput("");
+    setManualWagerOverride(false);
   }, [clueId, effectiveDuration]);
 
   // Countdown tick while running
@@ -349,6 +410,11 @@ export default function ClueModal({
         return;
       }
 
+      // Nothing else should fire while the Daily Double wager screen is up
+      // — space would otherwise skip straight to a flip/reveal, and digit
+      // keys would pre-arm a scoreboard slot before a team is even chosen.
+      if (isDailyDouble && !wagerLocked) return;
+
       if (e.key === " " || e.code === "Space") {
         e.preventDefault();
         if (!flipped) {
@@ -374,10 +440,10 @@ export default function ClueModal({
         e.preventDefault();
         if (e.key === "ArrowUp") {
           playCorrectSfx();
-          onAdjustTeamScore(team, value);
+          onAdjustTeamScore(team, effectiveValue);
         } else {
           playIncorrectSfx();
-          onAdjustTeamScore(team, -value);
+          onAdjustTeamScore(team, -effectiveValue);
         }
         // If the team we just scored is whoever currently has the buzzer,
         // automatically advance to the next person in line — scoring them
@@ -420,7 +486,7 @@ export default function ClueModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser, onJudgeAnswer]);
+  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, effectiveValue, isDailyDouble, wagerLocked, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser, onJudgeAnswer]);
 
   // Auto-arm the buzzed-in team's scoreboard slot
   useEffect(() => {
@@ -450,6 +516,123 @@ export default function ClueModal({
   }, [buzzerWinner]);
 
   if (!activeCat || !clue) return null;
+
+  // Daily Double intercept: shown instead of the normal flip-front until a
+  // team and wager amount are locked in. Once onSetWager fires, this
+  // clue re-renders below the normal way — just with effectiveValue (the
+  // wager) standing in for the row's $ value everywhere.
+  if (isDailyDouble && !wagerLocked) {
+    const parsedWager = parseInt(wagerInput, 10);
+    const clampedPreview = isNaN(parsedWager) ? 0 : Math.max(0, Math.min(parsedWager, maxWager));
+    const lockedTeam = pickingTeam && sortedTeams.find((t) => t.id === pickingTeam.id);
+    // With a specific picker, the default is to wait for THEIR device to
+    // submit the wager (useWagerSync -> onWagerSubmitted -> setDailyDoubleWager
+    // in JeopardyBoard.jsx) rather than have the host type it — the host's
+    // number input only appears if there's no specific picker to defer to
+    // (host must choose a team manually, same as before) or the host has
+    // explicitly reached for the fallback below.
+    const showManualInput = !lockedTeam || manualWagerOverride;
+    return (
+      <div
+        className={"modal-overlay clue-modal-overlay" + (closing ? " closing" : "")}
+        onMouseDown={(e) => {
+          mouseDownOnOverlay.current = e.target === e.currentTarget;
+        }}
+        onMouseUp={(e) => {
+          if (mouseDownOnOverlay.current && e.target === e.currentTarget) {
+            requestClose(false);
+          }
+          mouseDownOnOverlay.current = false;
+        }}
+      >
+        <div className="modal daily-double-modal">
+          <div className="dd-sparkles" aria-hidden="true">
+            {Array.from({ length: 8 }).map((_, i) => (
+              <span key={i} className={`dd-sparkle dd-sparkle-${i}`} />
+            ))}
+          </div>
+          <div className="dd-title">DAILY DOUBLE!</div>
+          <div className="dd-subtitle">{activeCat.name}</div>
+
+          {lockedTeam ? (
+            <div className="dd-locked-team">
+              <div className="dd-step-label">Wagering team</div>
+              <div className="dd-locked-team-name">{lockedTeam.name}</div>
+              <div className="dd-locked-team-hint">
+                {showManualInput
+                  ? `This clue was picked by ${lockedTeam.name} — only they can wager on it.`
+                  : `Waiting for ${lockedTeam.name} to place their wager on their own device…`}
+              </div>
+            </div>
+          ) : (
+            <>
+              <div className="dd-step-label">Who's wagering?</div>
+              <div className="dd-team-list">
+                {sortedTeams.map((team) => (
+                  <button
+                    key={team.id}
+                    type="button"
+                    className={"dd-team-btn" + (wagerTeamId === team.id ? " is-selected" : "")}
+                    onClick={() => setWagerTeamId(team.id)}
+                  >
+                    {team.name} · ${team.score ?? 0}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
+
+          {lockedTeam && !showManualInput && (
+            <div className="dd-wager-block dd-wager-waiting">
+              <div className="dd-wager-waiting-spinner" aria-hidden="true" />
+              <button
+                type="button"
+                className="dd-cancel-btn"
+                onClick={() => setManualWagerOverride(true)}
+              >
+                {lockedTeam.name} can't submit? Enter wager manually
+              </button>
+            </div>
+          )}
+
+          {wagerTeamId && showManualInput && (
+            <div className="dd-wager-block">
+              <div className="dd-step-label">Wager (max ${maxWager})</div>
+              <input
+                type="number"
+                className="dd-wager-input"
+                min={minWager}
+                max={maxWager}
+                value={wagerInput}
+                autoFocus
+                onChange={(e) => setWagerInput(e.target.value)}
+                onWheel={(e) => e.target.blur()}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    if (onSetWager) onSetWager(clampedPreview);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                className="btn dd-confirm-btn"
+                onClick={() => {
+                  if (onSetWager) onSetWager(clampedPreview);
+                }}
+              >
+                Lock In Wager (${clampedPreview})
+              </button>
+            </div>
+          )}
+
+          <button className="dd-cancel-btn" onClick={() => requestClose(false)}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   // Identify winning team if a player buzzed in
   const winningTeam = buzzerWinner && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(buzzerWinner.id) : null;
@@ -484,14 +667,16 @@ export default function ClueModal({
             }}
           >
             <div className="clue-flip-front-category">{activeCat.name}</div>
-            <div className="clue-flip-front-value">${value}</div>
-            <div className="clue-flip-front-hint">Click to reveal</div>
+            <div className="clue-flip-front-value">${effectiveValue}</div>
+            <div className="clue-flip-front-hint">
+              {isDailyDouble ? `Daily Double — wager $${effectiveValue} — click to reveal` : "Click to reveal"}
+            </div>
           </div>
 
           <div className="clue-flip-face clue-flip-back">
             <div className="clue-cat-value">
               <div className="clue-modal-header">{activeCat.name}</div>
-              <div className="clue-value-big">${value}</div>
+              <div className="clue-value-big">${effectiveValue}</div>
             </div>
 
             <div className="clue-question">

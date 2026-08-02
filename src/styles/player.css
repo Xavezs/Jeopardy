@@ -1095,13 +1095,57 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   align-items: center;
   gap: 8px;
 }
+.pv-bgm-volume-icon {
+  flex: 0 0 auto;
+  display: flex;
+  color: var(--pv-gold);
+  filter: drop-shadow(0 0 4px rgba(240, 185, 66, 0.35));
+}
+
+/* Custom themed range slider — replaces the browser-default pill with a
+   gold/blue look consistent with the board's cells and buttons. Webkit
+   and Moz need separate rules since neither vendor lets you style the
+   other's pseudo-elements from a shared selector. */
 .pv-bgm-volume-row input[type="range"] {
   flex: 1;
-  accent-color: var(--pv-gold);
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: linear-gradient(
+    90deg,
+    var(--pv-gold) 0%,
+    var(--pv-gold) calc(var(--pv-vol, 50) * 1%),
+    var(--pv-cell) calc(var(--pv-vol, 50) * 1%),
+    var(--pv-cell) 100%
+  );
+  outline: none;
+  cursor: pointer;
 }
-.pv-bgm-volume-icon {
-  font-size: 14px;
-  flex: 0 0 auto;
+.pv-bgm-volume-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 6px rgba(240, 185, 66, 0.6);
+  cursor: pointer;
+  margin-top: 0;
+}
+.pv-bgm-volume-row input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  border: 1px solid rgba(255, 255, 255, 0.4);
+  box-shadow: 0 0 6px rgba(240, 185, 66, 0.6);
+  cursor: pointer;
+}
+.pv-bgm-volume-row input[type="range"]::-moz-range-track {
+  height: 4px;
+  border-radius: 999px;
+  background: transparent;
 }
 
 .pv-bgm-enable-btn {

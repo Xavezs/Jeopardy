@@ -58,7 +58,7 @@ export function useBgmSettings({ appConfirm, appAlert }) {
     }
   }
   function clearBgm() {
-    updateBgm({ fileRef: "", fileName: "" });
+    updateBgm({ fileRef: "", fileName: "", soundcloudUrl: "", source: "file" });
   }
   function setBgmVolume(volume) {
     updateBgm({ volume });
@@ -66,11 +66,18 @@ export function useBgmSettings({ appConfirm, appAlert }) {
   function toggleBgmLoop() {
     updateBgm({ loop: !bgmRef.current.loop });
   }
-  function setBgmSource(source) {
-    updateBgm({ source });
+  // Direct audio link (mp3/ogg/etc, played via a plain <audio> element —
+  // same code path as an uploaded file, just backed by a URL instead of a
+  // MediaStore ref). Clears any previously-loaded SoundCloud track so the
+  // two sources never both hang around in settings at once.
+  function setBgmDirectUrl(url, name) {
+    updateBgm({ source: "file", fileRef: url, fileName: name, soundcloudUrl: "" });
   }
-  function setBgmSpotifyUrl(url) {
-    updateBgm({ spotifyUrl: url });
+  // SoundCloud track/set link, played via their embedded Widget player
+  // (see lib/soundcloud.js) since SoundCloud doesn't offer direct file
+  // URLs. Clears any direct file/upload so only one source is active.
+  function setBgmSoundcloudUrl(url) {
+    updateBgm({ source: "soundcloud", soundcloudUrl: url, fileRef: "", fileName: "SoundCloud track" });
   }
 
   return {
@@ -80,7 +87,7 @@ export function useBgmSettings({ appConfirm, appAlert }) {
     clearBgm,
     setBgmVolume,
     toggleBgmLoop,
-    setBgmSource,
-    setBgmSpotifyUrl,
+    setBgmDirectUrl,
+    setBgmSoundcloudUrl,
   };
 }
