@@ -215,7 +215,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   // Standings appears — mirrors the same guarded effect on the host side
   // (FinalJeopardyBoard.jsx), each side plays its own copy locally since
   // rd.standingsRevealed is already synced state, no extra broadcast needed.
-  const standingsSfxFiredRef = useRef(false);
+  const standingsSfxFiredRef = useRef(rd.standingsRevealed);
   useEffect(() => {
     if (rd.standingsRevealed && !standingsSfxFiredRef.current) {
       standingsSfxFiredRef.current = true;
@@ -234,7 +234,11 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     );
   }
 
-  const maxWager = Math.max(myTeam.score, 0);
+  // Negative score: max wager is the size of the debt, so a correct
+  // answer brings the team exactly back to $0 instead of being stuck
+  // there for the rest of the game (see FinalJeopardyBoard's maxWager
+  // for the matching host-side logic).
+  const maxWager = myTeam.score < 0 ? Math.abs(myTeam.score) : myTeam.score;
   const myWagerLocked = rd.wagers?.[myTeamId] != null;
   const myAnswerLocked = rd.answers?.[myTeamId] != null;
 

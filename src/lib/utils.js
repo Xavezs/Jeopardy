@@ -41,6 +41,14 @@ export function youTubeEmbed(url) {
     return m ? `https://www.youtube.com/embed/${m[1]}` : null;
   }
 }
+// Native HTMLMediaElement.volume is linear (0-1), but human hearing is
+// logarithmic — so a slider at 10-20% still sounds loud. Curving the value
+// before writing it to the element approximates perceived loudness. Bump
+// the exponent higher if it's still too loud at low slider positions,
+// lower if it drops off too fast.
+export function toPerceptualVolume(sliderValue, exponent = 3) {
+  return Math.pow(sliderValue, exponent);
+}
 export function isDataUrl(s) {
   return typeof s === "string" && s.indexOf("data:") === 0;
 }

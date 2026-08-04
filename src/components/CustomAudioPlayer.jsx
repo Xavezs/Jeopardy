@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { toPerceptualVolume } from '../lib/utils';
 
 export default function CustomAudioPlayer({ 
   src, 
@@ -68,7 +69,7 @@ export default function CustomAudioPlayer({
   // Keep audio volume in sync with React state
   useEffect(() => {
     if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume;
+      audioRef.current.volume = isMuted ? 0 : toPerceptualVolume(volume);
     }
   }, [volume, isMuted]);
 

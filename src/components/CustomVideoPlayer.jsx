@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { toPerceptualVolume } from '../lib/utils';
 
 export default function CustomVideoPlayer({ 
   src, 
@@ -74,7 +75,7 @@ export default function CustomVideoPlayer({
   // Keep video volume in sync with React state
   useEffect(() => {
     if (videoRef.current) {
-      videoRef.current.volume = isMuted ? 0 : volume;
+      videoRef.current.volume = isMuted ? 0 : toPerceptualVolume(volume);
     }
   }, [volume, isMuted]);
 

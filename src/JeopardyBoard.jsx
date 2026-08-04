@@ -159,12 +159,15 @@ export default function JeopardyBoard({ onBack }) {
   // Resolves discordUserId -> team the same way judgeAnswer's buzz race
   // does (teams.resolveTeamForDiscordUser), then clamps the wager against
   // that team's current score before writing it in, same clamp
-  // FinalJeopardyBoard's own manual input applies.
+  // FinalJeopardyBoard's own manual input applies. A team already below
+  // $0 may wager up to the size of its debt (so a correct answer brings
+  // it exactly back to $0), rather than being floored to a $0 max.
   useFinalSync(roomCode, null, {
     onFinalWagerSubmitted: ({ discordUserId, amount }) => {
       const team = teams.resolveTeamForDiscordUser(discordUserId);
       if (!team) return;
-      const clamped = Math.max(0, Math.min(Math.max(team.score, 0), Number(amount) || 0));
+      const maxWager = team.score < 0 ? Math.abs(team.score) : team.score;
+      const clamped = Math.max(0, Math.min(maxWager, Number(amount) || 0));
       final.setWager(team.id, clamped);
     },
     onFinalAnswerSubmitted: ({ discordUserId, answer }) => {

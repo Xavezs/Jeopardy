@@ -128,7 +128,13 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
 export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustTeamScore, appConfirm, appAlert }) {
   const [localAnswerDraft, setLocalAnswerDraft] = useState({});
 
-  const maxWager = (team) => Math.max(team.score, 0);
+  // Teams at or above $0 wager up to their score, as usual. Teams already
+  // in the negative can wager up to the size of their debt — correct
+  // brings them exactly back to $0, incorrect digs them further in. This
+  // is the one case where "max wager" isn't just the score itself, since
+  // Math.max(negativeScore, 0) would otherwise floor everyone below $0 to
+  // a $0 max and strand them there for the rest of the game.
+  const maxWager = (team) => (team.score < 0 ? Math.abs(team.score) : team.score);
 
   // Final Jeopardy's clue fields commit live (no separate Save step, unlike
   // EditClueModal) — question/answer text already work this way via
@@ -201,7 +207,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
   // every re-render while that screen stays up. Resets when
   // standingsRevealed goes back to false (e.g. final.resetFinal), so a
   // second playthrough in the same session still gets the sting.
-  const standingsSfxFiredRef = useRef(false);
+  const standingsSfxFiredRef = useRef(rd.standingsRevealed);
   useEffect(() => {
     if (rd.standingsRevealed && !standingsSfxFiredRef.current) {
       standingsSfxFiredRef.current = true;
