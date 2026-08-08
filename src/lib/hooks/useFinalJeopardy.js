@@ -102,6 +102,28 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     if (!rd || rd.phase !== "reveal") return;
     if (rd.revealedTeamIds.includes(teamId)) return;
     rd.currentRevealTeamId = teamId;
+    rd.revealStage = "hidden";
+    touch();
+    persist();
+  }
+
+  // Staged reveal for the team currently on screen: wager first, then
+  // answer — host controls the pace, and since revealStage lives directly
+  // on rd (synced the same way answers/wagers/currentRevealTeamId already
+  // are), the player's screen advances through the same two stages in
+  // lockstep with no separate broadcast needed.
+  function revealWager() {
+    const rd = currentFinal();
+    if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamId) return;
+    rd.revealStage = "wager";
+    touch();
+    persist();
+  }
+
+  function revealAnswer() {
+    const rd = currentFinal();
+    if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamId) return;
+    rd.revealStage = "answer";
     touch();
     persist();
   }
@@ -126,6 +148,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     rd.results[team.id] = correct;
     rd.revealedTeamIds.push(team.id);
     rd.currentRevealTeamId = null;
+    rd.revealStage = "hidden";
     if (rd.revealedTeamIds.length >= rd.revealOrder.length) {
       rd.phase = "done";
       rd.standingsRevealed = false;
@@ -166,6 +189,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     rd.revealOrder = [];
     rd.revealedTeamIds = [];
     rd.currentRevealTeamId = null;
+    rd.revealStage = "hidden";
     rd.results = {};
     rd.standingsRevealed = false;
     touch();
@@ -183,6 +207,8 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     setAnswer,
     startReveal,
     selectRevealTeam,
+    revealWager,
+    revealAnswer,
     judgeTeam,
     revealStandings,
     setStandingsSfx,

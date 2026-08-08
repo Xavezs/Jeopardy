@@ -28,11 +28,27 @@ export default function CustomAudioPlayer({
   // the <audio> element stream the proxied URL directly.
   const [resolvedSrc, setResolvedSrc] = useState('');
   const [prefetching, setPrefetching] = useState(false);
+  // Surfaced in the UI so a stuck load reads as "still waiting" vs
+  // "actually failed" instead of an indefinite "Loading…".
+  const [prefetchError, setPrefetchError] = useState('');
+
+  // How long to wait for the proxy before giving up. The backend media
+  // proxy queues/throttles Google Drive requests (see media.js), so under
+  // load this can legitimately take a few seconds — 20s gives it room
+  // without leaving the player stuck forever if something's actually wrong.
+  const FETCH_TIMEOUT_MS = 20000;
+
+  async function fetchAsBlob(url, signal) {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.blob();
+  }
 
   useEffect(() => {
     let cancelled = false;
     let blobUrl = null;
     setResolvedSrc('');
+    setPrefetchError('');
 
     if (!src) return;
 
@@ -41,25 +57,51 @@ export default function CustomAudioPlayer({
       return;
     }
 
+    // Aborts the in-flight fetch (and its timeout) whenever src changes or
+    // this effect is torn down, instead of letting an abandoned request run
+    // to completion and occupy a slot in the backend's proxy queue for no
+    // reason.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
     setPrefetching(true);
     (async () => {
       try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const blob = await res.blob();
+        let blob;
+        try {
+          blob = await fetchAsBlob(src, controller.signal);
+        } catch (firstErr) {
+          // One retry for a plain network hiccup — but not if we were
+          // aborted (deliberate cancel/timeout) or the component unmounted,
+          // since retrying either of those would be pointless.
+          if (cancelled || controller.signal.aborted) throw firstErr;
+          blob = await fetchAsBlob(src, controller.signal);
+        }
         if (cancelled) return;
         blobUrl = URL.createObjectURL(blob);
         setResolvedSrc(blobUrl);
       } catch (err) {
-        console.error('[CustomAudioPlayer] blob prefetch failed, falling back to direct src:', err, src);
-        if (!cancelled) setResolvedSrc(src);
+        if (cancelled) return;
+        const timedOut = controller.signal.aborted;
+        const message = timedOut
+          ? 'Audio failed to load: timed out waiting for the server.'
+          : 'Audio failed to load: ' + (err?.message || 'unknown error');
+        console.error('[CustomAudioPlayer] blob prefetch failed:', err, 'src=' + src);
+        setPrefetchError(message);
+        // Only fall back to the raw src if we weren't the ones who aborted
+        // it — a timed-out/aborted request has nothing useful to fall back
+        // to, and a CSP-blocked URL will just fail again the same way.
+        if (!timedOut) setResolvedSrc(src);
       } finally {
         if (!cancelled) setPrefetching(false);
+        clearTimeout(timeoutId);
       }
     })();
 
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   }, [src]);
@@ -281,6 +323,11 @@ export default function CustomAudioPlayer({
       />
       {prefetching && (
         <span className="player-time" style={{ opacity: 0.7 }}>Loading…</span>
+      )}
+      {!prefetching && prefetchError && (
+        <span className="player-time" style={{ color: '#f87171' }} title={prefetchError}>
+          Failed to load
+        </span>
       )}
 
       {/* Play/Pause Button */}

@@ -367,6 +367,7 @@ export default function JeopardyBoard({ onBack }) {
               adjustTeamScore={teams.adjustTeamScore}
               appConfirm={appConfirm}
               appAlert={appAlert}
+              resolveDiscordMembersForTeam={teams.resolveDiscordMembersForTeam}
             />
           ) : (
             <ClueGrid
@@ -397,6 +398,7 @@ export default function JeopardyBoard({ onBack }) {
             />
           )}
 
+          {!(rd.type === "final" && rd.phase === "done" && rd.standingsRevealed) && (
           <div id="scoreboardSection">
             <div id="teamsWrap">
             {[...data.teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).map((team, rankIdx) => {
@@ -515,6 +517,7 @@ export default function JeopardyBoard({ onBack }) {
             )}
             </div>
           </div>
+          )}
 
           <div className="save-indicator">{session.saveMsg || "\u00A0"}</div>
 

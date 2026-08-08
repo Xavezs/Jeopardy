@@ -185,7 +185,7 @@ function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersBy
 // card (current team + their answer + wager) plus a running history of
 // already-judged teams (rd.results), so the reveal is a shared moment
 // instead of something only visible on the host's screen.
-function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFinalAnswer }) {
+function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFinalAnswer, discordMembersByTeam }) {
   const myTeamId = joinedTeam?.teamId;
   const myTeam = teams.find((t) => t.id === myTeamId);
   const [wagerInput, setWagerInput] = useState("");
@@ -224,6 +224,37 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
       standingsSfxFiredRef.current = false;
     }
   }, [rd.standingsRevealed]);
+
+  // Same turn-change and new-history-entry cues as the host's
+  // FinalJeopardyBoard — each side plays its own copy locally since
+  // currentRevealTeamId/revealedTeamIds are already synced state.
+  const prevRevealTeamIdRef = useRef(rd.currentRevealTeamId);
+  const [justChangedTeam, setJustChangedTeam] = useState(false);
+  useEffect(() => {
+    if (rd.currentRevealTeamId && rd.currentRevealTeamId !== prevRevealTeamIdRef.current) {
+      playCatRevealSfx();
+      setJustChangedTeam(true);
+      const t = setTimeout(() => setJustChangedTeam(false), 1200);
+      prevRevealTeamIdRef.current = rd.currentRevealTeamId;
+      return () => clearTimeout(t);
+    }
+    prevRevealTeamIdRef.current = rd.currentRevealTeamId;
+  }, [rd.currentRevealTeamId]);
+
+  const prevRevealedCountRef = useRef((rd.revealedTeamIds || []).length);
+  const [justAddedTeamId, setJustAddedTeamId] = useState(null);
+  useEffect(() => {
+    const ids = rd.revealedTeamIds || [];
+    if (ids.length > prevRevealedCountRef.current) {
+      const newestId = ids[ids.length - 1];
+      rd.results?.[newestId] ? playCorrectSfx() : playIncorrectSfx();
+      setJustAddedTeamId(newestId);
+      const t = setTimeout(() => setJustAddedTeamId(null), 1200);
+      prevRevealedCountRef.current = ids.length;
+      return () => clearTimeout(t);
+    }
+    prevRevealedCountRef.current = ids.length;
+  }, [rd.revealedTeamIds?.length]);
 
   if (!myTeam) {
     return (
@@ -337,31 +368,52 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     const revealTeam = rd.currentRevealTeamId ? teams.find((t) => t.id === rd.currentRevealTeamId) : null;
     const revealedTeams = (rd.revealedTeamIds || []).map((id) => teams.find((t) => t.id === id)).filter(Boolean);
     const isMyTurn = revealTeam?.id === myTeamId;
+    const stage = rd.revealStage || "hidden"; // "hidden" -> "wager" -> "answer"
     return (
       <div className="pv-final-panel">
         <div className="pv-final-category">{rd.category}</div>
         {revealTeam ? (
-          <div className={`pv-final-reveal-card${isMyTurn ? " is-my-turn" : ""}`}>
+          <div className={`pv-final-reveal-card${isMyTurn ? " is-my-turn" : ""}${justChangedTeam ? " is-flash" : ""}`}>
             <span className="pv-final-reveal-eyebrow">{isMyTurn ? "It's your team's turn!" : "Now Revealing"}</span>
+            <TeamAvatarStack team={revealTeam} />
             <span className="pv-final-reveal-team">{revealTeam.name}</span>
-            <p className="pv-final-reveal-answer">“{rd.answers[revealTeam.id] || "(no answer)"}”</p>
-            <span className="pv-final-reveal-wager">Wagered ${rd.wagers[revealTeam.id] || 0}</span>
+            {stage === "hidden" && (
+              <p className="pv-final-hint pulse">Waiting for the host to reveal the wager…</p>
+            )}
+            {stage !== "hidden" && (
+              <span className="pv-final-reveal-wager">Wagered ${rd.wagers[revealTeam.id] || 0}</span>
+            )}
+            {stage === "wager" && (
+              <p className="pv-final-hint pulse">Waiting for the host to reveal the answer…</p>
+            )}
+            {stage === "answer" && (
+              <p className="pv-final-reveal-answer">“{rd.answers[revealTeam.id] || "(no answer)"}”</p>
+            )}
           </div>
         ) : (
           <p className="pv-final-hint pulse">Waiting for the host to choose who's up next…</p>
         )}
         {revealedTeams.length > 0 && (
           <div className="pv-final-reveal-history">
-            {revealedTeams.map((t) => (
-              <div
-                className={`pv-final-reveal-history-row ${rd.results?.[t.id] ? "is-correct" : "is-incorrect"}`}
-                key={t.id}
-              >
-                <span className="pv-final-reveal-history-icon">{rd.results?.[t.id] ? "✓" : "✗"}</span>
-                <span className="pv-final-standing-name">{t.name}</span>
-                <span className="pv-final-standing-score">${t.score}</span>
-              </div>
-            ))}
+            {revealedTeams.map((t) => {
+              const members = (discordMembersByTeam?.[t.id] || []).slice(0, 1);
+              return (
+                <div
+                  className={`pv-final-reveal-history-row ${rd.results?.[t.id] ? "is-correct" : "is-incorrect"}${justAddedTeamId === t.id ? " is-flash" : ""}`}
+                  key={t.id}
+                >
+                  <span className="pv-final-reveal-history-icon">{rd.results?.[t.id] ? "✓" : "✗"}</span>
+                  {members.length > 0 ? (
+                    <img src={members[0].avatarUrl} alt="" className="pv-final-reveal-history-avatar" />
+                  ) : (
+                    <div className="pv-final-reveal-history-avatar-fallback">{(t.name || "?").trim().charAt(0).toUpperCase()}</div>
+                  )}
+                  <span className="pv-final-standing-name">{t.name}</span>
+                  <span className="pv-final-reveal-history-answer">“{rd.answers[t.id] || "(no answer)"}”</span>
+                  <span className="pv-final-standing-score">${t.score}</span>
+                </div>
+              );
+            })}
           </div>
         )}
       </div>
@@ -382,16 +434,89 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     );
   }
 
+  // Group teams by score so ties share a rank/column instead of one team
+  // arbitrarily landing a place above the other — same convention as the
+  // host's FinalJeopardyBoard podium (standard competition ranking: two
+  // teams tied for 1st both show "1", next distinct score is "3").
+  const sorted = [...teams].sort((a, b) => b.score - a.score);
+  const groups = [];
+  for (const team of sorted) {
+    const last = groups[groups.length - 1];
+    if (last && last.score === team.score) {
+      last.teams.push(team);
+    } else {
+      const rank = groups.reduce((n, g) => n + g.teams.length, 0) + 1;
+      groups.push({ rank, score: team.score, teams: [team] });
+    }
+  }
+  const podiumGroups = groups.filter((g) => g.rank <= 3);
+  const restGroups = groups.filter((g) => g.rank > 3);
+  const groupsByRank = {};
+  podiumGroups.forEach((g) => { groupsByRank[g.rank] = g; });
+  // Left-to-right: 2nd, 1st, 3rd — whichever of those rank groups actually
+  // exist (a tie for 1st can mean there's no "2nd" at all).
+  const podiumOrder = [2, 1, 3].map((r) => groupsByRank[r]).filter(Boolean);
+  const podiumHeightByRank = { 1: 190, 2: 148, 3: 116 };
+
+  function TeamAvatarStack({ team }) {
+    const members = (discordMembersByTeam?.[team.id] || []).slice(0, 3);
+    if (members.length === 0) {
+      return (
+        <div className="pv-podium-avatar-fallback">
+          {(team.name || "?").trim().charAt(0).toUpperCase()}
+        </div>
+      );
+    }
+    return (
+      <div className="pv-podium-avatar-stack">
+        {members.map((m) => (
+          <img
+            key={m.id}
+            src={m.avatarUrl}
+            alt=""
+            className={"pv-podium-avatar" + (m.speaking ? " is-speaking" : "")}
+          />
+        ))}
+      </div>
+    );
+  }
+
   return (
     <div className="pv-final-panel">
       <div className="pv-final-title">Final Standings</div>
-      {[...teams].sort((a, b) => b.score - a.score).map((t, i) => (
-        <div className={`pv-final-standing-row${i === 0 ? " is-winner" : ""}`} key={t.id}>
-          <span className="pv-final-standing-rank">{`${i + 1}`}</span>
-          <span className="pv-final-standing-name">{t.name}</span>
-          <span className="pv-final-standing-score">${t.score}</span>
+
+      <div className="pv-podium-row">
+        {podiumOrder.map((group) => (
+          <div key={group.rank} className={`pv-podium-col${group.rank === 1 ? " is-first" : ""}`}>
+            <div className="pv-podium-team-list">
+              {group.teams.map((team) => (
+                <div className="pv-podium-team-entry" key={team.id}>
+                  <TeamAvatarStack team={team} />
+                  <div className="pv-podium-name">{team.name}</div>
+                </div>
+              ))}
+            </div>
+            <div className="pv-podium-score">${group.score}</div>
+            <div className="pv-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
+              <div className="pv-podium-rank">{group.rank}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {restGroups.length > 0 && (
+        <div className="pv-final-rest-list">
+          {restGroups.map((group) =>
+            group.teams.map((t) => (
+              <div className="pv-final-standing-row" key={t.id}>
+                <span className="pv-final-standing-rank">{group.rank}</span>
+                <span className="pv-final-standing-name">{t.name}</span>
+                <span className="pv-final-standing-score">${t.score}</span>
+              </div>
+            ))
+          )}
         </div>
-      ))}
+      )}
     </div>
   );
 }
@@ -1304,6 +1429,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
           teams={boardData.teams}
           submitFinalWager={submitFinalWager}
           submitFinalAnswer={submitFinalAnswer}
+          discordMembersByTeam={discordMembersByTeam}
         />
       ) : (
         <div className="pv-board">

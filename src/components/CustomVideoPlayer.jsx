@@ -33,11 +33,27 @@ export default function CustomVideoPlayer({
   // to mishandle.
   const [resolvedSrc, setResolvedSrc] = useState('');
   const [prefetching, setPrefetching] = useState(false);
+  // Surfaced in the UI so a stuck load reads as "still waiting" vs
+  // "actually failed" instead of an indefinite loading spinner.
+  const [prefetchError, setPrefetchError] = useState('');
+
+  // How long to wait for the proxy before giving up. The backend media
+  // proxy queues/throttles Google Drive requests (see media.js), so under
+  // load this can legitimately take a few seconds — 20s gives it room
+  // without leaving the player stuck forever if something's actually wrong.
+  const FETCH_TIMEOUT_MS = 20000;
+
+  async function fetchAsBlob(url, signal) {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.blob();
+  }
 
   useEffect(() => {
     let cancelled = false;
     let blobUrl = null;
     setResolvedSrc('');
+    setPrefetchError('');
 
     if (!src) return;
 
@@ -47,25 +63,51 @@ export default function CustomVideoPlayer({
       return;
     }
 
+    // Aborts the in-flight fetch (and its timeout) whenever src changes or
+    // this effect is torn down, instead of letting an abandoned request run
+    // to completion and occupy a slot in the backend's proxy queue for no
+    // reason.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
     setPrefetching(true);
     (async () => {
       try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const blob = await res.blob();
+        let blob;
+        try {
+          blob = await fetchAsBlob(src, controller.signal);
+        } catch (firstErr) {
+          // One retry for a plain network hiccup — but not if we were
+          // aborted (deliberate cancel/timeout) or the component unmounted,
+          // since retrying either of those would be pointless.
+          if (cancelled || controller.signal.aborted) throw firstErr;
+          blob = await fetchAsBlob(src, controller.signal);
+        }
         if (cancelled) return;
         blobUrl = URL.createObjectURL(blob);
         setResolvedSrc(blobUrl);
       } catch (err) {
-        console.error('[CustomVideoPlayer] blob prefetch failed, falling back to direct src:', err, src);
-        if (!cancelled) setResolvedSrc(src); // last resort: let the browser try streaming it directly
+        if (cancelled) return;
+        const timedOut = controller.signal.aborted;
+        const message = timedOut
+          ? 'Video failed to load: timed out waiting for the server.'
+          : 'Video failed to load: ' + (err?.message || 'unknown error');
+        console.error('[CustomVideoPlayer] blob prefetch failed:', err, 'src=' + src);
+        setPrefetchError(message);
+        // Only fall back to the raw src if we weren't the ones who aborted
+        // it — a timed-out/aborted request has nothing useful to fall back
+        // to, and a CSP-blocked URL will just fail again the same way.
+        if (!timedOut) setResolvedSrc(src); // last resort: let the browser try streaming it directly
       } finally {
         if (!cancelled) setPrefetching(false);
+        clearTimeout(timeoutId);
       }
     })();
 
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
   }, [src]);
@@ -258,7 +300,12 @@ export default function CustomVideoPlayer({
             <span style={{ fontSize: 13, color: '#fff' }}>Loading video…</span>
           </div>
         )}
-        {!prefetching && !isPlaying && !(autoplayBlocked && disablePlayPause) && (
+        {!prefetching && prefetchError && (
+          <div className="player-video-overlay" style={{ flexDirection: 'column', gap: 8 }}>
+            <span style={{ fontSize: 13, color: '#f87171' }}>Failed to load video</span>
+          </div>
+        )}
+        {!prefetching && !prefetchError && !isPlaying && !(autoplayBlocked && disablePlayPause) && (
           <div className="player-video-overlay">
             <svg viewBox="0 0 24 24" className="player-icon play-arrow player-video-big-play">
               <path d="M8 5v14l11-7z" />
