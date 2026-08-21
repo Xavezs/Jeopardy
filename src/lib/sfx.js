@@ -43,6 +43,88 @@ export function withRunningCtx(ctx, schedule) {
 }
 
 /**
+ * Resolves once `audioEl` has enough data buffered to play through
+ * (`canplaythrough`), or after `timeoutMs`, whichever comes first — never
+ * rejects. Used to give a cold-cache play() rejection one genuine second
+ * chance instead of immediately assuming the file is broken.
+ */
+function waitForBuffered(audioEl, timeoutMs) {
+  return new Promise((resolve) => {
+    if (audioEl.readyState >= 3 /* HAVE_FUTURE_DATA */) {
+      resolve();
+      return;
+    }
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      audioEl.removeEventListener("canplaythrough", onReady);
+    };
+    const onReady = () => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    };
+    const timer = setTimeout(() => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      resolve();
+    }, timeoutMs);
+    audioEl.addEventListener("canplaythrough", onReady, { once: true });
+  });
+}
+
+/**
+ * Unlocks audio playback for this device/origin. Must be called
+ * synchronously inside a genuine user-gesture handler (click/submit/tap) —
+ * not inside a promise .then(), a setTimeout, or a websocket callback, or
+ * browsers won't count it as a gesture and it's a no-op.
+ *
+ * This matters specifically for players (as opposed to the host): the
+ * host's SFX calls all happen inside their own click handlers, so they get
+ * a free unlock every time. A player's SFX (correct/incorrect, category
+ * reveal, Daily Double, etc.) are fired from *incoming* websocket events —
+ * the host's actions, not the player's — so without ever unlocking audio
+ * on a real tap of their own, the browser (especially iOS Safari and
+ * Discord's in-app webview) keeps AudioContext suspended and rejects
+ * every audio.play() indefinitely, silently, forever. Call this once from
+ * the player's first genuine interaction (e.g. submitting "Join Game").
+ */
+export function unlockAudioPlayback() {
+  // WebAudio: resume the shared context and play a silent buffer through
+  // it. iOS Safari in particular only actually unlocks once a sound has
+  // been started from inside the gesture — resume() alone isn't always
+  // enough.
+  const ctx = getSharedAudioCtx();
+  if (ctx) {
+    if (ctx.state === "suspended") ctx.resume().catch(() => {});
+    try {
+      const buffer = ctx.createBuffer(1, 1, 22050);
+      const source = ctx.createBufferSource();
+      source.buffer = buffer;
+      source.connect(ctx.destination);
+      source.start(0);
+    } catch (e) {
+      /* best effort */
+    }
+  }
+
+  // HTMLMediaElement: a muted play() inside the gesture unlocks <audio>
+  // playback separately from WebAudio on some browsers/webviews.
+  try {
+    const el = new Audio();
+    el.muted = true;
+    const p = el.play();
+    if (p && typeof p.catch === "function") {
+      p.then(() => el.pause()).catch(() => {});
+    }
+  } catch (e) {
+    /* best effort */
+  }
+}
+
+/**
  * Build a player function for one sound effect.
  *
  * @param {string} url - Asset URL, e.g. `new URL("./assets/click.mp3", import.meta.url).href`
@@ -64,34 +146,46 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
 
   let lastPlayedAt = 0;
 
+  function attemptPlay(isRetry) {
+    try {
+      const node = audioTemplate.cloneNode(true);
+      node.volume = audioTemplate.volume;
+      const playPromise = node.play();
+      if (playPromise && typeof playPromise.catch === "function") {
+        playPromise.catch(() => {
+          if (isRetry) {
+            // Already gave it a second chance after buffering — this is a
+            // real, one-off playback failure (not just cold cache), so
+            // fall back for this call only. `fileAvailable` stays true;
+            // the next play() still gets a fair shot at the real audio.
+            fallbackTone();
+            return;
+          }
+          // First failure: most likely the file just hasn't buffered
+          // enough yet (cold cache / slow network right after the
+          // activity first opens). Wait briefly for it to catch up, then
+          // try once more before giving up on it for this play.
+          waitForBuffered(audioTemplate, 400).then(() => attemptPlay(true));
+        });
+      }
+    } catch (e) {
+      if (isRetry) {
+        fileAvailable = false; // real, reproducible failure — stop trying the file
+        fallbackTone();
+      } else {
+        waitForBuffered(audioTemplate, 400).then(() => attemptPlay(true));
+      }
+    }
+  }
+
   return function play() {
     const now = performance.now();
     if (now - lastPlayedAt < minGapMs) return;
     lastPlayedAt = now;
 
     if (audioTemplate && fileAvailable) {
-      try {
-        const node = audioTemplate.cloneNode(true);
-        node.volume = audioTemplate.volume;
-        const playPromise = node.play();
-        if (playPromise && typeof playPromise.catch === "function") {
-          playPromise.catch(() => {
-            // A cloned node failing to play (often just cold cache / slow
-            // network right after the activity first opens, not enough
-            // data buffered yet) is a ONE-OFF hiccup, not proof the file is
-            // missing. Don't touch `fileAvailable` here — that's reserved
-            // for the audioTemplate's own 'error' event below, which is
-            // the only reliable signal the file itself is broken. Just
-            // fall back for this single play so the next call still gets
-            // a fair shot at the real audio.
-            fallbackTone();
-          });
-        }
-        return;
-      } catch (e) {
-        fileAvailable = false;
-        // fall through to the synthesized tone below
-      }
+      attemptPlay(false);
+      return;
     }
     fallbackTone();
   };

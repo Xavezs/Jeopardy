@@ -306,15 +306,32 @@ const CACHE_TTL_MS = 15 * 60 * 1000; // 15 min — plenty for a single game sess
 // call at Google right away — during a cool-down window that just means
 // more requests hitting the wall, which is the opposite of what you want.
 // Caching failures for a short, separate (shorter than the success) TTL
-// means one bad patch of luck gets absorbed instead of cascading.
-const FAILURE_CACHE_TTL_MS = 30 * 1000; // 30s — short enough that a real fix (e.g. re-sharing a file) is picked up quickly
+// means one bad patch of luck gets absorbed instead of cascading. A
+// deliberate manual retry (force=1) skips this cache outright — see
+// freshCacheEntry — so a user-initiated retry always gets a real attempt
+// instead of reading back the same cached error.
+// Was 30s — shortened to 6s. With in-flight coalescing already absorbing
+// simultaneous first-time bursts (see block comment above), 30s meant a
+// client's own auto-retry (and often a following manual "Retry" click)
+// landed well inside the same window and just re-read the same stale
+// error without ever reaching Google again. 6s is still enough to stop a
+// tight retry loop from hammering the wall, but short enough that a
+// deliberate retry a few seconds later gets a real attempt.
+const FAILURE_CACHE_TTL_MS = 6 * 1000;
 
 const driveFileCache = new Map(); // fileId -> { buffer, contentType, ts } | { error, status, ts }
 const driveFileInFlight = new Map(); // fileId -> Promise
 const driveMetaCache = new Map(); // fileId -> { mimeType, name, ts } | { error, status, ts }
 const driveMetaInFlight = new Map(); // fileId -> Promise
 
-function freshCacheEntry(cache, fileId) {
+// `force=true` (from the client's manual Retry button, not the automatic
+// first retry) skips this cache read entirely, even if the entry is still
+// within its TTL — so a deliberate retry always reaches Google for a
+// fresh answer instead of being handed the same cached error (or, in the
+// success case, the same content — harmless, but force is meant to mean
+// "actually try again").
+function freshCacheEntry(cache, fileId, force) {
+  if (force) return null;
   const cached = cache.get(fileId);
   if (!cached) return null;
   const ttl = cached.error ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS;
@@ -322,21 +339,24 @@ function freshCacheEntry(cache, fileId) {
   return cached;
 }
 
-async function getDriveFile(fileId) {
-  const cached = freshCacheEntry(driveFileCache, fileId);
+async function getDriveFile(fileId, force) {
+  const cached = freshCacheEntry(driveFileCache, fileId, force);
   if (cached) {
-    if (cached.error) throw Object.assign(new Error(cached.error), { status: cached.status });
+    if (cached.error) {
+      console.warn(`[media] serving cached failure for ${fileId} (age ${Math.round((Date.now() - cached.ts) / 1000)}s) — not retrying Google`);
+      throw Object.assign(new Error(cached.error), { status: cached.status });
+    }
     return cached;
   }
 
-  if (driveFileInFlight.has(fileId)) return driveFileInFlight.get(fileId);
+  if (!force && driveFileInFlight.has(fileId)) return driveFileInFlight.get(fileId);
 
   const promise = (async () => {
     // Reuses getDriveMeta (cached/coalesced same as this function) to get
     // the real Content-Type, since curl's stdout for the alt=media request
     // is just raw bytes with no headers attached to inspect.
     try {
-      const meta = await getDriveMeta(fileId);
+      const meta = await getDriveMeta(fileId, force);
       const { url, headers } = await buildDriveRequest(fileId, 'alt=media');
       const buffer = await curlGetBuffer(url, headers);
       const entry = { buffer, contentType: meta.mimeType || 'application/octet-stream', ts: Date.now() };
@@ -365,14 +385,14 @@ async function getDriveFile(fileId) {
   }
 }
 
-async function getDriveMeta(fileId) {
-  const cached = freshCacheEntry(driveMetaCache, fileId);
+async function getDriveMeta(fileId, force) {
+  const cached = freshCacheEntry(driveMetaCache, fileId, force);
   if (cached) {
     if (cached.error) throw Object.assign(new Error(cached.error), { status: cached.status });
     return cached;
   }
 
-  if (driveMetaInFlight.has(fileId)) return driveMetaInFlight.get(fileId);
+  if (!force && driveMetaInFlight.has(fileId)) return driveMetaInFlight.get(fileId);
 
   const promise = (async () => {
     try {
@@ -408,8 +428,46 @@ async function getDriveMeta(fileId) {
   }
 }
 
-// GET /api/media/gdrive/:fileId
-// Proxies a Google Drive file so it loads same-origin — Drive isn't in the
+// Pulls a Drive fileId out of the various share-link shapes Google hands
+// out (`/file/d/<id>/...`, `?id=<id>`, `/d/<id>/...`). Intentionally
+// permissive/best-effort — this is only used for the prewarm below, so a
+// missed match just means no prewarm happens (falling back to the normal
+// on-demand fetch when a client actually requests it), never a hard error.
+function extractDriveFileId(url) {
+  if (typeof url !== 'string') return null;
+  const patterns = [
+    /\/file\/d\/([a-zA-Z0-9_-]+)/,
+    /[?&]id=([a-zA-Z0-9_-]+)/,
+    /\/d\/([a-zA-Z0-9_-]+)/,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// Fire-and-forget: kicks off the same cached/coalesced/queued fetch the
+// gdrive proxy route uses, but BEFORE any client actually requests the
+// file — called from bot-server.js's selectClue handler the moment a clue
+// is picked, so the Drive round-trip happens while the host's ClueModal
+// is still opening instead of after every player's <video>/<audio> tag
+// requests it. By the time players actually hit /api/media/gdrive/:fileId,
+// getDriveFile's own cache (see driveFileCache above) serves them straight
+// from memory. Errors are swallowed here on purpose — the real
+// /api/media/gdrive/:fileId route still runs (and still surfaces a proper
+// error to the client) if this prewarm attempt fails or a fileId can't be
+// extracted at all; this is purely a latency optimization, never a
+// dependency.
+function prewarmDriveMedia(url) {
+  const fileId = extractDriveFileId(url);
+  if (!fileId) return;
+  getDriveFile(fileId).catch((e) => {
+    console.warn('[media] prewarm failed for', fileId, '-', e.message);
+  });
+}
+
+
 // CSP allowlist, and the actual file bytes get served from a
 // googleusercontent.com redirect target that isn't fixed per-file, so a
 // static URL Mapping can't just point at it directly.
@@ -442,6 +500,13 @@ async function getDriveMeta(fileId) {
 // in this file — anyone who can open the board can load its attachments.
 router.get('/gdrive/:fileId', async (req, res) => {
   const { fileId } = req.params;
+  // ?force=1 comes from the client's manual "Retry" button (see
+  // CustomVideoPlayer/CustomAudioPlayer/ClueMediaImage) — it means skip
+  // driveFileCache entirely, even a fresh negative-cache entry, and
+  // actually try Google again. The client's own automatic first retry
+  // does NOT set this, so a normal transient blip still benefits from
+  // in-flight coalescing instead of doubling up requests to Google.
+  const force = req.query.force === '1';
   if (!/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return res.status(400).send('Invalid file id');
   }
@@ -451,7 +516,7 @@ router.get('/gdrive/:fileId', async (req, res) => {
   }
 
   try {
-    const { buffer, contentType } = await getDriveFile(fileId);
+    const { buffer, contentType } = await getDriveFile(fileId, force);
     res.set('Content-Type', contentType);
     res.set('Content-Length', String(buffer.length));
     res.send(buffer);
@@ -472,6 +537,7 @@ router.get('/gdrive/:fileId', async (req, res) => {
 // actually trying the audio player).
 router.get('/gdrive/:fileId/meta', async (req, res) => {
   const { fileId } = req.params;
+  const force = req.query.force === '1';
   if (!/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return res.status(400).json({ error: 'Invalid file id' });
   }
@@ -480,7 +546,7 @@ router.get('/gdrive/:fileId/meta', async (req, res) => {
   }
 
   try {
-    const { mimeType, name } = await getDriveMeta(fileId);
+    const { mimeType, name } = await getDriveMeta(fileId, force);
     res.json({ mimeType, name });
   } catch (err) {
     console.error('[media] gdrive meta proxy failed:', err);
@@ -553,6 +619,7 @@ async function deleteMediaForBoardData(data) {
 
 module.exports = router;
 module.exports.deleteMediaForBoardData = deleteMediaForBoardData;
+module.exports.prewarmDriveMedia = prewarmDriveMedia;
 
 // Copies every Supabase Storage file attached to a board's clue data into
 // new keys namespaced under `newOwnerId`, and rewrites the clue refs to

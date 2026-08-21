@@ -15,22 +15,9 @@ export default function MediaField({ label, type, accept, placeholder, value, on
     handleFiles(e.dataTransfer.files);
   };
 
-  const acceptLabel = (accept || "")
-    .split(",")
-    .map((a) => a.trim().replace(/^\./, "").replace(/^.*\//, ""))
-    .filter(Boolean)
-    .join(", ");
-
   return (
     <div className="form-row">
       <label>{label}</label>
-      <input
-        type="url"
-        placeholder={placeholder}
-        disabled={value.mode === "file"}
-        value={value.mode === "file" ? "" : value.url}
-        onChange={(e) => onUrlChange(e.target.value)}
-      />
 
       {value.mode === "file" && value.fileName ? (
         <div className="dropzone-file-chip">
@@ -50,25 +37,35 @@ export default function MediaField({ label, type, accept, placeholder, value, on
         </div>
       ) : (
         <div
-          className={`dropzone${isDragging ? " dragging" : ""}`}
+          className={`media-input-row${isDragging ? " dragging" : ""}`}
           onDragOver={(e) => {
             e.preventDefault();
             setIsDragging(true);
           }}
           onDragLeave={() => setIsDragging(false)}
           onDrop={handleDrop}
-          onClick={() => fileInputRef.current && fileInputRef.current.click()}
         >
+          <input
+            type="url"
+            placeholder={placeholder}
+            value={value.url}
+            onChange={(e) => onUrlChange(e.target.value)}
+          />
+          <button
+            type="button"
+            className="media-upload-btn"
+            title={`Upload ${type || "a file"}`}
+            onClick={() => fileInputRef.current && fileInputRef.current.click()}
+          >
+            📎
+          </button>
           <input
             ref={fileInputRef}
             type="file"
             accept={accept}
-            className="dropzone-input"
+            className="media-file-input-hidden"
             onChange={(e) => handleFiles(e.target.files)}
           />
-          <div className="dropzone-text">
-            Drop or upload {type ? `your ${type}` : "an image/video/audio file"} here
-          </div>
         </div>
       )}
 

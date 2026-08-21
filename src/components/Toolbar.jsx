@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useState } from "react";
 import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
 
 // Manual "who gets to pick next" override. Only players with a resolved
@@ -57,10 +57,50 @@ export default function Toolbar({
   onRandomizeDailyDoubles,
   ddBuzzerEnabled,
   onToggleDdBuzzerEnabled,
+  ddMinWagerZero,
+  onToggleDdMinWagerZero,
+  ddWagerBasisPlayerScore,
+  onToggleDdWagerBasisPlayerScore,
 }) {
+  const [copyState, setCopyState] = useState("idle"); // "idle" | "copied" | "error"
+
   async function copyRoomCode() {
     if (!roomCode) return;
-    await navigator.clipboard?.writeText(roomCode);
+
+    let success = false;
+
+    // Preferred path: async Clipboard API. This can silently be missing or
+    // throw inside the Discord Activity iframe (no clipboard-write
+    // permission), so we can't rely on it alone.
+    try {
+      if (navigator.clipboard?.writeText) {
+        await navigator.clipboard.writeText(roomCode);
+        success = true;
+      }
+    } catch {
+      success = false;
+    }
+
+    // Fallback: hidden textarea + execCommand, works in more restrictive
+    // embedded contexts than the async Clipboard API.
+    if (!success) {
+      try {
+        const textarea = document.createElement("textarea");
+        textarea.value = roomCode;
+        textarea.style.position = "fixed";
+        textarea.style.opacity = "0";
+        document.body.appendChild(textarea);
+        textarea.focus();
+        textarea.select();
+        success = document.execCommand("copy");
+        document.body.removeChild(textarea);
+      } catch {
+        success = false;
+      }
+    }
+
+    setCopyState(success ? "copied" : "error");
+    setTimeout(() => setCopyState("idle"), 1500);
   }
 
   return (
@@ -97,7 +137,9 @@ export default function Toolbar({
             aria-label="Room code"
             className="room-code-input"
           />
-          <button className="btn" onClick={copyRoomCode} disabled={!roomCode}>Copy</button>
+          <button className="btn" onClick={copyRoomCode} disabled={!roomCode}>
+            {copyState === "copied" ? "Copied!" : copyState === "error" ? "Couldn't copy" : "Copy"}
+          </button>
         </div>
 
         <ControlAssign
@@ -132,6 +174,22 @@ export default function Toolbar({
             <label title="Off (default): only the wagering team may answer a Daily Double, no buzzer race. On: the buzzer opens for everyone same as a normal clue.">
               <input type="checkbox" checked={!!ddBuzzerEnabled} onChange={onToggleDdBuzzerEnabled} />
               Buzzer on Daily Doubles
+            </label>
+          )}
+          {onToggleDdMinWagerZero && (
+            <label title="Off (default): minimum Daily Double wager equals the clue's own value (range: value–2x). On: minimum wager is $0 (range: 0–2x).">
+              <input type="checkbox" checked={!!ddMinWagerZero} onChange={onToggleDdMinWagerZero} />
+              Allow $0 min wager
+            </label>
+          )}
+          {onToggleDdWagerBasisPlayerScore && (
+            <label title="Off (default): max Daily Double wager is 2x the clue's own value. On: max wager is the wagering team's own current score. Combines with 'Allow $0 min wager' above for 4 total wager-range options.">
+              <input
+                type="checkbox"
+                checked={!!ddWagerBasisPlayerScore}
+                onChange={onToggleDdWagerBasisPlayerScore}
+              />
+              Max wager = team score
             </label>
           )}
         </div>

@@ -42,13 +42,21 @@ export default function YoutubePlayer({
     loadYoutubeIframeApi()
       .then((YT) => {
         if (destroyed) return;
+        // Direct the YT.Player constructor to load the iframe directly from
+        // https://www.youtube.com. Proxying the entire iframe document under our same-origin
+        // domain (via /youtube-embed) breaks YouTube's root-relative asset requests
+        // (like /s/player/...), causing 404s and a black video player.
+        // As long as youtube.com is configured as an allowed frame origin in the Discord
+        // Developer Portal, Discord's CSP will permit framing it directly.
         playerRef.current = new YT.Player(elementIdRef.current, {
           videoId,
+          host: "https://www.youtube.com",
           playerVars: {
             rel: 0,
             playsinline: 1,
             controls: 0, // we render our own controls, same as CustomVideoPlayer
             modestbranding: 1,
+            origin: window.location.origin,
           },
           events: {
             onReady: (e) => {

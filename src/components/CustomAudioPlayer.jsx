@@ -31,17 +31,42 @@ export default function CustomAudioPlayer({
   // Surfaced in the UI so a stuck load reads as "still waiting" vs
   // "actually failed" instead of an indefinite "Loading…".
   const [prefetchError, setPrefetchError] = useState('');
+  // Bumped by the manual "Retry" button. >0 means this run should bypass
+  // the browser's HTTP cache — the automatic retry above only helps with
+  // a transient network blip, but if the clue's media file was replaced
+  // at the same URL, the browser may have a stale cached response that a
+  // plain re-fetch would just hand back again.
+  const [manualRetryCount, setManualRetryCount] = useState(0);
 
   // How long to wait for the proxy before giving up. The backend media
   // proxy queues/throttles Google Drive requests (see media.js), so under
   // load this can legitimately take a few seconds — 20s gives it room
   // without leaving the player stuck forever if something's actually wrong.
-  const FETCH_TIMEOUT_MS = 20000;
+  const FETCH_TIMEOUT_MS = 45000;
 
-  async function fetchAsBlob(url, signal) {
-    const res = await fetch(url, { signal });
+  async function fetchAsBlob(url, signal, bypassCache) {
+    const res = await fetch(url, { signal, cache: bypassCache ? 'no-store' : 'default' });
     if (!res.ok) throw new Error('HTTP ' + res.status);
     return res.blob();
+  }
+
+  // A manual Retry click bypasses the browser's HTTP cache (bypassCache
+  // above) but the server also holds its own short-lived negative cache
+  // for failed Google Drive fetches (see media.js) — without this, a
+  // retry within that window just gets served the same cached error back
+  // instantly, without the server ever trying Google again. Appending
+  // force=1 tells the server to skip that cache and make a real attempt.
+  // Only used for the manual retry, never the automatic first retry below,
+  // so a normal transient blip still benefits from the server's in-flight
+  // request coalescing instead of doubling up load on Google.
+  function withForceParam(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      u.searchParams.set('force', '1');
+      return u.toString();
+    } catch {
+      return url + (url.includes('?') ? '&' : '?') + 'force=1';
+    }
   }
 
   useEffect(() => {
@@ -57,6 +82,9 @@ export default function CustomAudioPlayer({
       return;
     }
 
+    const bypassCache = manualRetryCount > 0;
+    const fetchUrl = bypassCache ? withForceParam(src) : src;
+
     // Aborts the in-flight fetch (and its timeout) whenever src changes or
     // this effect is torn down, instead of letting an abandoned request run
     // to completion and occupy a slot in the backend's proxy queue for no
@@ -69,13 +97,26 @@ export default function CustomAudioPlayer({
       try {
         let blob;
         try {
-          blob = await fetchAsBlob(src, controller.signal);
+          blob = await fetchAsBlob(fetchUrl, controller.signal, bypassCache);
         } catch (firstErr) {
           // One retry for a plain network hiccup — but not if we were
           // aborted (deliberate cancel/timeout) or the component unmounted,
           // since retrying either of those would be pointless.
           if (cancelled || controller.signal.aborted) throw firstErr;
-          blob = await fetchAsBlob(src, controller.signal);
+          // Brief pause before retrying: firing again instantly tends to
+          // land on the exact same failure (server-side negative cache,
+          // or a Google rate-limit wall that hasn't cleared yet) — a short
+          // wait gives that window a chance to pass. Cancelled early if
+          // the component unmounts or the fetch times out while waiting.
+          await new Promise((resolve) => {
+            const t = setTimeout(resolve, 1500);
+            controller.signal.addEventListener('abort', () => {
+              clearTimeout(t);
+              resolve();
+            });
+          });
+          if (cancelled || controller.signal.aborted) throw firstErr;
+          blob = await fetchAsBlob(fetchUrl, controller.signal, bypassCache);
         }
         if (cancelled) return;
         blobUrl = URL.createObjectURL(blob);
@@ -104,7 +145,7 @@ export default function CustomAudioPlayer({
       clearTimeout(timeoutId);
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
-  }, [src]);
+  }, [src, manualRetryCount]);
 
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
 
@@ -325,8 +366,15 @@ export default function CustomAudioPlayer({
         <span className="player-time" style={{ opacity: 0.7 }}>Loading…</span>
       )}
       {!prefetching && prefetchError && (
-        <span className="player-time" style={{ color: '#f87171' }} title={prefetchError}>
+        <span className="clue-media-status is-error is-inline" title={prefetchError}>
           Failed to load
+          <button
+            type="button"
+            className="clue-media-retry-btn"
+            onClick={() => setManualRetryCount((n) => n + 1)}
+          >
+            Retry
+          </button>
         </span>
       )}
 

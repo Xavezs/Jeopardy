@@ -11,6 +11,45 @@ const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID;
 // frame_id first, and wrap the construction itself in try/catch too.
 const hasFrameId = new URLSearchParams(window.location.search).has('frame_id');
 
+// DEV-ONLY TESTING AID: lets you open several plain browser tabs (no real
+// Discord accounts needed) and have each one act as a distinct player, to
+// load-test things like buzzer ordering or N-players-reveal-media-at-once
+// without wrangling multiple Discord accounts across PTB/Canary/Stable.
+//
+// Gated on BOTH `!hasFrameId` and an explicit `?fakePlayer=` param, so this
+// can never fire inside a real Activity (frame_id is always present there)
+// — it only ever applies to someone deliberately opening a plain browser
+// tab with this flag set.
+//
+// Usage: http://localhost:5173/?fakePlayer=1&name=Player1
+// The id is stored in sessionStorage (not localStorage) so it survives a
+// refresh within the SAME tab (useful for testing reconnect/grace-period
+// behavior) but a genuinely new tab/window gets its own fresh identity.
+function getFakePlayerIdentity() {
+  const params = new URLSearchParams(window.location.search);
+  if (hasFrameId || !params.has('fakePlayer')) return null;
+
+  const storageKey = 'jeopardy_fake_player_identity';
+  const cached = sessionStorage.getItem(storageKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch {
+      // fall through and regenerate below
+    }
+  }
+
+  const name = params.get('name') || `Test Player ${Math.floor(Math.random() * 1000)}`;
+  const identity = {
+    id: `fake-${Math.random().toString(36).slice(2, 10)}`,
+    username: name,
+    avatarUrl: null,
+  };
+  sessionStorage.setItem(storageKey, JSON.stringify(identity));
+  console.warn('[discordSdk] Using FAKE player identity for testing:', identity);
+  return identity;
+}
+
 function createSdkInstance() {
   if (!(clientId && hasFrameId)) return null;
   try {
@@ -244,6 +283,12 @@ let identityPromise = null;
 
 export function getDiscordIdentity() {
   if (identityPromise) return identityPromise;
+
+  const fakeIdentity = getFakePlayerIdentity();
+  if (fakeIdentity) {
+    identityPromise = Promise.resolve(fakeIdentity);
+    return identityPromise;
+  }
 
   identityPromise = (async () => {
     const code = await setupDiscordSdk();

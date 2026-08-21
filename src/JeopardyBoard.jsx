@@ -252,6 +252,35 @@ export default function JeopardyBoard({ onBack }) {
     persistence.persist();
   }
 
+  // Off by default (undefined -> !undefined -> true on first toggle, same
+  // as toggleDdBuzzerEnabled) — preserves the original house rule (min
+  // wager = the clue's own value, so the range is value..2x) for every
+  // board that hasn't explicitly opted into allowing a $0 minimum. When
+  // on, teams can wager anywhere from $0 up to 2x the clue's value.
+  function toggleDdMinWagerZero() {
+    const d = session.data;
+    d.settings.ddMinWagerZero = !d.settings.ddMinWagerZero;
+    session.touch();
+    persistence.persist();
+  }
+
+  // Off by default (undefined -> !undefined -> true on first toggle, same
+  // pattern as the two toggles above) — preserves the original house rule
+  // (max wager = 2x the clue's own value) for every board that hasn't
+  // explicitly opted in. When on, the max wager is based on the wagering
+  // team's own current score instead of the clue's value — combined with
+  // ddMinWagerZero this gives 4 total wager-range combinations:
+  //   min 0        + max card value  (original default)
+  //   min face val + max card value  (ddMinWagerZero off, this off)
+  //   min 0        + max team score  (ddMinWagerZero on,  this on)
+  //   min face val + max team score  (ddMinWagerZero off, this on)
+  function toggleDdWagerBasisPlayerScore() {
+    const d = session.data;
+    d.settings.ddWagerBasisPlayerScore = !d.settings.ddWagerBasisPlayerScore;
+    session.touch();
+    persistence.persist();
+  }
+
   function setGlobalTimerDuration(rawValue) {
     const d = session.data;
     const parsed = parseInt(rawValue, 10);
@@ -355,6 +384,10 @@ export default function JeopardyBoard({ onBack }) {
               onRandomizeDailyDoubles={board.randomizeDailyDoubles}
               ddBuzzerEnabled={data.settings.ddBuzzerEnabled}
               onToggleDdBuzzerEnabled={toggleDdBuzzerEnabled}
+              ddMinWagerZero={data.settings.ddMinWagerZero}
+              onToggleDdMinWagerZero={toggleDdMinWagerZero}
+              ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
+              onToggleDdWagerBasisPlayerScore={toggleDdWagerBasisPlayerScore}
             />
           </div>
 
@@ -553,6 +586,8 @@ export default function JeopardyBoard({ onBack }) {
               dailyDoubleWager={dailyDoubleWager}
               onSetWager={setDailyDoubleWager}
               controlDiscordUserId={controlDiscordUserId}
+              ddMinWagerZero={data.settings.ddMinWagerZero}
+              ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
             />
           )}
 

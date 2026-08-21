@@ -9,8 +9,9 @@ import { useFinalSync } from "../lib/hooks/useFinalSync";
 import { useSpeakingState } from "../lib/hooks/useSpeakingState";
 import { useDiscordMembers } from "../lib/hooks/useDiscordMembers";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
-import { youTubeEmbed } from "../lib/utils";
+import { isYoutubeUrl } from "../lib/youtube";
 import { getDiscordIdentity, activityChannelId } from "../discordSdk";
+import { unlockAudioPlayback } from "../lib/sfx";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
 import TeamCard from "./TeamCard";
 import {
@@ -22,7 +23,30 @@ import {
 } from "../lib/boardSfx";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
+import YoutubePlayer from "./YoutubePlayer";
 import PlayerBgmWidget from "./PlayerBgmWidget";
+
+/**
+ * Attaches a ONE-TIME listener for the player's very first real gesture
+ * anywhere on the page (pointerdown covers mouse/touch/pen) and unlocks
+ * audio playback then, removing itself immediately after.
+ *
+ * This does NOT rely on the "Join Game" form actually being submitted —
+ * on a returning player, `me` restores straight from localStorage (see
+ * the effect above) and the join form is skipped entirely, so hooking
+ * unlock only into handleJoin misses every returning player. This one
+ * fires regardless of which screen the player lands on.
+ */
+function useUnlockAudioOnFirstGesture() {
+  useEffect(() => {
+    const unlock = () => {
+      unlockAudioPlayback();
+      window.removeEventListener("pointerdown", unlock, true);
+    };
+    window.addEventListener("pointerdown", unlock, true);
+    return () => window.removeEventListener("pointerdown", unlock, true);
+  }, []);
+}
 
 function readRoomCodeFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -66,10 +90,36 @@ function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, myPosition, idl
 // imported into this file — see the top of PlayerView.jsx) so the styling
 // matches the host's own Daily Double screen instead of inventing a
 // second, slightly-different-looking treatment.
-function DailyDoubleFront({ value, wager, isSpecificPicker, wagerInput, setWagerInput, wagerJustSubmitted, onSubmitWager }) {
+function DailyDoubleFront({
+  value,
+  wager,
+  isSpecificPicker,
+  wagerInput,
+  setWagerInput,
+  wagerJustSubmitted,
+  onSubmitWager,
+  minWagerZero,
+  wagerBasisPlayerScore,
+  myTeamScore,
+}) {
   const wagerLocked = wager != null;
-  const maxWager = value * 2;
-  const minWager = value
+  // House-rule toggle synced from the host (boardData.settings.
+  // ddWagerBasisPlayerScore — see JeopardyBoard.jsx and the matching logic
+  // in ClueModal.jsx's wager screen, which this mirrors). Off (default):
+  // max wager = 2x the clue's own value. On: max wager = this player's own
+  // team's current score (a team in debt can wager up to the size of its
+  // debt, same as Final Jeopardy, rather than being floored to $0).
+  const rawMaxWager = wagerBasisPlayerScore
+    ? myTeamScore < 0
+      ? Math.abs(myTeamScore)
+      : myTeamScore
+    : value * 2;
+  const maxWager = Math.max(0, rawMaxWager);
+  // House-rule toggle synced from the host (boardData.settings.ddMinWagerZero
+  // — see JeopardyBoard.jsx). Off (default): min wager = the clue's own
+  // value. On: min wager = $0. Clamped to maxWager so a team with less
+  // headroom than the clue's face value still gets a valid range.
+  const minWager = Math.min(minWagerZero ? 0 : value, maxWager);
   const parsed = parseInt(wagerInput, 10);
   const clamped = isNaN(parsed) ? minWager : Math.max(minWager, Math.min(parsed, maxWager));
 
@@ -84,7 +134,7 @@ function DailyDoubleFront({ value, wager, isSpecificPicker, wagerInput, setWager
           <div className="pv-clue-front-hint">Wager submitted — waiting for the host…</div>
         ) : (
           <div className="pv-dd-wager-form" onClick={(e) => e.stopPropagation()}>
-            <div className="dd-step-label">Your wager (max ${maxWager})</div>
+            <div className="dd-step-label">Your wager (${minWager}–${maxWager})</div>
             <input
               type="number"
               className="dd-wager-input"
@@ -522,6 +572,12 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
 }
 
 export default function PlayerView() {
+  // Unlocks audio on the player's very first tap/click anywhere, whether
+  // they land on the join form or skip straight to the board via a
+  // cached identity — see the hook's own comment for why this can't just
+  // live inside handleJoin.
+  useUnlockAudioOnFirstGesture();
+
   // Discord Activities run inside an iframe embedded in Discord's own UI.
   // On first load, keyboard focus sits on Discord's parent frame, not this
   // iframe — so keydown events (like the buzzer's spacebar shortcut) never
@@ -617,6 +673,12 @@ export default function PlayerView() {
 
   function handleJoin(e) {
     e.preventDefault();
+    // Must run synchronously inside this gesture, before any async work
+    // below — this is the player's first real tap, and it's what lets
+    // every later SFX (triggered by incoming host events, not the
+    // player's own clicks) actually play instead of being silently
+    // blocked by the browser's autoplay policy.
+    unlockAudioPlayback();
     const code = roomCode.trim().toUpperCase();
     // Blank name -> fall back to the resolved Discord username, if any.
     const name = nameInput.trim() || discordUser?.username || "";
@@ -770,6 +832,11 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   // instead (see ClueModal.jsx), and no player's device should show a
   // wager form in that case.
   const isSpecificPicker = !!controlDiscordUserId && controlDiscordUserId !== OPEN_CONTROL && controlDiscordUserId === buzzerMe.id;
+
+  // This player's own current score — only needed for the "max wager =
+  // team score" Daily Double house rule (see DailyDoubleFront), computed
+  // here rather than inline at the call site since it needs boardData.teams.
+  const myTeam = boardData?.teams?.find((t) => t.id === joinedTeam?.teamId);
 
   const { submitWager } = useWagerSync(roomCode, { discordUserId: buzzerMe.id });
 
@@ -1207,7 +1274,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
               <p>
                 Couldn't find room {roomCode}. The code may be wrong, or the host hasn't opened this board yet.
               </p>
-              <button className="pv-btn pv-btn-primary" onClick={handleLeave}>
+              <button className="btn gold" onClick={handleLeave}>
                 Try a different code
               </button>
             </>
@@ -1228,7 +1295,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       <div className="pv-root pv-center">
         <div className="pv-status">
           <p>Waiting for round configuration...</p>
-          <button className="pv-btn pv-btn-primary" onClick={handleLeave}>
+          <button className="btn gold" onClick={handleLeave}>
             Leave
           </button>
         </div>
@@ -1251,7 +1318,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       </div>
       <div className="pv-room-bar">
         Room {roomCode} · {me.username}
-        <button className="pv-leave" onClick={handleLeave} title="Leave and return to page selection">
+        <button className="btn" onClick={handleLeave} title="Leave and return to page selection">
           Leave
         </button>
       </div>
@@ -1274,7 +1341,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
           mid-clue, without waiting for the clue to close first. */}
       {openClue && (
         <button
-          className="pv-leave pv-leave-floating"
+          className="btn pv-leave-floating"
           onClick={handleLeave}
           title="Leave and return to page selection"
         >
@@ -1303,6 +1370,9 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                     wagerInput={wagerInput}
                     setWagerInput={setWagerInput}
                     wagerJustSubmitted={wagerJustSubmitted}
+                    minWagerZero={boardData.settings?.ddMinWagerZero}
+                    wagerBasisPlayerScore={boardData.settings?.ddWagerBasisPlayerScore}
+                    myTeamScore={myTeam?.score ?? 0}
                     onSubmitWager={(amount) => {
                       submitWager(amount);
                       setWagerJustSubmitted(true);
@@ -1329,12 +1399,13 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                       <img src={mediaUrl} alt="" onError={() => setRenderAs("video")} />
                     )}
                     {renderAs === "video" &&
-                      (youTubeEmbed(mediaUrl) ? (
-                        <iframe
-                          src={youTubeEmbed(mediaUrl)}
-                          allow="autoplay; encrypted-media; picture-in-picture"
-                          allowFullScreen
-                          title="clue-video"
+                      (isYoutubeUrl(mediaUrl) ? (
+                        <YoutubePlayer
+                          src={mediaUrl}
+                          disablePlayPause={true}
+                          disableSeeking={true}
+                          isPlaying={openClue.isPlaying}
+                          currentTime={openClue.currentTime}
                         />
                       ) : (
                         <CustomVideoPlayer 
@@ -1367,12 +1438,13 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                           <img src={answerMediaUrl} alt="" onError={() => setAnswerRenderAs("video")} />
                         )}
                         {answerRenderAs === "video" &&
-                          (youTubeEmbed(answerMediaUrl) ? (
-                            <iframe
-                              src={youTubeEmbed(answerMediaUrl)}
-                              allow="autoplay; encrypted-media; picture-in-picture"
-                              allowFullScreen
-                              title="clue-answer-video"
+                          (isYoutubeUrl(answerMediaUrl) ? (
+                            <YoutubePlayer
+                              src={answerMediaUrl}
+                              disablePlayPause={true}
+                              disableSeeking={true}
+                              isPlaying={openClue.isPlaying}
+                              currentTime={openClue.currentTime}
                             />
                           ) : (
                             <CustomVideoPlayer 

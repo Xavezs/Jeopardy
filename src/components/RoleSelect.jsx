@@ -37,7 +37,7 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
         {/* Player panel */}
         <div className="role-select-panel player">
           <div className="role-select-player-header">
-            <h2 className="role-select-panel-title">Join as Player</h2>
+            <h2 className="role-select-panel-title">Join as Player / Team</h2>
           </div>
 
           <form
@@ -51,7 +51,7 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
           >
             <div className="role-select-input-row">
               <div className="role-select-field">
-                <label>Team Name</label>
+                <label>Player / Team Name</label>
                 <input
                   type="text"
                   placeholder={defaultTeamName || "e.g. Buzzer Beaters"}

@@ -31,10 +31,78 @@ app.set('trust proxy', 1);
 app.use(express.json());
 app.use(cookieParser());
 
+const mediaRouter = require('./media');
+
 // Mount Auth & API routes
 app.use('/api/auth', authRouter);
 app.use('/api/boards', require('./boards'));
-app.use('/api/media', require('./media'));
+app.use('/api/media', mediaRouter);
+
+// =========================================================================
+// YouTube IFrame API proxy — Discord Activities lock script-src to 'self',
+// so loading https://www.youtube.com/iframe_api directly is always blocked.
+// This route fetches the script through our own origin (same-origin = OK).
+// The response is cached in memory for 1 hour to avoid hammering YouTube.
+// =========================================================================
+let ytApiCache = { body: null, fetchedAt: 0 };
+const YT_API_CACHE_MS = 60 * 60 * 1000; // 1 hour
+
+app.get('/api/youtube-iframe-api.js', async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (!ytApiCache.body || now - ytApiCache.fetchedAt > YT_API_CACHE_MS) {
+      const resp = await fetch('https://www.youtube.com/iframe_api');
+      if (!resp.ok) {
+        return res.status(502).send('Failed to fetch YouTube IFrame API');
+      }
+      const rawText = await resp.text();
+      
+      // Rewrite any hardcoded widgetapi URL (from s.ytimg.com or www.youtube.com)
+      // to go through our same-origin proxy route.
+      const widgetApiRegex = /https?:\/\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_\-\/.]+\/www-widgetapi\.js/g;
+      const modifiedText = rawText.replace(widgetApiRegex, (match) => {
+        return `/api/youtube-widgetapi.js?url=${encodeURIComponent(match)}`;
+      });
+
+      ytApiCache = { body: modifiedText, fetchedAt: now };
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(ytApiCache.body);
+  } catch (err) {
+    console.error('[YouTube API proxy] error:', err);
+    return res.status(500).send('Internal error proxying YouTube IFrame API');
+  }
+});
+
+app.get('/api/youtube-widgetapi.js', async (req, res) => {
+  const url = req.query.url;
+  if (!url) {
+    return res.status(400).send('Missing url query parameter');
+  }
+
+  // Validate the URL to prevent SSRF (allow s.ytimg.com and youtube.com)
+  const isAllowedHost = url.startsWith('https://s.ytimg.com/') || 
+                       url.startsWith('https://www.youtube.com/') || 
+                       url.startsWith('https://youtube.com/');
+  if (!isAllowedHost) {
+    return res.status(400).send('Invalid url');
+  }
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      return res.status(502).send('Failed to fetch YouTube widgetapi script');
+    }
+    const body = await resp.text();
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+    return res.send(body);
+  } catch (err) {
+    console.error('[YouTube widgetapi proxy] error:', err);
+    return res.status(500).send('Internal error proxying YouTube widgetapi');
+  }
+});
 
 // Initialize Socket.io Server
 const server = http.createServer(app);
@@ -213,6 +281,23 @@ function emitControlState(roomCode, room) {
   io.to(roomCode).emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
 }
 
+// Best-effort clue lookup by catId + value across every round in the
+// board — used only to feed prewarmDriveMedia below, so a miss here just
+// means no prewarm happens (falls back to on-demand fetch), never breaks
+// clue selection itself. Doesn't assume which round is "current"; scans
+// all of them since that's cheap and avoids depending on the exact field
+// name the board uses to track the active round.
+function findClueMediaUrls(boardData, catId, value) {
+  const rounds = boardData?.rounds || [];
+  for (const round of rounds) {
+    const cat = (round.categories || []).find((c) => c.id === catId);
+    if (!cat) continue;
+    const clue = cat.clues?.[value] ?? cat.clues?.[String(value)];
+    if (clue) return [clue.mediaUrl, clue.answerMediaUrl].filter(Boolean);
+  }
+  return [];
+}
+
 // 5. Unified Socket.io Real-time Game Coordination
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -240,9 +325,26 @@ io.on('connection', (socket) => {
     if (!roomCode) return;
 
     const room = gameRooms.get(roomCode) || {};
+    const prevClue = room.activeClue;
+    // Only counts as "picking a new clue" when catId/value actually
+    // changes — activeClueUpdate also fires on every revealed/timer/
+    // playback field change within the SAME clue, and re-prewarming on
+    // those would just be wasted cache lookups (harmless, since
+    // getDriveFile is cached, but pointless).
+    const isNewClue =
+      activeClue && (!prevClue || prevClue.catId !== activeClue.catId || prevClue.value !== activeClue.value);
     room.activeClue = activeClue || null;
     gameRooms.set(roomCode, room);
     socket.to(roomCode).emit('activeClueUpdate', room.activeClue);
+
+    // Host's own clue pick — selectClue (below) only covers player picks,
+    // so this is the prewarm trigger for the far more common "host clicks
+    // the board" path. Fires alongside the relay above rather than
+    // blocking it.
+    if (isNewClue) {
+      const mediaUrls = findClueMediaUrls(room.board?.data, activeClue.catId, activeClue.value);
+      mediaUrls.forEach((url) => mediaRouter.prewarmDriveMedia(url));
+    }
   });
 
   // Player-initiated clue pick. Only the current control holder may open a
@@ -292,6 +394,14 @@ io.on('connection', (socket) => {
     }
 
     io.to(roomCode).emit('clueSelected', { catId, value });
+
+    // Fire-and-forget: start fetching this clue's Drive attachment(s) now,
+    // in parallel with the clueSelected broadcast above, instead of
+    // waiting for the host's ClueModal to open and every player's
+    // <video>/<audio> tag to request it independently. See
+    // prewarmDriveMedia's own comment in media.js for the full reasoning.
+    const mediaUrls = findClueMediaUrls(room.board?.data, catId, value);
+    mediaUrls.forEach((url) => mediaRouter.prewarmDriveMedia(url));
   });
 
   // Player-submitted Daily Double wager. Same trust model as selectClue:

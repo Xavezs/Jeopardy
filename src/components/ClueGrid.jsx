@@ -117,6 +117,17 @@ export default function ClueGrid({
               {rd.categories.map((cat, catIndex) => {
                 const clue = cat.clues[v] || blankClue();
                 const cellKey = cat.id + "-" + v;
+                // Host edit-mode hover preview: only cells with BOTH a question
+                // and an answer filled in get the flip-to-reveal treatment —
+                // flipping an empty/half-written clue would just show blank
+                // faces, which is confusing rather than useful.
+                // Every clue cell now gets the flip-to-reveal treatment in edit
+                // mode, even ones that aren't fully written yet — a half-written
+                // clue just shows a "not written yet" placeholder on whichever
+                // face is missing text, instead of being excluded from flipping.
+                const hasPreview = editMode;
+                const questionText = clue.question?.trim() || "No question yet";
+                const answerText = clue.answer?.trim() || "No answer yet";
                 return (
                   <div
                     key={cellKey}
@@ -124,6 +135,7 @@ export default function ClueGrid({
                       "clue-cell" +
                       (clue.used ? " used" : "") +
                       (editMode ? " edit-mode-cell" : "") +
+                      (hasPreview ? " has-clue-preview" : "") +
                       (boardFlip === "out" ? " flip-out" : "") +
                       (boardFlip === "in-start" ? " flip-in-start" : "") +
                       (editMode && dragSource && dragSource.catId === cat.id && dragSource.value === v ? " drag-source" : "") +
@@ -176,24 +188,64 @@ export default function ClueGrid({
                       if (editMode || !clue.used) playHoverTick();
                     }}
                   >
-                    <div className="clue-value">${v}</div>
-                    {editMode &&
-                      clue.question?.trim() &&
-                      clue.answer?.trim() && (
-                        <div className={`media-dot ${clue.mediaUrl ? "has-media" : ""}`}>●</div>
-                      )}
-                    {editMode && (
-                      <button
-                        type="button"
-                        className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
-                        title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          toggleDailyDouble(cat, v);
-                        }}
-                      >
-                        DD
-                      </button>
+                    {hasPreview ? (
+                      <div className="cell-flip-viewport">
+                        <div className="cell-flip-inner">
+                          <div className="cell-flip-face cell-flip-front">
+                            <div className="clue-value">${v}</div>
+                            <div className="cell-preview-text">{questionText}</div>
+                            <button
+                              type="button"
+                              className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                              title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleDailyDouble(cat, v);
+                              }}
+                            >
+                              DD
+                            </button>
+                          </div>
+                          <div className="cell-flip-face cell-flip-back">
+                            <div className="cell-preview-label">Answer</div>
+                            <div className="cell-preview-text">{answerText}</div>
+                            {/* Same DD toggle, mirrored onto the back face — without
+                                this the badge only existed on the front face and
+                                effectively vanished once the card was flipped
+                                (hover), even though the clue's DD status hadn't
+                                changed. Same handler, so toggling from either face
+                                stays in sync. */}
+                            <button
+                              type="button"
+                              className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                              title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleDailyDouble(cat, v);
+                              }}
+                            >
+                              DD
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="clue-value">${v}</div>
+                        {editMode && (
+                          <button
+                            type="button"
+                            className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                            title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleDailyDouble(cat, v);
+                            }}
+                          >
+                            DD
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 );

@@ -10,7 +10,7 @@
     "bot-server": "node discord-bot/server.js",
     "bot-app": "node discord-bot/bot-server.js",
     "tunnel": "npx cloudflared --url http://localhost:5173",
-    "start:all": "concurrently \"npm run bot-server\" \"npm run bot-app\" \"npm run dev\" \"npm run tunnel\""
+    "jeopardy": "concurrently \"cd discord-bot && npm run bot:dev\" \"npm run dev\" \"npm run tunnel\""
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.5.0",

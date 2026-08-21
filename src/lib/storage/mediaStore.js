@@ -160,6 +160,13 @@ export async function getMediaUrl(ref) {
     // directly instead of going through our own server.
     return `${API_BASE}/api/media/gdrive/${fileId}`;
   }
+  // Exclude YouTube links from proxying. They are rendered via an iframe
+  // pointed at youtube.com directly, and proxying them breaks URL parsing and player initialization.
+  const { isYoutubeUrl } = await import("../youtube");
+  if (isYoutubeUrl(ref)) {
+    return ref;
+  }
+
   // Any other plain http(s) link (news CDNs, imgur, random image hosts...):
   // route it through our own server too. Discord's Activity CSP only
   // allowlists 'self', discordsays.com, and a couple of discordapp.com

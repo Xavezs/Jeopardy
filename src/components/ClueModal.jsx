@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from "react";
-import { youTubeEmbed } from "../lib/utils";
+import { isYoutubeUrl } from "../lib/youtube";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
 import CustomAudioPlayer from './CustomAudioPlayer';
 import CustomVideoPlayer from './CustomVideoPlayer';
-import { discordSdk } from '../discordSdk';
+import YoutubePlayer from './YoutubePlayer';
+import ClueMediaImage from './ClueMediaImage';
 import { createSfx, getSharedAudioCtx, withRunningCtx } from "../lib/sfx";
 import { playDailyDoubleSfx } from "../lib/boardSfx";
 import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
@@ -143,24 +144,7 @@ function playAlertSound() {
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 27;
 
-// YouTube can't be embedded inside this Activity — both script-src (IFrame
-// API) and frame-src (plain <iframe>) are locked to 'self' by Discord's CSP,
-// and unlike media/connect-src there's no proxy workaround for a live
-// cross-origin page. openExternalLink is Discord's supported escape hatch
-// for exactly this situation: it opens the link in the user's real browser,
-// outside the Activity's CSP. Falls back to window.open for plain-browser
-// testing (discordSdk commands aren't available outside a real Discord frame).
-async function openYoutubeExternally(url) {
-  try {
-    if (discordSdk?.commands?.openExternalLink) {
-      await discordSdk.commands.openExternalLink({ url });
-      return;
-    }
-  } catch (err) {
-    console.error('[ClueModal] openExternalLink failed, falling back to window.open:', err);
-  }
-  window.open(url, '_blank', 'noopener,noreferrer');
-}
+
 
 function formatClock(totalSeconds) {
   const s = Math.max(0, Math.ceil(totalSeconds));
@@ -200,6 +184,8 @@ export default function ClueModal({
   dailyDoubleWager,
   onSetWager,
   controlDiscordUserId,
+  ddMinWagerZero,
+  ddWagerBasisPlayerScore,
 }) {
   const [mediaUrl, setMediaUrl] = useState("");
   const [renderAs, setRenderAs] = useState("");
@@ -210,6 +196,21 @@ export default function ClueModal({
   const [answerRenderAs, setAnswerRenderAs] = useState("");
   const [answerPlaying, setAnswerPlaying] = useState(false);
   const answerTimeRef = React.useRef(0);
+
+  // True when renderAs/answerRenderAs came from a confirmed source (a
+  // stored clue.mediaType, or the Drive /meta mimeType lookup) rather than
+  // the "just assume image first" fallback guess. Only guessed types
+  // should fall through the image -> video -> audio cascade on error — a
+  // confirmed image that fails to load is an actual load failure (network,
+  // timeout, proxy issue), not evidence it's secretly a video.
+  const [renderTypeConfident, setRenderTypeConfident] = useState(false);
+  const [answerRenderTypeConfident, setAnswerRenderTypeConfident] = useState(false);
+  // True once the async media-type resolution below has finished for the
+  // CURRENT clue (regardless of whether it turned up media or not) — the
+  // reveal-time timer-start logic waits on this instead of reading
+  // mediaUrl/renderAs directly, which race the reveal click while still
+  // empty/mid-fetch (see the flipped+mediaResolved effect further down).
+  const [mediaResolved, setMediaResolved] = useState(false);
 
   const effectiveDuration = Math.max(1, parseInt(timerSeconds, 10) || 30);
   const [remaining, setRemaining] = useState(effectiveDuration);
@@ -242,7 +243,10 @@ export default function ClueModal({
   const isDailyDouble = !!clue?.isDailyDouble;
   const wagerLocked = dailyDoubleWager != null;
   const effectiveValue = isDailyDouble ? dailyDoubleWager ?? 0 : value;
-  const maxWager = value * 2;
+  // maxWager/minWager themselves are computed further down, in the wager
+  // screen block — the "max wager = team score" house rule needs to know
+  // which team is wagering, and that isn't resolved until sortedTeams/
+  // pickingTeam/wagerTeamId are in scope.
 
   const hasSpecificPicker = !!(controlDiscordUserId && controlDiscordUserId !== OPEN_CONTROL);
   const pickingTeam = hasSpecificPicker && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(controlDiscordUserId) : null;
@@ -281,7 +285,12 @@ export default function ClueModal({
     return [...teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0));
   }, [teams]);
 
-  // Reveal the clue and arm buzzer ONLY if buzzer is enabled
+  // Reveal the clue and arm buzzer ONLY if buzzer is enabled. Timer-start
+  // is handled entirely by the flipped+mediaResolved effect below and the
+  // questionPlaying effect further down — not here — so it can wait for
+  // the async media-type resolution to actually finish first instead of
+  // reading mediaUrl/renderAs synchronously (which are still empty on a
+  // fast reveal click, before convertIds resolves).
   const revealClue = () => {
     playRevealSfx();
     if (onFlip) {
@@ -306,6 +315,7 @@ export default function ClueModal({
     setSelectedTeamId(null);
     setQuestionPlaying(false);
     setAnswerPlaying(false);
+    setMediaResolved(false);
     setWagerTeamId(pickingTeam ? pickingTeam.id : null);
     setWagerInput("");
     setManualWagerOverride(false);
@@ -331,6 +341,36 @@ export default function ClueModal({
     }, 1000);
     return () => clearInterval(id);
   }, [running]);
+
+  // Reveal-time timer start — waits for BOTH the card to be flipped AND
+  // media-type resolution to finish for this clue, so it can't fire on
+  // stale/empty mediaUrl+renderAs from a reveal click that landed before
+  // convertIds resolved (that race was starting the timer immediately
+  // even for video/audio clues, since a not-yet-resolved clue looked
+  // identical to a no-media one).
+  // - Real video/audio (including YouTube): skip — the questionPlaying
+  //   effect above owns starting/pausing this one, in step with playback.
+  // - Everything else (text, image, or resolution came back empty):
+  //   start now, since no "play" event will ever come.
+  useEffect(() => {
+    if (!flipped || !mediaResolved || !timerEnabled || timeUp || running) return;
+    const isRealPlayableMedia = renderAs === "video" || renderAs === "audio";
+    if (!isRealPlayableMedia) {
+      setRunning(true);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [flipped, mediaResolved, renderAs, mediaUrl]);
+
+  // For clues with a video/audio question, the timer stays in lockstep
+  // with playback: starting the clip starts (or resumes) the clock,
+  // pausing/stopping it (manual pause, or the clip ending) pauses the
+  // clock too — instead of running independently once started. Doesn't
+  // touch anything once timeUp is reached (nothing left to pause).
+  useEffect(() => {
+    if (!timerEnabled || timeUp) return;
+    setRunning(questionPlaying);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [questionPlaying]);
 
   function toggleTimer() {
     if (timeUp) return;
@@ -368,23 +408,30 @@ export default function ClueModal({
       // play audio-only bytes just fine) instead of ever reaching the
       // audio player. Anything else keeps the original "image" starting
       // guess + onError cascade below.
+      // Returns { type, confident }. confident=true means we know for sure
+      // what this media is (stored on the clue, or confirmed via Drive's
+      // /meta mimeType lookup) — confident=false means "image" is just a
+      // starting guess with no real evidence behind it yet.
       async function resolveRenderType(rawRef, resolvedUrl, storedType) {
-        if (storedType) return storedType;
+        if (storedType) return { type: storedType, confident: true };
         if (isGoogleDriveUrl(rawRef)) {
           const fileId = extractGoogleDriveFileId(rawRef);
           const detected = fileId ? await resolveGoogleDriveMediaType(fileId) : "";
-          if (detected) return detected;
+          if (detected) return { type: detected, confident: true };
         }
-        return resolvedUrl ? "image" : "";
+        return { type: resolvedUrl ? "image" : "", confident: false };
       }
 
-      const [type, answerType] = await Promise.all([
+      const [questionResult, answerResult] = await Promise.all([
         resolveRenderType(clue?.mediaUrl, url, clue?.mediaType),
         resolveRenderType(clue?.answerMediaUrl, answerUrl, clue?.answerMediaType),
       ]);
       if (cancelled) return;
-      setRenderAs(type);
-      setAnswerRenderAs(answerType);
+      setRenderAs(questionResult.type);
+      setRenderTypeConfident(questionResult.confident);
+      setAnswerRenderAs(answerResult.type);
+      setAnswerRenderTypeConfident(answerResult.confident);
+      setMediaResolved(true);
     }
     convertIds();
 
@@ -499,9 +546,12 @@ export default function ClueModal({
   // playing — the point of buzzing is to answer over silence, not to keep
   // competing with the clue's own audio/video. Both players are rendered
   // as controlled components (isPlaying prop below) specifically so this
-  // can force a real pause rather than just muting the UI state.
+  // can force a real pause rather than just muting the UI state. Also
+  // stops the countdown timer for the same reason — once someone's
+  // buzzed in, the clock shouldn't keep running while they answer.
   useEffect(() => {
     if (!buzzerWinner) return;
+    setRunning(false);
     if (questionPlaying) {
       setQuestionPlaying(false);
       if (onDuckMusic) onDuckMusic(false);
@@ -522,9 +572,37 @@ export default function ClueModal({
   // clue re-renders below the normal way — just with effectiveValue (the
   // wager) standing in for the row's $ value everywhere.
   if (isDailyDouble && !wagerLocked) {
-    const parsedWager = parseInt(wagerInput, 10);
-    const clampedPreview = isNaN(parsedWager) ? 0 : Math.max(0, Math.min(parsedWager, maxWager));
     const lockedTeam = pickingTeam && sortedTeams.find((t) => t.id === pickingTeam.id);
+    // The wagering team, however it's currently identified — locked in via
+    // controlDiscordUserId, or picked manually by the host from the team
+    // list further down. Used below for the "max wager = team score" house
+    // rule; falls back to $0 (i.e. no headroom yet) until a team is chosen.
+    const wagerTeam = lockedTeam || (wagerTeamId ? sortedTeams.find((t) => t.id === wagerTeamId) : null);
+    const wagerTeamScore = wagerTeam ? wagerTeam.score ?? 0 : 0;
+
+    // House-rule toggle (data.settings.ddWagerBasisPlayerScore, set in
+    // JeopardyBoard.jsx): off (default) keeps the original rule — max
+    // wager is 2x the clue's own value. On: max wager is the wagering
+    // team's own current score instead (mirrors how Final Jeopardy handles
+    // a team already in debt — they can wager up to the size of their
+    // debt so a correct answer brings them exactly back to $0, rather than
+    // being floored to a $0 max).
+    const rawMaxWager = ddWagerBasisPlayerScore
+      ? wagerTeamScore < 0
+        ? Math.abs(wagerTeamScore)
+        : wagerTeamScore
+      : value * 2;
+    const maxWager = Math.max(0, rawMaxWager);
+    // House-rule toggle (data.settings.ddMinWagerZero, set in
+    // JeopardyBoard.jsx): off (default) keeps the original rule — min
+    // wager equals the clue's own value. On allows wagering anywhere from
+    // $0 up. Clamped to maxWager so a team whose score basis leaves them
+    // with less headroom than the clue's face value still gets a valid
+    // (if narrow) range instead of an unplayable min > max.
+    const minWager = Math.min(ddMinWagerZero ? 0 : value, maxWager);
+
+    const parsedWager = parseInt(wagerInput, 10);
+    const clampedPreview = isNaN(parsedWager) ? minWager : Math.max(minWager, Math.min(parsedWager, maxWager));
     // With a specific picker, the default is to wait for THEIR device to
     // submit the wager (useWagerSync -> onWagerSubmitted -> setDailyDoubleWager
     // in JeopardyBoard.jsx) rather than have the host type it — the host's
@@ -597,7 +675,7 @@ export default function ClueModal({
 
           {wagerTeamId && showManualInput && (
             <div className="dd-wager-block">
-              <div className="dd-step-label">Wager (max ${maxWager})</div>
+              <div className="dd-step-label">Wager (${minWager}–${maxWager})</div>
               <input
                 type="number"
                 className="dd-wager-input"
@@ -694,29 +772,37 @@ export default function ClueModal({
             {mediaUrl && renderAs && (
               <div className="clue-media">
                 {renderAs === "image" && (
-                  <img src={mediaUrl} alt="" onError={() => setRenderAs("video")} />
+                  <ClueMediaImage
+                    src={mediaUrl}
+                    alt=""
+                    onLoadError={() => {
+                      // Only fall through to "maybe it's actually a video"
+                      // when "image" was itself just a guess — a confirmed
+                      // image that failed to load stays a failed image,
+                      // not a reason to try mounting a video player against
+                      // the same broken URL.
+                      if (!renderTypeConfident) setRenderAs("video");
+                    }}
+                  />
                 )}
                 {renderAs === "video" &&
-                  (youTubeEmbed(mediaUrl) ? (
-                    <div
-                      className="clue-youtube-external"
-                      onClick={() => openYoutubeExternally(mediaUrl)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") openYoutubeExternally(mediaUrl);
+                  (isYoutubeUrl(mediaUrl) ? (
+                    <YoutubePlayer
+                      src={mediaUrl}
+                      isPlaying={questionPlaying}
+                      onPlayStateChange={(playing, time) => {
+                        questionTimeRef.current = time ?? questionTimeRef.current;
+                        setQuestionPlaying(playing);
+                        if (onDuckMusic) onDuckMusic(playing);
+                        if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
                       }}
-                    >
-                      <svg viewBox="0 0 24 24" className="player-icon play-arrow player-video-big-play">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                      <div className="clue-youtube-external-label">Watch on YouTube</div>
-                      <div className="hint">Opens in your browser — YouTube can't be embedded inside the Activity</div>
-                    </div>
+                    />
                   ) : (
                     <CustomVideoPlayer 
                       src={mediaUrl} 
-                      onError={() => setRenderAs("audio")} 
+                      onError={() => {
+                        if (!renderTypeConfident) setRenderAs("audio");
+                      }} 
                       isPlaying={questionPlaying}
                       onPlayStateChange={(playing, time) => {
                         questionTimeRef.current = time ?? questionTimeRef.current;
@@ -745,29 +831,32 @@ export default function ClueModal({
             {revealed && answerMediaUrl && answerRenderAs && (
               <div className="clue-media clue-answer-media">
                 {answerRenderAs === "image" && (
-                  <img src={answerMediaUrl} alt="" onError={() => setAnswerRenderAs("video")} />
+                  <ClueMediaImage
+                    src={answerMediaUrl}
+                    alt=""
+                    onLoadError={() => {
+                      if (!answerRenderTypeConfident) setAnswerRenderAs("video");
+                    }}
+                  />
                 )}
                 {answerRenderAs === "video" &&
-                  (youTubeEmbed(answerMediaUrl) ? (
-                    <div
-                      className="clue-youtube-external"
-                      onClick={() => openYoutubeExternally(answerMediaUrl)}
-                      role="button"
-                      tabIndex={0}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") openYoutubeExternally(answerMediaUrl);
+                  (isYoutubeUrl(answerMediaUrl) ? (
+                    <YoutubePlayer
+                      src={answerMediaUrl}
+                      isPlaying={answerPlaying}
+                      onPlayStateChange={(playing, time) => {
+                        answerTimeRef.current = time ?? answerTimeRef.current;
+                        setAnswerPlaying(playing);
+                        if (onDuckMusic) onDuckMusic(playing);
+                        if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
                       }}
-                    >
-                      <svg viewBox="0 0 24 24" className="player-icon play-arrow player-video-big-play">
-                        <path d="M8 5v14l11-7z" />
-                      </svg>
-                      <div className="clue-youtube-external-label">Watch on YouTube</div>
-                      <div className="hint">Opens in your browser — YouTube can't be embedded inside the Activity</div>
-                    </div>
+                    />
                   ) : (
                     <CustomVideoPlayer 
                       src={answerMediaUrl} 
-                      onError={() => setAnswerRenderAs("audio")} 
+                      onError={() => {
+                        if (!answerRenderTypeConfident) setAnswerRenderAs("audio");
+                      }} 
                       isPlaying={answerPlaying}
                       onPlayStateChange={(playing, time) => {
                         answerTimeRef.current = time ?? answerTimeRef.current;

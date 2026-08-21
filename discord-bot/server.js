@@ -55,6 +55,69 @@ app.get('/api/proxy-image', async (req, res) => {
   }
 });
 
+// =========================================================================
+// YouTube IFrame API proxy — same as bot-server.js, see comments there.
+// =========================================================================
+let ytApiCache = { body: null, fetchedAt: 0 };
+const YT_API_CACHE_MS = 60 * 60 * 1000;
+
+app.get('/api/youtube-iframe-api.js', async (_req, res) => {
+  try {
+    const now = Date.now();
+    if (!ytApiCache.body || now - ytApiCache.fetchedAt > YT_API_CACHE_MS) {
+      const resp = await fetch('https://www.youtube.com/iframe_api');
+      if (!resp.ok) {
+        return res.status(502).send('Failed to fetch YouTube IFrame API');
+      }
+      const rawText = await resp.text();
+      
+      // Rewrite any hardcoded widgetapi URL (from s.ytimg.com or www.youtube.com)
+      // to go through our same-origin proxy route.
+      const widgetApiRegex = /https?:\/\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_\-\/.]+\/www-widgetapi\.js/g;
+      const modifiedText = rawText.replace(widgetApiRegex, (match) => {
+        return `/api/youtube-widgetapi.js?url=${encodeURIComponent(match)}`;
+      });
+
+      ytApiCache = { body: modifiedText, fetchedAt: now };
+    }
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(ytApiCache.body);
+  } catch (err) {
+    console.error('[YouTube API proxy] error:', err);
+    return res.status(500).send('Internal error proxying YouTube IFrame API');
+  }
+});
+
+app.get('/api/youtube-widgetapi.js', async (req, res) => {
+  const url = req.query.url;
+  if (!url) {
+    return res.status(400).send('Missing url query parameter');
+  }
+
+  // Validate the URL to prevent SSRF (allow s.ytimg.com and youtube.com)
+  const isAllowedHost = url.startsWith('https://s.ytimg.com/') || 
+                       url.startsWith('https://www.youtube.com/') || 
+                       url.startsWith('https://youtube.com/');
+  if (!isAllowedHost) {
+    return res.status(400).send('Invalid url');
+  }
+
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) {
+      return res.status(502).send('Failed to fetch YouTube widgetapi script');
+    }
+    const body = await resp.text();
+    res.setHeader('Content-Type', 'application/javascript; charset=utf-8');
+    res.setHeader('Cache-Control', 'public, max-age=86400'); // Cache for 24 hours
+    return res.send(body);
+  } catch (err) {
+    console.error('[YouTube widgetapi proxy] error:', err);
+    return res.status(500).send('Internal error proxying YouTube widgetapi');
+  }
+});
+
 // FIX: was mounted at '/auth', but every frontend caller (discordSdk.js,
 // LoginGate.jsx, sessionStore.js's api()) requests '/api/auth/...' —
 // e.g. POST /api/auth/token, POST /api/auth/dev-login. The mismatch meant
