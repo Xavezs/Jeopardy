@@ -14,12 +14,15 @@ import { getDiscordIdentity, activityChannelId } from "../discordSdk";
 import { unlockAudioPlayback } from "../lib/sfx";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
 import TeamCard from "./TeamCard";
+import TeamRandomizer from "./TeamRandomizer";
 import {
   playCorrectSfx,
   playIncorrectSfx,
   playCatRevealSfx,
   playDailyDoubleSfx,
+  stopDailyDoubleSfx,
   playStandingsCelebration,
+  stopStandingsCelebration,
 } from "../lib/boardSfx";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
@@ -235,7 +238,82 @@ function TeamScoreRow({ teams, joinedTeamId, pulseMap, compact, discordMembersBy
 // card (current team + their answer + wager) plus a running history of
 // already-judged teams (rd.results), so the reveal is a shared moment
 // instead of something only visible on the host's screen.
-function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFinalAnswer, discordMembersByTeam }) {
+// Standalone, simplified media resolver for Final Jeopardy's question/
+// answer media — ported from the host's FinalMediaPlayer
+// (FinalJeopardyBoard.jsx). The host had this all along; it was just
+// never built on the player side, which is why a host-attached Google
+// Drive (or any other) media link on the Final Jeopardy question/answer
+// only ever showed up on the host's screen. Same resolve → detect →
+// render cascade as the host: resolve the ref/URL, detect image vs
+// video vs audio (falling back through the cascade on error), render
+// the matching player. Renders nothing if there's no media set.
+function FinalMediaPlayer({ mediaRef, mediaType, className }) {
+  const [url, setUrl] = useState("");
+  const [renderAs, setRenderAs] = useState("");
+  const [playing, setPlaying] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    let toRevoke = "";
+
+    async function resolve() {
+      const resolvedUrl = mediaRef ? await getMediaUrl(mediaRef) : "";
+      if (cancelled) {
+        if (resolvedUrl && resolvedUrl.startsWith("blob:")) URL.revokeObjectURL(resolvedUrl);
+        return;
+      }
+      if (resolvedUrl && resolvedUrl.startsWith("blob:")) toRevoke = resolvedUrl;
+      setUrl(resolvedUrl);
+
+      let type = mediaType;
+      if (!type && isGoogleDriveUrl(mediaRef)) {
+        const fileId = extractGoogleDriveFileId(mediaRef);
+        type = fileId ? await resolveGoogleDriveMediaType(fileId) : "";
+      }
+      if (!type) type = resolvedUrl ? "image" : "";
+      if (!cancelled) setRenderAs(type);
+    }
+    resolve();
+
+    return () => {
+      cancelled = true;
+      setPlaying(false);
+      if (toRevoke) URL.revokeObjectURL(toRevoke);
+    };
+  }, [mediaRef, mediaType]);
+
+  if (!url || !renderAs) return null;
+
+  return (
+    <div className={"pv-clue-media" + (className ? ` ${className}` : "")}>
+      {renderAs === "image" && <img src={url} alt="" onError={() => setRenderAs("video")} />}
+      {renderAs === "video" &&
+        (isYoutubeUrl(url) ? (
+          // Same CSP escape hatch the host uses (FinalJeopardyBoard.jsx) —
+          // YouTube can't be embedded inside the Activity, so open it in
+          // the player's real browser instead.
+          <div
+            className="pv-final-youtube-external"
+            onClick={() => window.open(url, "_blank", "noopener,noreferrer")}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") window.open(url, "_blank", "noopener,noreferrer");
+            }}
+          >
+            <div className="pv-final-youtube-external-label">Watch on YouTube</div>
+          </div>
+        ) : (
+          <CustomVideoPlayer src={url} onError={() => setRenderAs("audio")} isPlaying={playing} onPlayStateChange={(p) => setPlaying(p)} />
+        ))}
+      {renderAs === "audio" && (
+        <CustomAudioPlayer src={url} isPlaying={playing} onPlayStateChange={(p) => setPlaying(p)} />
+      )}
+    </div>
+  );
+}
+
+function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFinalAnswer, discordMembersByTeam, players, playerStats }) {
   const myTeamId = joinedTeam?.teamId;
   const myTeam = teams.find((t) => t.id === myTeamId);
   const [wagerInput, setWagerInput] = useState("");
@@ -272,24 +350,41 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
       playStandingsCelebration(rd.standingsSfxUrl);
     } else if (!rd.standingsRevealed) {
       standingsSfxFiredRef.current = false;
+      stopStandingsCelebration();
     }
   }, [rd.standingsRevealed]);
 
-  // Same turn-change and new-history-entry cues as the host's
+  // Belt-and-suspenders: this view only renders while the current round
+  // is Final Jeopardy (see PlayerBoard below), so it unmounts both when
+  // the round changes AND when the player leaves the room entirely
+  // (PlayerBoard/PlayerView unmounts along with it). Either way, a
+  // celebration sound still playing at that moment shouldn't keep going
+  // once this screen is gone.
+  useEffect(() => {
+    return () => stopStandingsCelebration();
+  }, []);
+
+  // Same batch-change and new-history-entry cues as the host's
   // FinalJeopardyBoard — each side plays its own copy locally since
-  // currentRevealTeamId/revealedTeamIds are already synced state.
-  const prevRevealTeamIdRef = useRef(rd.currentRevealTeamId);
+  // currentRevealTeamIds/revealedTeamIds are already synced state. Fires
+  // only when a genuinely new team enters the spotlight (not when the
+  // batch merely shrinks as teams get judged one at a time) — see
+  // FinalJeopardyBoard's matching effect for why.
+  const prevRevealTeamIdsRef = useRef(rd.currentRevealTeamIds || []);
   const [justChangedTeam, setJustChangedTeam] = useState(false);
   useEffect(() => {
-    if (rd.currentRevealTeamId && rd.currentRevealTeamId !== prevRevealTeamIdRef.current) {
+    const ids = rd.currentRevealTeamIds || [];
+    const prevSet = new Set(prevRevealTeamIdsRef.current || []);
+    const hasNewTeam = ids.some((id) => !prevSet.has(id));
+    if (hasNewTeam) {
       playCatRevealSfx();
       setJustChangedTeam(true);
       const t = setTimeout(() => setJustChangedTeam(false), 1200);
-      prevRevealTeamIdRef.current = rd.currentRevealTeamId;
+      prevRevealTeamIdsRef.current = ids;
       return () => clearTimeout(t);
     }
-    prevRevealTeamIdRef.current = rd.currentRevealTeamId;
-  }, [rd.currentRevealTeamId]);
+    prevRevealTeamIdsRef.current = ids;
+  }, [rd.currentRevealTeamIds]);
 
   const prevRevealedCountRef = useRef((rd.revealedTeamIds || []).length);
   const [justAddedTeamId, setJustAddedTeamId] = useState(null);
@@ -380,7 +475,8 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     return (
       <div className="pv-final-panel">
         <div className="pv-final-category">{rd.category}</div>
-        <p className="pv-final-clue-text">{rd.clue?.question}</p>
+        <p className="pv-final-clue-text">{rd.clue?.question || "(no question set)"}</p>
+        <FinalMediaPlayer mediaRef={rd.clue?.mediaUrl} mediaType={rd.clue?.mediaType} />
         {myAnswerLocked || answerSubmitted ? (
           <p className="pv-final-hint pulse">Answer locked in — waiting for other teams…</p>
         ) : (
@@ -415,29 +511,37 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   }
 
   if (rd.phase === "reveal") {
-    const revealTeam = rd.currentRevealTeamId ? teams.find((t) => t.id === rd.currentRevealTeamId) : null;
+    const activeIds = rd.currentRevealTeamIds || [];
+    const activeTeams = activeIds.map((id) => teams.find((t) => t.id === id)).filter(Boolean);
     const revealedTeams = (rd.revealedTeamIds || []).map((id) => teams.find((t) => t.id === id)).filter(Boolean);
-    const isMyTurn = revealTeam?.id === myTeamId;
+    const isMyTurnActive = activeTeams.some((t) => t.id === myTeamId);
+    const isBatch = activeTeams.length > 1;
     const stage = rd.revealStage || "hidden"; // "hidden" -> "wager" -> "answer"
     return (
       <div className="pv-final-panel">
         <div className="pv-final-category">{rd.category}</div>
-        {revealTeam ? (
-          <div className={`pv-final-reveal-card${isMyTurn ? " is-my-turn" : ""}${justChangedTeam ? " is-flash" : ""}`}>
-            <span className="pv-final-reveal-eyebrow">{isMyTurn ? "It's your team's turn!" : "Now Revealing"}</span>
-            <TeamAvatarStack team={revealTeam} />
-            <span className="pv-final-reveal-team">{revealTeam.name}</span>
-            {stage === "hidden" && (
-              <p className="pv-final-hint pulse">Waiting for the host to reveal the wager…</p>
-            )}
-            {stage !== "hidden" && (
-              <span className="pv-final-reveal-wager">Wagered ${rd.wagers[revealTeam.id] || 0}</span>
-            )}
+        {activeTeams.length > 0 ? (
+          <div className={`pv-final-reveal-batch${isMyTurnActive ? " is-my-turn" : ""}${justChangedTeam ? " is-flash" : ""}`}>
+            <span className="pv-final-reveal-eyebrow">
+              {isMyTurnActive ? "It's your team's turn!" : isBatch ? `Now Revealing — ${activeTeams.length} Teams` : "Now Revealing"}
+            </span>
+            <div className={"pv-final-reveal-grid" + (isBatch ? "" : " is-single")}>
+              {activeTeams.map((team) => (
+                <div className={"pv-final-reveal-tile" + (team.id === myTeamId ? " is-mine" : "")} key={team.id}>
+                  <TeamAvatarStack team={team} />
+                  <span className="pv-final-reveal-team">{team.name}</span>
+                  {stage === "hidden" && <p className="pv-final-hint pulse">Wager hidden…</p>}
+                  {stage !== "hidden" && (
+                    <span className="pv-final-reveal-wager">Wagered ${rd.wagers[team.id] || 0}</span>
+                  )}
+                  {stage === "answer" && (
+                    <p className="pv-final-reveal-answer">“{rd.answers[team.id] || "(no answer)"}”</p>
+                  )}
+                </div>
+              ))}
+            </div>
             {stage === "wager" && (
-              <p className="pv-final-hint pulse">Waiting for the host to reveal the answer…</p>
-            )}
-            {stage === "answer" && (
-              <p className="pv-final-reveal-answer">“{rd.answers[revealTeam.id] || "(no answer)"}”</p>
+              <p className="pv-final-hint pulse">Waiting for the host to reveal the answer{isBatch ? "s" : ""}…</p>
             )}
           </div>
         ) : (
@@ -478,6 +582,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
         <div className="pv-final-correct-answer-box">
           <span className="pv-final-correct-answer-label">The Correct Answer Was</span>
           <p className="pv-final-correct-answer-text">{rd.clue?.answer || "(no answer set)"}</p>
+          <FinalMediaPlayer mediaRef={rd.clue?.answerMediaUrl} mediaType={rd.clue?.answerMediaType} className="pv-final-answer-media" />
         </div>
         <p className="pv-final-hint pulse">Standings coming up…</p>
       </div>
@@ -531,42 +636,117 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     );
   }
 
+  const hasPlayerStats = !!(
+    players &&
+    playerStats &&
+    Object.keys(playerStats).length > 0 &&
+    restGroups.length > 0 &&
+    restGroups.some((g) => g.teams.some((t) => players.some((p) => p.teamId === t.id && playerStats[p.discordUserId])))
+  );
+
   return (
-    <div className="pv-final-panel">
+    <div className={`pv-final-panel${hasPlayerStats ? " has-stats" : ""}`}>
       <div className="pv-final-title">Final Standings</div>
 
-      <div className="pv-podium-row">
-        {podiumOrder.map((group) => (
-          <div key={group.rank} className={`pv-podium-col${group.rank === 1 ? " is-first" : ""}`}>
-            <div className="pv-podium-team-list">
-              {group.teams.map((team) => (
-                <div className="pv-podium-team-entry" key={team.id}>
-                  <TeamAvatarStack team={team} />
-                  <div className="pv-podium-name">{team.name}</div>
+      <div className="pv-final-body">
+        <div className="pv-final-standings-col">
+          <div className="pv-podium-row">
+            {podiumOrder.map((group) => (
+              <div key={group.rank} className={`pv-podium-col${group.rank === 1 ? " is-first" : ""}`}>
+                <div className="pv-podium-team-list">
+                  {group.teams.map((team) => {
+                    // Same per-player lookup pv-final-stats uses below — for
+                    // podium teams (rank <= 3) we show it inline next to the
+                    // name instead, so it isn't duplicated in both places.
+                    const teamPlayers =
+                      players && playerStats
+                        ? players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId])
+                        : [];
+                    return (
+                      <div className="pv-podium-team-entry" key={team.id}>
+                        <TeamAvatarStack team={team} />
+                        <div className="pv-podium-name-row">
+                          <div className="pv-podium-name">{team.name}</div>
+                          {teamPlayers.length > 0 && (
+                            <div className="pv-podium-player-stats">
+                              {teamPlayers.map((p) => {
+                                const s = playerStats[p.discordUserId];
+                                return (
+                                  <span
+                                    className="pv-podium-stat-pill"
+                                    key={p.discordUserId}
+                                    title={p.discordUsername || "Player"}
+                                  >
+                                    <span className="pv-podium-stat-correct">✓{s.correct || 0}</span>
+                                    <span className="pv-podium-stat-wrong">✗{s.wrong || 0}</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
                 </div>
-              ))}
-            </div>
-            <div className="pv-podium-score">${group.score}</div>
-            <div className="pv-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
-              <div className="pv-podium-rank">{group.rank}</div>
-            </div>
-          </div>
-        ))}
-      </div>
-
-      {restGroups.length > 0 && (
-        <div className="pv-final-rest-list">
-          {restGroups.map((group) =>
-            group.teams.map((t) => (
-              <div className="pv-final-standing-row" key={t.id}>
-                <span className="pv-final-standing-rank">{group.rank}</span>
-                <span className="pv-final-standing-name">{t.name}</span>
-                <span className="pv-final-standing-score">${t.score}</span>
+                <div className="pv-podium-score">${group.score}</div>
+                <div className="pv-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
+                  <div className="pv-podium-rank">{group.rank}</div>
+                </div>
               </div>
-            ))
+            ))}
+          </div>
+
+          {restGroups.length > 0 && (
+            <div className="pv-final-rest-list">
+              {restGroups.map((group) =>
+                group.teams.map((t) => (
+                  <div className="pv-final-standing-row" key={t.id}>
+                    <span className="pv-final-standing-rank">{group.rank}</span>
+                    <span className="pv-final-standing-name">{t.name}</span>
+                    <span className="pv-final-standing-score">${t.score}</span>
+                  </div>
+                ))
+              )}
+            </div>
           )}
         </div>
-      )}
+
+        {/* Correct/wrong breakdown per player, grouped by team — built from
+            playerStats (server-tracked counts, no identity) resolved against
+            `players` (the live roster, has discordUsername/teamId). Only
+            shows players the server has at least one judged attempt for.
+            Sits beside the standings (not stacked below) so the panel
+            doesn't grow too tall. */}
+        {hasPlayerStats && restGroups.length > 0 && (
+          <div className="pv-final-stats">
+            <div className="pv-final-stats-title">Player Stats</div>
+            {restGroups.flatMap((g) => g.teams).map((team) => {
+              const teamPlayers = players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId]);
+              if (teamPlayers.length === 0) return null;
+              return (
+                <div className="pv-final-stats-team" key={team.id}>
+                  <div className="pv-final-stats-team-name">{team.name}</div>
+                  {teamPlayers.map((p) => {
+                    const s = playerStats[p.discordUserId];
+                    const total = (s.correct || 0) + (s.wrong || 0);
+                    return (
+                      <div className="pv-final-stats-row" key={p.discordUserId}>
+                        <span className="pv-final-stats-name">{p.discordUsername || "Player"}</span>
+                        <span className="pv-final-stats-correct">✓ {s.correct || 0}</span>
+                        <span className="pv-final-stats-wrong">✗ {s.wrong || 0}</span>
+                        {total > 0 && (
+                          <span className="pv-final-stats-accuracy">{Math.round((s.correct / total) * 100)}%</span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -754,7 +934,7 @@ export default function PlayerView() {
 }
 
 function PlayerBoard({ roomCode, me, onLeave }) {
-  const { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, leaveGame } = usePlayerSync(roomCode, me);
+  const { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, randomizer, playerStats, leaveGame } = usePlayerSync(roomCode, me);
 
   // The actual "I'm leaving" action. Tells the server immediately (skips
   // the 12s disconnect grace period entirely, since this is deliberate),
@@ -1027,6 +1207,15 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       ddSfxFiredForClueRef.current = clueId;
       playDailyDoubleSfx();
     }
+    // Stop the sting the moment this is no longer the live Daily Double
+    // wager screen — the clue closed, the wager got locked in, the host
+    // moved to a different clue, the round changed, or the player left
+    // the room (unmount) — rather than letting up to ~1.2-2s of tail
+    // keep playing into whatever's on screen now. Only fires if we
+    // actually started a sting for the clue this effect run is about.
+    return () => {
+      if (ddSfxFiredForClueRef.current) stopDailyDoubleSfx();
+    };
   }, [openClue?.isDailyDouble, openClue?.dailyDoubleWager, activeClue?.catId, activeClue?.value]);
 
   const buzzDisabled = !buzzerLive || iHaveFloor || alreadyBuzzed;
@@ -1494,7 +1683,9 @@ function PlayerBoard({ roomCode, me, onLeave }) {
         </div>
       )}
 
-      {rd.type === "final" ? (
+      {randomizer?.active ? (
+        <TeamRandomizer teams={boardData.teams} readOnly syncedState={randomizer} />
+      ) : rd.type === "final" ? (
         <FinalJeopardyView
           rd={rd}
           joinedTeam={joinedTeam}
@@ -1502,6 +1693,8 @@ function PlayerBoard({ roomCode, me, onLeave }) {
           submitFinalWager={submitFinalWager}
           submitFinalAnswer={submitFinalAnswer}
           discordMembersByTeam={discordMembersByTeam}
+          players={players}
+          playerStats={playerStats}
         />
       ) : (
         <div className="pv-board">

@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import "./styles/board.css";
 import "./styles/final-jeopardy.css";
 import { blankClue } from "./lib/storage";
@@ -25,12 +25,15 @@ import { useClueEditor } from "./lib/hooks/useClueEditor";
 import { useBgmSettings } from "./lib/hooks/useBgmSettings";
 import { useBuzzer } from "./lib/hooks/useBuzzer";
 import { useClueSync } from "./lib/hooks/useClueSync";
-import { useControlSync } from "./lib/hooks/useControlSync";
+import { useControlSync, OPEN_CONTROL } from "./lib/hooks/useControlSync";
 import { useWagerSync } from "./lib/hooks/useWagerSync";
 import { useFinalSync } from "./lib/hooks/useFinalSync";
 import { useFinalJeopardy } from "./lib/hooks/useFinalJeopardy";
 import { useBgmSync } from "./lib/hooks/useBgmSync";
-import { playCatRevealSfx } from "./lib/boardSfx";
+import { useRandomizerSync } from "./lib/hooks/useRandomizerSync";
+import { useStatsSync } from "./lib/hooks/useStatsSync";
+import { SessionStore } from "./lib/storage";
+import { playCatRevealSfx, subscribeSfxDucking, loadFinalStandingsVolume, setFinalStandingsVolume } from "./lib/boardSfx";
 
 export default function JeopardyBoard({ onBack }) {
   const [editMode, setEditMode] = useState(false);
@@ -45,9 +48,46 @@ export default function JeopardyBoard({ onBack }) {
   // flipped already are.
   const [dailyDoubleWager, setDailyDoubleWager] = useState(null);
 
+  // Mirrors boardSfx.js's ducking bus — separate from clueEditor.duckMusic
+  // (which only tracks clue audio/video playback). Final Standings' 
+  // celebration sound fires from deep inside FinalJeopardyBoard with no
+  // path back to this component's props, so it signals through this bus
+  // instead. Either source ducking is enough to duck the BGM.
+  const [sfxDucking, setSfxDucking] = useState(false);
+  useEffect(() => subscribeSfxDucking(setSfxDucking), []);
+
+  // Final Standings celebration sound's volume — separate from BGM's own
+  // volume (bgmSettings.volume), see boardSfx.js. Hydrated once from
+  // storage on mount; 1 (full/unchanged) until that resolves.
+  const [finalStandingsVolume, setFinalStandingsVolumeState] = useState(1);
+  useEffect(() => {
+    let cancelled = false;
+    loadFinalStandingsVolume().then((v) => {
+      if (!cancelled) setFinalStandingsVolumeState(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  function handleFinalStandingsVolumeChange(v) {
+    setFinalStandingsVolumeState(v);
+    setFinalStandingsVolume(v);
+  }
+
   const { dialog, appConfirm, appAlert, resolveDialog } = useConfirmDialog();
 
-  const bgm = useBgmSettings({ appConfirm, appAlert });
+  // Bridge for useSessionManager's initBgm callback: useBgmSettings needs
+  // to know the active roundKey, which comes from session.data — but
+  // session.data doesn't exist until AFTER useSessionManager is called,
+  // and useSessionManager needs an initBgm function AT construction time.
+  // Assigning a ref synchronously during render (not inside an effect)
+  // means this is always up to date by the time anything actually calls
+  // it, without the two hooks needing to depend on each other's output.
+  const bgmApiRef = useRef({});
+  function initBgmBridge(loadedSessionData) {
+    return bgmApiRef.current.initBgm?.(loadedSessionData);
+  }
+
   const persistence = usePersistence();
 
   const board = useBoardGrid({
@@ -90,7 +130,7 @@ export default function JeopardyBoard({ onBack }) {
     persistence,
     ensureClueGrid: board.ensureClueGrid,
     performFlip: board.performFlip,
-    initBgm: bgm.initBgm,
+    initBgm: initBgmBridge,
     onSwitched: ({ editMode: nextEditMode }) => {
       setEditMode(nextEditMode);
       clueEditor.setActiveClue(null);
@@ -99,6 +139,19 @@ export default function JeopardyBoard({ onBack }) {
     },
     appConfirm,
   });
+
+  // Which round's track is "active" for BGM purposes right now — mirrors
+  // the rd.type === "final" check used everywhere else in this file.
+  // Computed straight from session.data (not the `data`/`rd` locals
+  // below, which don't exist yet until after the loading-guard return)
+  // so this stays a plain, always-called hook input.
+  const sessionData = session.data;
+  const activeRd = sessionData?.rounds?.[sessionData.currentRound] || sessionData?.rounds?.[0];
+  const roundKey = activeRd?.type === "final" ? "final" : String(sessionData?.currentRound ?? 0);
+  const roundLabel = activeRd?.type === "final" ? "Final Jeopardy" : `Round ${(sessionData?.currentRound ?? 0) + 1}`;
+
+  const bgm = useBgmSettings({ appConfirm, appAlert, roundKey });
+  bgmApiRef.current.initBgm = bgm.initBgm;
 
   const roomCode = session.session?.roomCode || null;
 
@@ -180,6 +233,16 @@ export default function JeopardyBoard({ onBack }) {
   const { publishRevealedCats } = useCategoryRevealSync(roomCode);
   const { publishRoundBanner } = useRoundBannerSync(roomCode);
   const { publishBgm } = useBgmSync(roomCode);
+  const { publishRandomizer } = useRandomizerSync(roomCode);
+  const { playerStats } = useStatsSync(roomCode);
+
+  // Clear the synced randomizer state for players whenever the host leaves
+  // the randomizer screen (Back to Board, or applying an order — see
+  // applyRandomizerOrder below, which also clears it after broadcasting
+  // the final result).
+  useEffect(() => {
+    if (view !== "randomizer") publishRandomizer(null);
+  }, [view, publishRandomizer]);
 
   useEffect(() => {
     publishRevealedCats(Array.from(board.revealedCats));
@@ -232,6 +295,48 @@ export default function JeopardyBoard({ onBack }) {
     if (!(await appConfirm("Reset all scores to 0 and mark all clues unused (both rounds)? Your questions/answers/media stay."))) return;
     board.resetRoundClues();
     teams.resetAllScores();
+  }
+
+  // Snapshots this playthrough into saved_games (see boards.js's POST
+  // /:id/games) — teams' final scores, a derived ranking, and the
+  // correct/wrong counts useStatsSync has been collecting from the
+  // server all game. discordUserId -> username/teamId is resolved here
+  // against persistence.players (the live roster), since the server-side
+  // playerStats blob only carries correct/wrong counts, not identity —
+  // see useStatsSync's comment for why.
+  async function handleEndGame() {
+    if (!(await appConfirm("End the game and save final standings? This can't be undone."))) return;
+
+    const teamsList = data.teams;
+    const ranking = [...teamsList]
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .map((t, i) => ({ teamId: t.id, rank: i + 1, score: t.score ?? 0 }));
+
+    const playerStatsWithIdentity = Object.fromEntries(
+      Object.entries(playerStats).map(([discordUserId, counts]) => {
+        const p = (persistence.players || []).find((pl) => pl.discordUserId === discordUserId);
+        return [
+          discordUserId,
+          {
+            username: p?.discordUsername || null,
+            teamId: p?.teamId || null,
+            correct: counts.correct || 0,
+            wrong: counts.wrong || 0,
+          },
+        ];
+      })
+    );
+
+    try {
+      await SessionStore.saveGameResult(session.session.id, {
+        teams: teamsList.map((t) => ({ id: t.id, name: t.name, score: t.score ?? 0 })),
+        ranking,
+        playerStats: playerStatsWithIdentity,
+      });
+    } catch (e) {
+      console.error("Failed to save game result:", e);
+      appAlert("Couldn't save final standings — check your connection and try again.");
+    }
   }
 
   function toggleTimerEnabled() {
@@ -324,6 +429,21 @@ export default function JeopardyBoard({ onBack }) {
   const activeClueObj = activeCat && clueEditor.activeClue ? activeCat.clues[clueEditor.activeClue.value] : null;
   const editingCat = rd.type !== "final" && clueEditor.editingTarget ? rd.categories.find((c) => c.id === clueEditor.editingTarget.catId) : null;
 
+  // Applies the randomized order to the board (same as before), then hands
+  // board control to whichever discordUserId is attached to the 1st-place
+  // team, so that team can immediately pick the first clue without the
+  // host needing a separate manual "Board control" step. Falls back to
+  // OPEN_CONTROL (anyone may pick) if the winning team has nobody's
+  // Discord account linked yet, rather than leaving control locked to
+  // nobody. Also clears the synced randomizer state so players' screens
+  // drop back out of the randomizer view once the host is done with it.
+  function applyRandomizerOrder(order) {
+    teams.applyTeamOrder(order);
+    const firstDiscordId = order[0]?.discordUserIds?.[0] || null;
+    hostSetControl(firstDiscordId || OPEN_CONTROL);
+    publishRandomizer(null);
+  }
+
   return (
     <div className="jp-root" style={{ position: "relative" }}>
       {onBack && view !== "randomizer" && (
@@ -337,7 +457,12 @@ export default function JeopardyBoard({ onBack }) {
       )}
 
       {view === "randomizer" ? (
-        <TeamRandomizer teams={data.teams} onApplyOrder={teams.applyTeamOrder} onClose={() => setView("board")} />
+        <TeamRandomizer
+          teams={data.teams}
+          onApplyOrder={applyRandomizerOrder}
+          onClose={() => setView("board")}
+          onBroadcast={publishRandomizer}
+        />
       ) : (
         <>
           <Marquee
@@ -388,6 +513,7 @@ export default function JeopardyBoard({ onBack }) {
               onToggleDdMinWagerZero={toggleDdMinWagerZero}
               ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
               onToggleDdWagerBasisPlayerScore={toggleDdWagerBasisPlayerScore}
+              onEndGame={handleEndGame}
             />
           </div>
 
@@ -401,6 +527,8 @@ export default function JeopardyBoard({ onBack }) {
               appConfirm={appConfirm}
               appAlert={appAlert}
               resolveDiscordMembersForTeam={teams.resolveDiscordMembersForTeam}
+              players={persistence.players}
+              playerStats={playerStats}
             />
           ) : (
             <ClueGrid
@@ -602,6 +730,8 @@ export default function JeopardyBoard({ onBack }) {
               onSave={clueEditor.saveClue}
               onClose={clueEditor.closeEditModal}
               defaultTimerSeconds={data.settings.timerDuration}
+              categoryName={editingCat?.name}
+              clueValue={clueEditor.editingTarget.value}
             />
           )}
 
@@ -621,17 +751,22 @@ export default function JeopardyBoard({ onBack }) {
       )}
 
       <ConfirmDialog dialog={dialog} onResolve={resolveDialog} />
-      {bgm.bgmSettings && (
+      {bgm.bgmSettings && bgm.activeTrack && (
         <BackgroundMusicPlayer
-          settings={bgm.bgmSettings}
+          track={bgm.activeTrack}
+          volume={bgm.bgmSettings.volume}
+          mode={bgm.bgmSettings.mode}
+          onSetMode={bgm.setBgmMode}
+          roundLabel={roundLabel}
           onUploadFile={bgm.handleBgmUpload}
           onClear={bgm.clearBgm}
           onVolumeChange={bgm.setBgmVolume}
           onToggleLoop={bgm.toggleBgmLoop}
           onSetDirectUrl={bgm.setBgmDirectUrl}
-          onSetSoundcloudUrl={bgm.setBgmSoundcloudUrl}
           onPlaybackChange={publishBgm}
-          ducking={clueEditor.duckMusic}
+          ducking={clueEditor.duckMusic || sfxDucking}
+          finalStandingsVolume={finalStandingsVolume}
+          onFinalStandingsVolumeChange={handleFinalStandingsVolumeChange}
         />
       )}
     </div>

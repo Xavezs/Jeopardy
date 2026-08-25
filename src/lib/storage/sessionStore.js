@@ -168,6 +168,23 @@ export const SessionStore = {
       body: JSON.stringify({ discordChannelId }),
     });
   },
+
+  // POST /api/boards/:id/games — call once when the host ends the game.
+  // finalScores should be shaped like:
+  //   { teams: [{id,name,score}], ranking: [{teamId,rank,score}],
+  //     playerStats: { [discordUserId]: {username, correct, wrong, teamId} } }
+  async saveGameResult(boardId, finalScores) {
+    return await api("/api/boards/" + boardId + "/games", {
+      method: "POST",
+      body: JSON.stringify({ finalScores }),
+    });
+  },
+
+  // GET /api/boards/:id/games — past playthroughs for this board, most
+  // recent first. Powers a "game history" / leaderboard view.
+  async getGameHistory(boardId) {
+    return await api("/api/boards/" + boardId + "/games");
+  },
 };
 
 export function migrateClueSchemaIfNeeded(data) {

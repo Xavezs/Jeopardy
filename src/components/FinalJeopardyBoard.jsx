@@ -15,7 +15,7 @@ import {
   detectMediaTypeFromUrl,
 } from "../lib/storage";
 import { discordSdk } from "../discordSdk";
-import { playStandingsCelebration, playCatRevealSfx, playCorrectSfx, playIncorrectSfx } from "../lib/boardSfx";
+import { playStandingsCelebration, stopStandingsCelebration, playCatRevealSfx, playCorrectSfx, playIncorrectSfx } from "../lib/boardSfx";
 
 // Same escape hatch ClueModal uses — YouTube can't be embedded inside
 // Discord's Activity CSP, so open it in the user's real browser instead.
@@ -112,6 +112,87 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
 }
 
 /* =========================================================================
+   FinalRevealPicker
+   Multi-select version of the old "pick who's next" list: every remaining
+   (not-yet-judged) team gets a checkbox-style row the host can tap to
+   toggle in/out of the pending selection, plus a "Select All" shortcut and
+   a "Reveal Selected" button that confirms the batch. Selection lives as
+   local component state — nothing is synced to players until the host
+   actually confirms, so a half-made selection never flashes on anyone
+   else's screen.
+   ========================================================================= */
+function FinalRevealPicker({ teams, wagers, answers, onConfirm }) {
+  const [pendingIds, setPendingIds] = useState([]);
+
+  // Drop any id that's no longer in `teams` (e.g. it just got judged via
+  // another path) so the confirm button's count/state never lags reality.
+  useEffect(() => {
+    setPendingIds((prev) => prev.filter((id) => teams.some((t) => t.id === id)));
+  }, [teams]);
+
+  function toggle(teamId) {
+    setPendingIds((prev) => (prev.includes(teamId) ? prev.filter((id) => id !== teamId) : [...prev, teamId]));
+  }
+
+  const allSelected = teams.length > 0 && pendingIds.length === teams.length;
+
+  return (
+    <div className="final-reveal-picker">
+      <h3 className="final-phase-title">Choose Who To Reveal Next</h3>
+      <p className="final-phase-hint">Select one or more teams, then confirm — order is entirely up to you.</p>
+      {teams.length > 1 && (
+        <button
+          type="button"
+          className="final-reveal-select-all-btn"
+          onClick={() => setPendingIds(allSelected ? [] : teams.map((t) => t.id))}
+        >
+          {allSelected ? "Deselect All" : "Select All"}
+        </button>
+      )}
+      {teams.map((t) => {
+        const selected = pendingIds.includes(t.id);
+        return (
+          <button
+            type="button"
+            key={t.id}
+            className={"final-reveal-pick-row" + (selected ? " is-selected" : "")}
+            onClick={() => toggle(t.id)}
+            aria-pressed={selected}
+          >
+            <div className="final-reveal-pick-header">
+              <span className="final-reveal-pick-checkbox" aria-hidden="true">{selected ? "✓" : ""}</span>
+              <span className="final-team-name">{t.name}</span>
+              <span className="final-team-score">${t.score}</span>
+            </div>
+            <div className="final-reveal-pick-meta">
+              <span className="final-reveal-pick-wager">Wagered ${wagers?.[t.id] ?? 0}</span>
+              <span className="final-reveal-pick-answer">
+                {answers?.[t.id]?.trim() ? answers[t.id] : "(no answer submitted)"}
+              </span>
+            </div>
+          </button>
+        );
+      })}
+      <button
+        type="button"
+        className="final-advance-btn"
+        disabled={pendingIds.length === 0}
+        onClick={() => {
+          onConfirm(pendingIds);
+          setPendingIds([]);
+        }}
+      >
+        {pendingIds.length > 1
+          ? `Reveal Selected (${pendingIds.length})`
+          : pendingIds.length === 1
+          ? "Reveal Selected Team"
+          : "Reveal Selected"}
+      </button>
+    </div>
+  );
+}
+
+/* =========================================================================
    FinalJeopardyBoard
    Renders instead of <ClueGrid> whenever the current round has
    `type: "final"` (see JeopardyBoard.jsx). Walks the host through
@@ -125,7 +206,7 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
    the value as already locked, same as DailyDoubleFront in PlayerView.jsx
    treats a wager that arrived from the picker's own device.
    ========================================================================= */
-export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustTeamScore, appConfirm, appAlert, resolveDiscordMembersForTeam }) {
+export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustTeamScore, appConfirm, appAlert, resolveDiscordMembersForTeam, players, playerStats }) {
   const [localAnswerDraft, setLocalAnswerDraft] = useState({});
 
   // Teams at or above $0 wager up to their score, as usual. Teams already
@@ -214,26 +295,43 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
       playStandingsCelebration(rd.standingsSfxUrl);
     } else if (!rd.standingsRevealed) {
       standingsSfxFiredRef.current = false;
+      stopStandingsCelebration();
     }
   }, [rd.standingsRevealed]);
 
-  // "Now Revealing" card flashes + plays a cue whenever the host moves to a
-  // new team — same one-shot-per-change pattern as standingsSfxFiredRef,
-  // just keyed off currentRevealTeamId instead. justChangedTeam clears
-  // itself after the flash animation finishes so it can fire again next
-  // time a new team comes up.
-  const prevRevealTeamIdRef = useRef(rd.currentRevealTeamId);
+  // Belt-and-suspenders: this component only renders while the current
+  // round is Final Jeopardy (see JeopardyBoard.jsx), so switching to a
+  // different round unmounts it — same as navigating away from the board
+  // entirely. Either way, any celebration sound still playing at that
+  // moment has no business continuing once this screen is gone.
+  useEffect(() => {
+    return () => stopStandingsCelebration();
+  }, []);
+
+  // "Now Revealing" batch flashes + plays a cue whenever the host confirms
+  // a NEW selection — same one-shot-per-change pattern as
+  // standingsSfxFiredRef, just keyed off currentRevealTeamIds instead of a
+  // single id. Fires only when a genuinely new team enters the spotlight
+  // (i.e. startRevealBatch was just called), not when the batch merely
+  // shrinks as individual teams get judged one at a time — that shrink
+  // reuses the same array-changed signal but shouldn't re-flash the whole
+  // card. justChangedTeam clears itself after the flash animation finishes
+  // so it can fire again next time a new batch comes up.
+  const prevRevealTeamIdsRef = useRef(rd.currentRevealTeamIds || []);
   const [justChangedTeam, setJustChangedTeam] = useState(false);
   useEffect(() => {
-    if (rd.currentRevealTeamId && rd.currentRevealTeamId !== prevRevealTeamIdRef.current) {
+    const ids = rd.currentRevealTeamIds || [];
+    const prevSet = new Set(prevRevealTeamIdsRef.current || []);
+    const hasNewTeam = ids.some((id) => !prevSet.has(id));
+    if (hasNewTeam) {
       playCatRevealSfx();
       setJustChangedTeam(true);
       const t = setTimeout(() => setJustChangedTeam(false), 1200);
-      prevRevealTeamIdRef.current = rd.currentRevealTeamId;
+      prevRevealTeamIdsRef.current = ids;
       return () => clearTimeout(t);
     }
-    prevRevealTeamIdRef.current = rd.currentRevealTeamId;
-  }, [rd.currentRevealTeamId]);
+    prevRevealTeamIdsRef.current = ids;
+  }, [rd.currentRevealTeamIds]);
 
   // Same idea for the "Already Revealed" history: whenever a new row lands
   // (rd.revealedTeamIds grows), play the matching correct/incorrect cue and
@@ -279,49 +377,53 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
           />
         ) : (
           <button className="final-category-hidden" onClick={final.revealCategory}>
-            ? Reveal Category
+            Reveal Category
           </button>
         )}
       </div>
 
       {editMode && (
         <div className="final-edit-clue">
-          <textarea
-            className="final-clue-input"
-            placeholder="Question…"
-            value={rd.clue.question}
-            onChange={(e) => final.setClue({ question: e.target.value })}
-          />
-          <textarea
-            className="final-clue-input"
-            placeholder="Answer…"
-            value={rd.clue.answer}
-            onChange={(e) => final.setClue({ answer: e.target.value })}
-          />
+          <div className="final-edit-row">
+            <textarea
+              className="final-clue-input"
+              placeholder="Question…"
+              value={rd.clue.question}
+              onChange={(e) => final.setClue({ question: e.target.value })}
+            />
+            <textarea
+              className="final-clue-input"
+              placeholder="Answer…"
+              value={rd.clue.answer}
+              onChange={(e) => final.setClue({ answer: e.target.value })}
+            />
+          </div>
+          <div className="final-edit-row">
+            <MediaField
+              label="Question media (optional)"
+              type=""
+              accept="image/*,video/*,audio/*"
+              placeholder="https://... image, video, audio file, or a Google Drive link"
+              value={mediaValueFor("media")}
+              onUrlChange={(url) => handleMediaUrlChange("media", url)}
+              onFile={(file) => handleMediaFile("media", file)}
+              onClear={() => handleClearMedia("media")}
+              hint="Image, video, or audio — type is detected automatically."
+            />
+            <MediaField
+              label="Answer media (optional)"
+              type=""
+              accept="image/*,video/*,audio/*"
+              placeholder="https://... image, video, audio file, or a Google Drive link"
+              value={mediaValueFor("answerMedia")}
+              onUrlChange={(url) => handleMediaUrlChange("answerMedia", url)}
+              onFile={(file) => handleMediaFile("answerMedia", file)}
+              onClear={() => handleClearMedia("answerMedia")}
+              hint="Shown alongside the answer when revealed."
+            />
+          </div>
           <MediaField
-            label="Question media (optional) — image, video, or audio: paste a URL, or upload a file"
-            type=""
-            accept="image/*,video/*,audio/*"
-            placeholder="https://... image, video, audio file, or a YouTube link"
-            value={mediaValueFor("media")}
-            onUrlChange={(url) => handleMediaUrlChange("media", url)}
-            onFile={(file) => handleMediaFile("media", file)}
-            onClear={() => handleClearMedia("media")}
-            hint="The type (image / video / audio) is detected automatically."
-          />
-          <MediaField
-            label="Answer media (optional) — shown alongside the answer when revealed"
-            type=""
-            accept="image/*,video/*,audio/*"
-            placeholder="https://... image, video, audio file, or a YouTube link"
-            value={mediaValueFor("answerMedia")}
-            onUrlChange={(url) => handleMediaUrlChange("answerMedia", url)}
-            onFile={(file) => handleMediaFile("answerMedia", file)}
-            onClear={() => handleClearMedia("answerMedia")}
-            hint="Optional — e.g. reveal a photo, clip, or sound as part of the answer."
-          />
-          <MediaField
-            label="Final Standings celebration sound (optional) — plays for everyone (host + players) when standings are revealed"
+            label="Celebration sound (optional)"
             type=""
             accept="audio/*"
             placeholder="https://... audio file, or a Google Drive link"
@@ -329,7 +431,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
             onUrlChange={(url) => handleMediaUrlChange("standingsSfx", url)}
             onFile={(file) => handleMediaFile("standingsSfx", file)}
             onClear={() => handleClearMedia("standingsSfx")}
-            hint="Leave empty to use the built-in celebration sound."
+            hint="Plays for everyone when standings are revealed. Leave empty for the built-in sound."
           />
         </div>
       )}
@@ -367,7 +469,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
 
       {!editMode && rd.phase === "clue" && (
         <div className="final-phase-panel final-clue-reveal">
-          <p className="final-clue-text">{rd.clue.question}</p>
+          <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
           <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
           <p className="final-phase-hint">
             {teams.filter((t) => rd.answers[t.id] != null).length} / {teams.length} teams locked in
@@ -400,34 +502,18 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
       )}
 
       {!editMode && rd.phase === "reveal" && (() => {
-        const team = rd.currentRevealTeamId ? teams.find((t) => t.id === rd.currentRevealTeamId) : null;
+        const activeIds = rd.currentRevealTeamIds || [];
+        const activeTeams = activeIds.map((id) => teams.find((t) => t.id === id)).filter(Boolean);
         const remainingTeams = teams.filter((t) => !rd.revealedTeamIds.includes(t.id));
         const revealedTeams = rd.revealedTeamIds.map((id) => teams.find((t) => t.id === id)).filter(Boolean);
         const stage = rd.revealStage || "hidden"; // "hidden" -> "wager" -> "answer"
+        const isBatch = activeTeams.length > 1;
         return (
           <div className="final-phase-panel">
-            {team ? (
-              <div className={`final-reveal-card${justChangedTeam ? " is-flash" : ""}`}>
-                <span className="final-eyebrow">Now Revealing</span>
-                {(() => {
-                  const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
-                  return members.length > 0 ? (
-                    <div className="final-reveal-avatar-stack">
-                      {members.map((m) => (
-                        <img
-                          key={m.id}
-                          src={m.avatarUrl}
-                          alt=""
-                          className={"final-reveal-avatar" + (m.speaking ? " is-speaking" : "")}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="final-reveal-avatar-fallback">{(team.name || "?").trim().charAt(0).toUpperCase()}</div>
-                  );
-                })()}
-                <span className="final-team-name">{team.name}</span>
-                <p className="final-clue-text">{rd.clue.question}</p>
+            {activeTeams.length > 0 ? (
+              <div className={`final-reveal-batch${justChangedTeam ? " is-flash" : ""}`}>
+                <span className="final-eyebrow">{isBatch ? `Now Revealing — ${activeTeams.length} Teams` : "Now Revealing"}</span>
+                <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
                 <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
                 <div className="final-correct-answer-box">
                   <span className="final-correct-answer-label">Correct Answer</span>
@@ -435,61 +521,81 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                   <FinalMediaPlayer mediaRef={rd.clue.answerMediaUrl} mediaType={rd.clue.answerMediaType} className="final-answer-media" />
                 </div>
 
+                <div className={"final-reveal-grid" + (isBatch ? "" : " is-single")}>
+                  {activeTeams.map((team) => {
+                    const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
+                    return (
+                      <div className="final-reveal-tile" key={team.id}>
+                        {members.length > 0 ? (
+                          <div className="final-reveal-avatar-stack">
+                            {members.map((m) => (
+                              <img
+                                key={m.id}
+                                src={m.avatarUrl}
+                                alt=""
+                                className={"final-reveal-avatar" + (m.speaking ? " is-speaking" : "")}
+                              />
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="final-reveal-avatar-fallback">{(team.name || "?").trim().charAt(0).toUpperCase()}</div>
+                        )}
+                        <span className="final-team-name">{team.name}</span>
+
+                        {stage === "hidden" && <p className="final-phase-hint final-reveal-tile-hint">Wager hidden</p>}
+                        {stage !== "hidden" && (
+                          <p className="final-wager-text">Wagered ${rd.wagers[team.id] || 0}</p>
+                        )}
+                        {stage === "answer" && (
+                          <p className="final-answer-text">“{rd.answers[team.id] || "(no answer)"}”</p>
+                        )}
+
+                        {stage === "answer" && (
+                          <div className="final-judge-buttons final-judge-buttons-tile">
+                            <button className="final-correct-btn" onClick={() => final.judgeTeam(team, true, adjustTeamScore)}>
+                              Correct
+                            </button>
+                            <button className="final-incorrect-btn" onClick={() => final.judgeTeam(team, false, adjustTeamScore)}>
+                              Incorrect
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
                 {stage === "hidden" && (
                   <button className="final-advance-btn" onClick={() => final.revealWager()}>
-                    Reveal Wager
+                    Reveal Wager{isBatch ? "s" : ""}
                   </button>
-                )}
-
-                {stage !== "hidden" && (
-                  <p className="final-wager-text">Wagered ${rd.wagers[team.id] || 0}</p>
                 )}
 
                 {stage === "wager" && (
                   <button className="final-advance-btn" onClick={() => final.revealAnswer()}>
-                    Reveal Their Answer
+                    Reveal {isBatch ? "Their Answers" : "Their Answer"}
                   </button>
                 )}
 
-                {stage === "answer" && (
-                  <>
-                    <p className="final-answer-text">“{rd.answers[team.id] || "(no answer)"}”</p>
-                    <div className="final-judge-buttons">
-                      <button className="final-correct-btn" onClick={() => final.judgeTeam(team, true, adjustTeamScore)}>
-                        Correct
-                      </button>
-                      <button className="final-incorrect-btn" onClick={() => final.judgeTeam(team, false, adjustTeamScore)}>
-                        Incorrect
-                      </button>
-                    </div>
-                  </>
+                {stage === "answer" && isBatch && (
+                  <div className="final-judge-buttons final-judge-buttons-batch">
+                    <button className="final-correct-btn" onClick={() => final.judgeBatch(teams, true, adjustTeamScore)}>
+                      Mark All Correct
+                    </button>
+                    <button className="final-incorrect-btn" onClick={() => final.judgeBatch(teams, false, adjustTeamScore)}>
+                      Mark All Incorrect
+                    </button>
+                  </div>
                 )}
               </div>
             ) : (
               remainingTeams.length > 0 && (
-                <div className="final-reveal-picker">
-                  <h3 className="final-phase-title">Choose Who To Reveal Next</h3>
-                  <p className="final-phase-hint">Pick any remaining team — order is entirely up to you.</p>
-                  {remainingTeams.map((t) => (
-                    <button
-                      type="button"
-                      key={t.id}
-                      className="final-reveal-pick-row"
-                      onClick={() => final.selectRevealTeam(t.id)}
-                    >
-                      <div className="final-reveal-pick-header">
-                        <span className="final-team-name">{t.name}</span>
-                        <span className="final-team-score">${t.score}</span>
-                      </div>
-                      <div className="final-reveal-pick-meta">
-                        <span className="final-reveal-pick-wager">Wagered ${rd.wagers?.[t.id] ?? 0}</span>
-                        <span className="final-reveal-pick-answer">
-                          {rd.answers?.[t.id]?.trim() ? rd.answers[t.id] : "(no answer submitted)"}
-                        </span>
-                      </div>
-                    </button>
-                  ))}
-                </div>
+                <FinalRevealPicker
+                  teams={remainingTeams}
+                  wagers={rd.wagers}
+                  answers={rd.answers}
+                  onConfirm={(ids) => final.startRevealBatch(ids)}
+                />
               )
             )}
             {revealedTeams.length > 0 && (
@@ -564,56 +670,116 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
           <div className="final-phase-panel final-standings">
             <h3 className="final-phase-title">Final Standings</h3>
 
-            <div className="final-podium-row">
-              {podiumOrder.map((group) => (
-                <div key={group.rank} className={`final-podium-col${group.rank === 1 ? " is-first" : ""}`}>
-                  <div className="final-podium-team-list">
-                    {group.teams.map((team) => {
-                      const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
-                      return (
-                        <div className="final-podium-team-entry" key={team.id}>
-                          {members.length > 0 ? (
-                            <div className="final-podium-avatar-stack">
-                              {members.map((m) => (
-                                <img
-                                  key={m.id}
-                                  src={m.avatarUrl}
-                                  alt=""
-                                  className={"final-podium-avatar" + (m.speaking ? " is-speaking" : "")}
-                                />
-                              ))}
+            <div className="final-standings-body">
+              <div className="final-standings-col">
+                <div className="final-podium-row">
+                  {podiumOrder.map((group) => (
+                    <div key={group.rank} className={`final-podium-col${group.rank === 1 ? " is-first" : ""}`}>
+                      <div className="final-podium-team-list">
+                        {group.teams.map((team) => {
+                          const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
+                          // Same per-player correct/wrong lookup the standalone
+                          // "Player Stats" panel below uses — for podium teams
+                          // (rank <= 3) we render it inline next to the name
+                          // instead, so it doesn't get shown twice.
+                          const teamPlayers =
+                            players && playerStats
+                              ? players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId])
+                              : [];
+                          return (
+                            <div className="final-podium-team-entry" key={team.id}>
+                              {members.length > 0 ? (
+                                <div className="final-podium-avatar-stack">
+                                  {members.map((m) => (
+                                    <img
+                                      key={m.id}
+                                      src={m.avatarUrl}
+                                      alt=""
+                                      className={"final-podium-avatar" + (m.speaking ? " is-speaking" : "")}
+                                    />
+                                  ))}
+                                </div>
+                              ) : (
+                                <div className="final-podium-avatar-fallback">
+                                  {(team.name || "?").trim().charAt(0).toUpperCase()}
+                                </div>
+                              )}
+                              <div className="final-podium-name-row">
+                                <div className="final-podium-name">{team.name}</div>
+                                {teamPlayers.length > 0 && (
+                                  <div className="final-podium-player-stats">
+                                    {teamPlayers.map((p) => {
+                                      const s = playerStats[p.discordUserId];
+                                      return (
+                                        <span
+                                          className="final-podium-stat-pill"
+                                          key={p.discordUserId}
+                                          title={p.discordUsername || "Player"}
+                                        >
+                                          <span className="final-podium-stat-correct">✓{s.correct || 0}</span>
+                                          <span className="final-podium-stat-wrong">✗{s.wrong || 0}</span>
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
                             </div>
-                          ) : (
-                            <div className="final-podium-avatar-fallback">
-                              {(team.name || "?").trim().charAt(0).toUpperCase()}
-                            </div>
-                          )}
-                          <div className="final-podium-name">{team.name}</div>
-                        </div>
-                      );
-                    })}
-                  </div>
-                  <div className="final-podium-score">${group.score}</div>
-                  <div className="final-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
-                    <div className="final-podium-rank">{group.rank}</div>
-                  </div>
-                </div>
-              ))}
-            </div>
-
-            {restGroups.length > 0 && (
-              <div className="final-rest-list">
-                {restGroups.map((group) =>
-                  group.teams.map((team) => (
-                    <div className="final-standing-row" key={team.id}>
-                      <span className="final-standing-rank">{group.rank}</span>
-                      <span className="final-team-name">{team.name}</span>
-                      <span className="final-team-score">${team.score}</span>
+                          );
+                        })}
+                      </div>
+                      <div className="final-podium-score">${group.score}</div>
+                      <div className="final-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
+                        <div className="final-podium-rank">{group.rank}</div>
+                      </div>
                     </div>
-                  ))
+                  ))}
+                </div>
+
+                {restGroups.length > 0 && (
+                  <div className="final-rest-list">
+                    {restGroups.map((group) =>
+                      group.teams.map((team) => (
+                        <div className="final-standing-row" key={team.id}>
+                          <span className="final-standing-rank">{group.rank}</span>
+                          <span className="final-team-name">{team.name}</span>
+                          <span className="final-team-score">${team.score}</span>
+                        </div>
+                      ))
+                    )}
+                  </div>
                 )}
               </div>
-            )}
+
+              {players && playerStats && Object.keys(playerStats).length > 0 && restGroups.length > 0 && (
+                <div className="final-player-stats">
+                  <div className="final-player-stats-title">Player Stats</div>
+                  {restGroups.flatMap((g) => g.teams).map((team) => {
+                    const teamPlayers = players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId]);
+                    if (teamPlayers.length === 0) return null;
+                    return (
+                      <div className="final-player-stats-team" key={team.id}>
+                        <div className="final-player-stats-team-name">{team.name}</div>
+                        {teamPlayers.map((p) => {
+                          const s = playerStats[p.discordUserId];
+                          const total = (s.correct || 0) + (s.wrong || 0);
+                          return (
+                            <div className="final-player-stats-row" key={p.discordUserId}>
+                              <span className="final-player-stats-name">{p.discordUsername || "Player"}</span>
+                              <span className="final-player-stats-correct">✓ {s.correct || 0}</span>
+                              <span className="final-player-stats-wrong">✗ {s.wrong || 0}</span>
+                              {total > 0 && (
+                                <span className="final-player-stats-accuracy">{Math.round((s.correct / total) * 100)}%</span>
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         );
       })()}

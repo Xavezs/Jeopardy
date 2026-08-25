@@ -145,14 +145,24 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
   }
 
   let lastPlayedAt = 0;
+  // Every real-file clone currently mid-playback (createSfx allows
+  // overlapping plays — cloneNode per attemptPlay — so this can hold
+  // more than one node at once, e.g. rapid repeat triggers before
+  // minGapMs). play.stop() below force-stops and clears all of them.
+  const activeNodes = new Set();
 
   function attemptPlay(isRetry) {
     try {
       const node = audioTemplate.cloneNode(true);
       node.volume = audioTemplate.volume;
+      activeNodes.add(node);
+      const untrack = () => activeNodes.delete(node);
+      node.addEventListener("ended", untrack, { once: true });
+      node.addEventListener("error", untrack, { once: true });
       const playPromise = node.play();
       if (playPromise && typeof playPromise.catch === "function") {
         playPromise.catch(() => {
+          untrack();
           if (isRetry) {
             // Already gave it a second chance after buffering — this is a
             // real, one-off playback failure (not just cold cache), so
@@ -178,7 +188,7 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
     }
   }
 
-  return function play() {
+  const play = function play() {
     const now = performance.now();
     if (now - lastPlayedAt < minGapMs) return;
     lastPlayedAt = now;
@@ -189,4 +199,40 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
     }
     fallbackTone();
   };
+
+  // Lets a caller adjust this sound's volume after the fact — e.g. a
+  // user-facing volume slider — without createSfx needing to expose its
+  // internal audioTemplate. audioTemplate.volume is read fresh by
+  // attemptPlay() on every play() call (see node.volume = audioTemplate.
+  // volume above), so mutating it here takes effect on the very next
+  // play, no extra plumbing needed.
+  //
+  // Only covers the real-file path. The fallback tone's gain is whatever
+  // that function itself schedules — sounds that want their fallback to
+  // stay in sync need to read the same volume source themselves (see
+  // playSynthFinalStandingsTone in boardSfx.js for an example).
+  play.setVolume = (v) => {
+    if (audioTemplate) audioTemplate.volume = Math.max(0, Math.min(1, v));
+  };
+
+  // Force-stops every real-file clone currently mid-playback (see
+  // activeNodes above). Doesn't touch the synthesized fallback tone —
+  // that's WebAudio oscillators scheduled inline inside `fallbackTone`
+  // itself, with no handle available here to cancel; a sound that wants
+  // its fallback stoppable too needs to track/cancel its own nodes (see
+  // playDailyDoubleSfx/stopDailyDoubleSfx in boardSfx.js for an example).
+  // Safe to call even if nothing's currently playing.
+  play.stop = () => {
+    for (const node of activeNodes) {
+      try {
+        node.pause();
+        node.currentTime = 0;
+      } catch (e) {
+        /* best effort */
+      }
+    }
+    activeNodes.clear();
+  };
+
+  return play;
 }

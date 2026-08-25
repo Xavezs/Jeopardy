@@ -1,19 +1,6 @@
-@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap');
+@import url('./theme.css');
 
 :root {
-  --pv-bg: #0a0e27;
-  --pv-bg-deep: #060815;
-  --pv-cell: #12207a;
-  --pv-cell-light: #1c2f9e;
-  --pv-cell-used: #0b1658;
-  --pv-gold: #f0b942;
-  --pv-gold-dim: #a9822f;
-  --pv-teal: #2fd6b8;
-  --pv-red: #e8544a;
-  --pv-text: #f4f1ea;
-  --pv-text-dim: #b9c0e8;
-  --pv-font-display: 'Arial Black', Impact, 'Franklin Gothic Bold', sans-serif;
-  --pv-font-body: 'Quicksand', sans-serif;
   --pv-buzzbar-height: 92px;
 }
 
@@ -22,14 +9,14 @@
   to { opacity: 1; transform: scale(1) translateY(0); }
 }
 @keyframes pvScorePulseUp {
-  0% { transform: scale(1); color: var(--pv-gold); }
-  35% { transform: scale(1.28); color: var(--pv-teal); text-shadow: 0 0 22px rgba(47,214,184,0.7); }
-  100% { transform: scale(1); color: var(--pv-gold); }
+  0% { transform: scale(1); color: var(--gold); }
+  35% { transform: scale(1.28); color: var(--teal); text-shadow: 0 0 22px rgba(47,214,184,0.7); }
+  100% { transform: scale(1); color: var(--gold); }
 }
 @keyframes pvScorePulseDown {
-  0% { transform: scale(1); color: var(--pv-gold); }
-  35% { transform: scale(0.86); color: var(--pv-red); text-shadow: 0 0 18px rgba(232,84,74,0.6); }
-  100% { transform: scale(1); color: var(--pv-gold); }
+  0% { transform: scale(1); color: var(--gold); }
+  35% { transform: scale(0.86); color: var(--red); text-shadow: 0 0 18px rgba(232,84,74,0.6); }
+  100% { transform: scale(1); color: var(--gold); }
 }
 @keyframes pvCatRevealPop {
   0% { transform: scale(0.5); opacity: 0; }
@@ -38,22 +25,22 @@
 
 html, body {
   scrollbar-width: thin;
-  scrollbar-color: var(--pv-gold-dim) var(--pv-bg-deep);
+  scrollbar-color: var(--gold-dim) var(--bg-deep);
 }
 html::-webkit-scrollbar, body::-webkit-scrollbar { width: 12px; }
-html::-webkit-scrollbar-track, body::-webkit-scrollbar-track { background: var(--pv-bg-deep); }
+html::-webkit-scrollbar-track, body::-webkit-scrollbar-track { background: var(--bg-deep); }
 html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
-  background: linear-gradient(180deg, var(--pv-gold), var(--pv-gold-dim));
+  background: linear-gradient(180deg, var(--gold), var(--gold-dim));
   border-radius: 999px;
-  border: 3px solid var(--pv-bg-deep);
+  border: 3px solid var(--bg-deep);
   background-clip: padding-box;
 }
 
 .pv-root {
   min-height: 100vh;
-  background: radial-gradient(ellipse at top, #131c4d 0%, var(--pv-bg) 45%, var(--pv-bg-deep) 100%);
-  color: var(--pv-text);
-  font-family: var(--pv-font-body), system-ui, -apple-system, sans-serif;
+  background: radial-gradient(ellipse at top, #131c4d 0%, var(--bg) 45%, var(--bg-deep) 100%);
+  color: var(--text);
+  font-family: var(--font-body), system-ui, -apple-system, sans-serif;
   display: flex;
   flex-direction: column;
   padding: 16px;
@@ -99,7 +86,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   margin: 0 0 4px;
   font-size: 22px;
   text-align: center;
-  color: var(--pv-gold);
+  color: var(--gold);
   text-shadow: 0 0 14px rgba(240,185,66,0.4);
 }
 
@@ -108,15 +95,15 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   flex-direction: column;
   gap: 6px;
   font-size: 13px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
 }
 
 .pv-join-card input {
-  background: var(--pv-bg-deep);
+  background: var(--bg-deep);
   border: 1px solid rgba(240,185,66,0.28);
   border-radius: 8px;
   padding: 10px 12px;
-  color: var(--pv-text);
+  color: var(--text);
   font-size: 16px;
 }
 
@@ -131,13 +118,13 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-btn-primary {
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  background: linear-gradient(180deg, var(--gold), #c8932c);
   color: #1a1200;
 }
 
 .pv-status {
   font-size: 14px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
 }
 
 .pv-title-banner {
@@ -170,7 +157,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .marquee-bulb {
   position: absolute;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #fff2b8 35%, var(--pv-gold) 70%, #c99a3a 100%);
+  background: radial-gradient(circle at 35% 30%, #ffffff 0%, #fff2b8 35%, var(--gold) 70%, #c99a3a 100%);
   transform: translate(-50%, -50%);
   box-shadow: 0 0 12px 4px rgba(240,185,66,1), 0 0 5px rgba(255,255,255,0.95), inset 0 -1px 1px rgba(0,0,0,0.2);
   animation: bulbTwinkle 2.6s ease-in-out infinite;
@@ -182,10 +169,10 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   z-index: 2;
   display: inline-block;
   white-space: nowrap;
-  font-family: var(--pv-font-display);
+  font-family: var(--font-title);
   font-size: clamp(24px, 6vw, 44px);
   letter-spacing: 7px;
-  color: var(--pv-gold);
+  color: var(--gold);
   text-shadow: 0 0 14px rgba(240,185,66,0.55), 0 0 2px rgba(240,185,66,0.8), 0 2px 3px rgba(0,0,0,0.6);
   padding: 0 15px 10px 15px;
 }
@@ -197,7 +184,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   gap: 8px;
   margin-bottom: 12px;
   font-size: 12px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   width: 100%;
   box-sizing: border-box;     
   padding-left: 40px;         
@@ -207,7 +194,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .pv-leave {
   background: none;
   border: 1px solid rgba(240,185,66,0.28);
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   border-radius: 6px;
   padding: 4px 8px;
   font-size: 11px;
@@ -224,14 +211,14 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   font-size: 12px;
   font-weight: 700;
   letter-spacing: 0.3px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   background: rgba(18, 32, 122, 0.4);
   border: 1px solid rgba(240, 185, 66, 0.18);
 }
 
 .pv-control-indicator.pv-control-mine {
   color: #1a1200;
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  background: linear-gradient(180deg, var(--gold), #c8932c);
   border-color: transparent;
   box-shadow: 0 0 16px rgba(240, 185, 66, 0.45);
   animation: pvControlMinePulse 1.6s ease-in-out infinite;
@@ -256,13 +243,13 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 
 /* Category reveal and locked states */
 .pv-cat-name {
-  background: linear-gradient(180deg, var(--pv-cell-light), var(--pv-cell));
+  background: linear-gradient(180deg, var(--cell-light), var(--cell));
   border: 1px solid rgba(240,185,66,0.18);
   border-radius: 8px;
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: clamp(10px, 3vw, 13px);
   letter-spacing: 0.5px;
-  color: var(--pv-text);
+  color: var(--text);
   text-shadow: 0 1px 2px rgba(0,0,0,0.5);
   text-align: center;
   padding: 8px 4px;
@@ -280,9 +267,9 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-cat-mark {
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: 20px;
-  color: var(--pv-gold-dim);
+  color: var(--gold-dim);
   text-shadow: 0 0 8px rgba(240, 185, 66, 0.2);
   animation: pvCatMarkPulse 1.8s ease-in-out infinite;
 }
@@ -302,14 +289,14 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-cell {
-  background: linear-gradient(180deg, var(--pv-cell), var(--pv-cell-used));
+  background: linear-gradient(180deg, var(--cell), var(--cell-dark));
   border: 1px solid rgba(240,185,66,0.18);
   border-radius: 8px;
   text-align: center;
   padding: 10px 0;
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-weight: 700;
-  color: var(--pv-gold);
+  color: var(--gold);
   font-size: clamp(13px, 3.6vw, 16px);
   transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease, box-shadow 0.12s ease, border-color 0.12s ease;
 }
@@ -345,7 +332,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 @media (hover: hover) {
   .pv-cell.pv-pickable:hover {
     transform: translateY(-2px);
-    box-shadow: 0 0 0 1px var(--pv-gold), 0 0 18px rgba(240, 185, 66, 0.35);
+    box-shadow: 0 0 0 1px var(--gold), 0 0 18px rgba(240, 185, 66, 0.35);
   }
 }
 
@@ -387,7 +374,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-teams-compact .team-card:hover {
-  border-color: var(--pv-gold);
+  border-color: var(--gold);
 }
 
 .pv-teams-compact .team-card.discord-speaking {
@@ -401,7 +388,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-teams-compact .pv-team-mine .team-card {
-  border-color: var(--pv-teal);
+  border-color: var(--teal);
   box-shadow: 0 0 14px rgba(47, 214, 184, 0.3), 0 4px 12px rgba(0, 0, 0, 0.3);
   background: linear-gradient(135deg, rgba(16, 45, 65, 0.92) 0%, rgba(10, 25, 42, 0.92) 100%);
 }
@@ -409,7 +396,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .pv-teams-compact .pv-team-mine .team-name-text::after {
   content: " (YOU)";
   font-size: 10px;
-  color: var(--pv-teal);
+  color: var(--teal);
   font-weight: 800;
   letter-spacing: 0.5px;
 }
@@ -424,7 +411,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   gap: 8px;
   font-size: 13px;
   font-weight: 700;
-  color: var(--pv-gold);
+  color: var(--gold);
   flex: 1;
   min-width: 0;
 }
@@ -461,11 +448,11 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   box-shadow: 0 4px 14px rgba(0,0,0,0.3);
   transition: border-color 0.2s ease;
 }
-.pv-team:hover { border-color: var(--pv-gold); }
+.pv-team:hover { border-color: var(--gold); }
 
 .pv-team-name {
-  font-family: var(--pv-font-display);
-  color: var(--pv-gold);
+  font-family: var(--font-display);
+  color: var(--gold);
   font-size: 11px;
   letter-spacing: 0.4px;
   opacity: 0.75;
@@ -473,10 +460,10 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-team-score {
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: 18px;
   font-weight: 900;
-  color: var(--pv-gold);
+  color: var(--gold);
 }
 
 .pv-team-score.pulse-up { animation: pvScorePulseUp 0.5s ease; }
@@ -485,7 +472,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .pv-buzzer-status {
   text-align: center;
   font-size: 11px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   margin-top: auto;
   padding-top: 2px;
 }
@@ -494,13 +481,13 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   margin-top: 4px;
   width: 100%;
   padding: 12px 0;
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: 17px;
   font-weight: 800;
   letter-spacing: 1.5px;
   border: 1px solid rgba(255,255,255,0.15);
   border-radius: 14px;
-  background: radial-gradient(circle, #ff5e5e 0%, var(--pv-red) 100%);
+  background: radial-gradient(circle, #ff5e5e 0%, var(--red) 100%);
   color: white;
   box-shadow: 0 6px 16px rgba(232,84,74,0.4);
   cursor: pointer;
@@ -597,11 +584,11 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-scoreboard-title {
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: 11px;
   font-weight: 800;
   letter-spacing: 1.5px;
-  color: var(--pv-gold-dim);
+  color: var(--gold-dim);
   text-transform: uppercase;
   text-align: center;
   margin: 4px 0 2px;
@@ -615,7 +602,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   padding: 6px 12px;
   font-size: 11px;
   font-weight: 700;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   text-align: center;
   margin-top: 0;
   letter-spacing: 0.3px;
@@ -681,26 +668,26 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-clue-front-cat {
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   letter-spacing: 2px;
   text-transform: uppercase;
-  color: var(--pv-gold);
+  color: var(--gold);
   font-size: 16px;
   opacity: 0.9;
   margin-bottom: 12px;
 }
 
 .pv-clue-front-val {
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: clamp(36px, 10vw, 56px);
-  color: var(--pv-gold);
+  color: var(--gold);
   margin-bottom: 16px;
 }
 
 .pv-clue-front-hint {
-  font-family: var(--pv-font-body);
+  font-family: var(--font-body);
   font-size: 13px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   font-style: italic;
   letter-spacing: 0.5px;
 }
@@ -723,8 +710,8 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   align-items: baseline;
   justify-content: center;
   gap: 10px;
-  font-family: var(--pv-font-display);
-  color: var(--pv-gold);
+  font-family: var(--font-display);
+  color: var(--gold);
   margin-bottom: 10px;
   flex-shrink: 0;
 }
@@ -746,10 +733,10 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-clue-question {
-  font-family: var(--pv-font-display);
+  font-family: var(--font-display);
   font-size: clamp(15px, 4vw, 21px);
   line-height: 1.4;
-  color: var(--pv-text);
+  color: var(--text);
   white-space: pre-line;
   margin-bottom: 14px;
   text-align: center;
@@ -812,7 +799,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   padding: 16px 20px;
   border-top: none;
   border-radius: 8px;
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  background: linear-gradient(180deg, var(--gold), #c8932c);
   font-weight: bold;
   font-size: 16px;
   color: #0a0e33;
@@ -964,7 +951,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   border-radius: 999px;
   padding: 2px 8px 2px 4px;
   font-size: 10px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
 }
 
 .pv-buzz-queue-pos {
@@ -975,8 +962,8 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   height: 15px;
   border-radius: 50%;
   background: rgba(240, 185, 66, 0.18);
-  color: var(--pv-gold);
-  font-family: var(--pv-font-display);
+  color: var(--gold);
+  font-family: var(--font-display);
   font-size: 9px;
   flex: 0 0 auto;
 }
@@ -990,7 +977,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-buzz-queue-item.active {
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  background: linear-gradient(180deg, var(--gold), #c8932c);
   border-color: transparent;
   color: #1a1200;
 }
@@ -1005,8 +992,8 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 
 .pv-buzz-queue-item.is-me:not(.active) {
-  border-color: var(--pv-teal);
-  color: var(--pv-teal);
+  border-color: var(--teal);
+  color: var(--teal);
 }
 
 .card {
@@ -1050,11 +1037,26 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
    player actually has here is their own local volume.
    ========================================================================= */
 .pv-bgm-widget {
+  /* Portaled straight into document.body (see PlayerBgmWidget.jsx) to
+     escape .pv-root's overflow clipping — which also means it's no
+     longer a DOM descendant of .pv-root, so that file's
+     `.pv-root * { box-sizing: border-box; }` no longer reaches this
+     subtree. Set it explicitly here instead of relying on it. Same
+     reason font-family is set explicitly below: .pv-root's own
+     font-family no longer cascades down to a portaled subtree either. */
+  box-sizing: border-box;
+  font-family: var(--font-body), system-ui, -apple-system, sans-serif;
   position: fixed;
-  right: 16px;
-  bottom: calc(var(--pv-buzzbar-height) + 12px);
+  /* Matches BackgroundMusicPlayer's fixed 18px/18px corner exactly.
+     There's no persistent buzz bar reserving space at the bottom of the
+     player screen (the BUZZ button lives inline inside the clue overlay,
+     not a fixed bottom bar), so there's nothing to offset above — the
+     old --pv-buzzbar-height offset just left this floating too high. */
+  right: 18px;
+  bottom: 18px;
   z-index: 310;
 }
+
 
 .pv-bgm-toggle-btn {
   width: 44px;
@@ -1062,7 +1064,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   border-radius: 50%;
   border: 1px solid rgba(240, 185, 66, 0.3);
   background: linear-gradient(180deg, rgba(30,42,130,0.85), rgba(6,9,26,0.9));
-  color: var(--pv-gold);
+  color: var(--gold);
   cursor: pointer;
   display: flex;
   align-items: center;
@@ -1070,32 +1072,56 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   box-shadow: 0 4px 14px rgba(0,0,0,0.4);
   transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
-.pv-bgm-toggle-btn:hover { border-color: var(--pv-gold); }
+.pv-bgm-toggle-btn:hover { border-color: var(--gold); }
 .pv-bgm-toggle-btn.is-playing {
-  box-shadow: 0 0 0 2px var(--pv-teal), 0 4px 14px rgba(0,0,0,0.4);
+  box-shadow: 0 0 0 2px var(--teal), 0 4px 14px rgba(0,0,0,0.4);
 }
 
 .pv-bgm-panel {
   position: absolute;
   right: 0;
   bottom: 54px;
-  width: 200px;
-  background: linear-gradient(180deg, rgba(30,42,130,0.55), rgba(6,9,26,0.92));
+  /* Matches BackgroundMusicPlayer's .bgm-panel exactly (width, padding,
+     background opacity, shadow) so the two look like the same component
+     in different modes rather than two different designs. The player
+     version was previously much more transparent (0.55/0.92 alpha),
+     which on a narrow mobile viewport let the board cells behind it
+     bleed through and made the panel unreadable — see the screenshot
+     that flagged this. */
+  width: 240px;
+  background: linear-gradient(180deg, rgba(26,37,112,0.97), rgba(6,9,26,0.98));
   border: 1px solid rgba(240,185,66,0.3);
   border-radius: 12px;
-  padding: 10px 12px;
-  box-shadow: inset 0 0 30px rgba(240,185,66,0.05), 0 10px 28px rgba(0,0,0,0.45);
+  padding: 14px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.05);
   display: flex;
   flex-direction: column;
   gap: 8px;
+  animation: pvBgmPanelIn 0.16s ease-out;
+}
+@keyframes pvBgmPanelIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.pv-bgm-panel-title {
+  font-family: var(--font-display);
+  font-size: 13px;
+  letter-spacing: 0.5px;
+  color: var(--gold);
+  margin-bottom: 2px;
+  text-align: center;
 }
 
 .pv-bgm-track-name {
   font-size: 12px;
-  color: var(--pv-text-dim);
+  color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  padding-bottom: 8px;
+  margin-bottom: 2px;
+  border-bottom: 1px solid rgba(240,185,66,0.15);
 }
 
 .pv-bgm-volume-row {
@@ -1106,65 +1132,59 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .pv-bgm-volume-icon {
   flex: 0 0 auto;
   display: flex;
-  color: var(--pv-gold);
+  color: var(--gold);
   filter: drop-shadow(0 0 4px rgba(240, 185, 66, 0.35));
 }
 
-/* Custom themed range slider — replaces the browser-default pill with a
-   gold/blue look consistent with the board's cells and buttons. Webkit
-   and Moz need separate rules since neither vendor lets you style the
-   other's pseudo-elements from a shared selector. */
+/* Same plain native slider as BackgroundMusicPlayer's .bgm-volume-slider
+   — just accent-color on an unstyled <input type="range">, rather than
+   a custom-built track/thumb. Kept identical between host and player so
+   the two widgets read as the same component. */
 .pv-bgm-volume-row input[type="range"] {
   flex: 1;
-  -webkit-appearance: none;
-  appearance: none;
-  height: 4px;
-  border-radius: 999px;
-  background: linear-gradient(
-    90deg,
-    var(--pv-gold) 0%,
-    var(--pv-gold) calc(var(--pv-vol, 50) * 1%),
-    var(--pv-cell) calc(var(--pv-vol, 50) * 1%),
-    var(--pv-cell) 100%
-  );
-  outline: none;
+  accent-color: var(--gold);
   cursor: pointer;
 }
-.pv-bgm-volume-row input[type="range"]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 0 6px rgba(240, 185, 66, 0.6);
-  cursor: pointer;
-  margin-top: 0;
+
+.pv-bgm-fs-volume-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(240, 185, 66, 0.15);
 }
-.pv-bgm-volume-row input[type="range"]::-moz-range-thumb {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
-  border: 1px solid rgba(255, 255, 255, 0.4);
-  box-shadow: 0 0 6px rgba(240, 185, 66, 0.6);
-  cursor: pointer;
+.pv-bgm-fs-volume-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
 }
-.pv-bgm-volume-row input[type="range"]::-moz-range-track {
-  height: 4px;
-  border-radius: 999px;
-  background: transparent;
+
+/* Same plain native slider treatment as .pv-bgm-volume-row above (and
+   BackgroundMusicPlayer's .bgm-volume-slider) — no custom track/thumb. */
+.pv-bgm-fs-volume-row input[type="range"] {
+  flex: 1;
+  accent-color: var(--gold);
+  cursor: pointer;
 }
 
 .pv-bgm-enable-btn {
-  background: linear-gradient(180deg, var(--pv-gold), #c8932c);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  background: linear-gradient(180deg, var(--gold), #c8932c);
   color: #1a1200;
   border: none;
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 12px;
   font-weight: 700;
-  font-family: var(--pv-font-body);
+  font-family: var(--font-body);
   cursor: pointer;
 }
 

@@ -1,19 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&display=swap');
-@font-face {
-  font-family: 'Geoparody';
-  src: url('../assets/fonts/Geoparody.otf') format('truetype');
-  font-weight: normal;
-  font-style: normal;
-}
-:root{
-    --bg: #0a0e27; --bg-deep: #060815; --cell: #12207a; --cell-light: #1c2f9e; --cell-dark: #0b1658;
-    --gold: #f0b942; --gold-dim: #a9822f; --teal: #2fd6b8; --red: #e8544a;
-    --text: #f4f1ea; --text-dim: #b9c0e8;
-    --font-display: 'Arial Black', Impact, 'Franklin Gothic Bold', sans-serif;
-    --font-body: 'Quicksand', sans-serif;
-    --font-title: 'Geoparody', 'Arial Black', Impact, 'Franklin Gothic Bold', sans-serif;
-  }
+@import url('./theme.css');
   .jp-root{
     background: radial-gradient(ellipse at top, #131c4d 0%, var(--bg) 45%, var(--bg-deep) 100%);
     color: var(--text); font-family: var(--font-body); min-height: 100vh; padding: 10px 14px 8px; box-sizing: border-box;
@@ -367,6 +352,7 @@
      enough hover feedback, so the lift is dropped here instead. */
   .clue-cell.has-clue-preview:not(.used):hover{
     transform: none;
+    background: transparent
   }
   .clue-cell:not(.used):active{ transform: translateY(1px) scale(0.98); }
   .clue-cell.used{ opacity:.28; cursor:default; background: linear-gradient(180deg, #0b1044, #070a2c); }
@@ -385,6 +371,7 @@
      keep the old plain "$value" look instead of flipping to a blank face. */
   .clue-cell.has-clue-preview{
     perspective: 900px;
+    background: transparent; border: none;
   }
   .cell-flip-viewport{
     position: absolute;
@@ -419,13 +406,18 @@
     text-align: center;
     overflow: hidden;
   }
-  .cell-flip-front .clue-value{
+  .cell-flip-front {
     font-size: clamp(11px, 3vw, 15px);
+    background: linear-gradient(180deg, var(--cell), var(--cell-dark));
+    border: 1px solid rgba(240,185,66,0.18);
+    border-radius: 8px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
   }
   .cell-flip-back{
     transform: rotateY(180deg);
-    background: linear-gradient(180deg, rgba(240,185,66,0.14), var(--cell-dark));
-    border-radius: 7px;
+    background: linear-gradient(180deg, var(--cell), var(--cell-dark));
+    border: 1px solid rgba(240,185,66,0.18);
+    border-radius: 8px;
   }
   .cell-preview-label{
     font-family: var(--font-display);
@@ -1680,17 +1672,21 @@
 
 .slot-machine{
   position: relative;
-  display: flex; flex-wrap: wrap; gap: 22px; justify-content: center;
+  display: flex; flex-wrap: nowrap; gap: clamp(8px, 1.6vw, 22px); justify-content: center;
   width: min(1100px, 92vw);
   padding: 44px 48px; border-radius: 18px;
   background: linear-gradient(180deg, #141d5e, #0a0e33);
   border: 1px solid rgba(240,185,66,0.35);
   box-shadow: inset 0 0 40px rgba(240,185,66,0.06), 0 20px 60px rgba(0,0,0,0.6);
 }
-.slot-reel-col{ display: flex; flex-direction: column; align-items: center; gap: 12px; width: 168px; flex: 0 1 168px; max-width: 200px; }
+/* flex:1 1 0 (not a fixed width) is what lets columns actually shrink to
+   fit many players in one row — max-width still caps how wide a single
+   column gets when there are only 2-3 players, min-width is the floor
+   before names start relying entirely on the .slot-cell ellipsis. */
+.slot-reel-col{ display: flex; flex-direction: column; align-items: center; gap: 12px; flex: 1 1 0; min-width: 64px; max-width: 168px; }
 .slot-position-label{
   font-family: var(--font-display); color: var(--gold-dim); letter-spacing: 2px;
-  font-size: 15px; text-transform: uppercase;
+  font-size: clamp(10px, 1.6vw, 15px); text-transform: uppercase;
 }
 .slot-reel{
   position: relative; width: 100%; height: calc(3 * 92px);
@@ -1728,7 +1724,7 @@
 .slot-cell{
   height: 92px; display: flex; align-items: center; justify-content: center;
   text-align: center; padding: 0 8px; font-family: var(--font-display);
-  color: var(--text); font-size: 17px; letter-spacing: .3px; line-height: 1.2;
+  color: var(--text); font-size: clamp(11px, 1.8vw, 17px); letter-spacing: .3px; line-height: 1.2;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;
 }
 .slot-reel-shine{
@@ -1753,7 +1749,8 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 .randomizer-result-team{ color: white; }
 
 @media (max-width: 620px){
-  .slot-reel-col{ width: 44%; }
+  .slot-machine{ padding: 22px 10px; gap: clamp(4px, 1.4vw, 10px); }
+  .slot-reel-col{ min-width: 42px; }
 }
 
 /* ---- Slot machine lever (drag-to-spin) ---- */
@@ -2548,4 +2545,67 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   color: #1a1200;
   border-color: transparent;
   box-shadow: 0 0 8px rgba(240,185,66,0.5);
+}
+
+.bgm-mode-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+ 
+.bgm-mode-btn {
+  flex: 1;
+  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: bold;
+  border-radius: 6px;
+  border: 1px solid rgba(240,185,66,0.25);
+  background: rgba(0,0,0,0.2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.bgm-mode-btn:hover {
+  border-color: var(--gold);
+  color: var(--text);
+  background: rgba(240,185,66,0.08);
+}
+ 
+.bgm-mode-btn.is-active {
+  background: linear-gradient(180deg, var(--gold), #c8932c);
+  color: #1a1200;
+  border-color: var(--gold);
+}
+ 
+.bgm-round-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.bgm-fs-volume-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(240,185,66,0.15);
+}
+ 
+.bgm-fs-volume-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+ 
+.bgm-fs-volume-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--gold);
+  cursor: pointer;
 }

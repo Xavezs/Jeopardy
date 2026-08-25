@@ -6,7 +6,7 @@ import CustomVideoPlayer from './CustomVideoPlayer';
 import YoutubePlayer from './YoutubePlayer';
 import ClueMediaImage from './ClueMediaImage';
 import { createSfx, getSharedAudioCtx, withRunningCtx } from "../lib/sfx";
-import { playDailyDoubleSfx } from "../lib/boardSfx";
+import { playDailyDoubleSfx, stopDailyDoubleSfx } from "../lib/boardSfx";
 import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
 
 /* =========================================================================
@@ -271,6 +271,16 @@ export default function ClueModal({
       ddSfxFiredForClueRef.current = clueId;
       playDailyDoubleSfx();
     }
+    // Stop the sting the moment this is no longer the live Daily Double
+    // wager screen — the host closes the clue, the wager gets locked in,
+    // a different clue opens, or this modal itself unmounts (e.g. round
+    // changed) — rather than letting up to ~1.2-2s of tail keep playing
+    // into whatever's on screen now. Mirrors the same fix on the player
+    // side (PlayerView.jsx's matching effect). Only fires if a sting was
+    // actually started for the clue this effect run is about.
+    return () => {
+      if (ddSfxFiredForClueRef.current) stopDailyDoubleSfx();
+    };
   }, [isDailyDouble, wagerLocked, clueId]);
 
   // Once a wager is locked in, auto-select that team in the scoreboard
@@ -502,15 +512,17 @@ export default function ClueModal({
         if (onNextBuzzer && buzzedTeam && buzzedTeam.id === team.id) {
           onNextBuzzer();
         }
-        // Board control transfers to whoever specifically answered
-        // correctly — that's buzzerWinner, an individual player, not the
-        // team as a whole (a team can have multiple members). Only fires
-        // on a genuine correct-answer judgment of the person who actually
-        // buzzed in, same condition as the auto-advance above, so manually
-        // adjusting some other team's score (digit key + arrow, unrelated
-        // to who buzzed) never accidentally hands over control.
-        if (e.key === "ArrowUp" && onJudgeAnswer && buzzedTeam && buzzedTeam.id === team.id && buzzerWinner) {
-          onJudgeAnswer(buzzerWinner.id, true);
+        // Report the judgment to the server so it can update room.playerStats
+        // .correct/wrong. Previously this only ran for ArrowUp, so a "wrong"
+        // judged here never reached the server and playerStats.wrong stayed
+        // stuck at 0 — the per-player correct/wrong counters looked broken
+        // even though the on-screen score itself was adjusting correctly.
+        // Same condition as the auto-advance above (must be the person who
+        // actually buzzed in) — manually adjusting some other team's score
+        // (digit key + arrow, unrelated to who buzzed) still shouldn't be
+        // attributed to a specific player's stats.
+        if (onJudgeAnswer && buzzedTeam && buzzedTeam.id === team.id && buzzerWinner) {
+          onJudgeAnswer(buzzerWinner.id, e.key === "ArrowUp");
         }
         return;
       }

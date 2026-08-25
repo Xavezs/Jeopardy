@@ -79,42 +79,45 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
   }
 
   // answer -> reveal. No fixed order is locked anymore — the host picks
-  // who to reveal next, one at a time, via selectRevealTeam below.
-  // revealOrder is kept only as the full set of team ids so judgeTeam
-  // knows when every team has been judged (see judgeTeam).
+  // who to reveal next via startRevealBatch below, one or several teams at
+  // a time. revealOrder is kept only as the full set of team ids so
+  // judgeTeam/judgeBatch know when every team has been judged.
   function startReveal(teams) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "answer") return;
     rd.revealOrder = teams.map((t) => t.id);
     rd.revealedTeamIds = [];
-    rd.currentRevealTeamId = null;
+    rd.currentRevealTeamIds = [];
+    rd.revealStage = "hidden";
     rd.results = {};
     rd.phase = "reveal";
     touch();
     persist();
   }
 
-  // Host clicks a team from the "pick who's next" list. Ignored if that
-  // team was already judged (defensive — the picker UI shouldn't show
-  // already-revealed teams as choices in the first place).
-  function selectRevealTeam(teamId) {
+  // Host confirms a selection from the "pick who's next" list — one team
+  // or several at once (multi-select). Already-judged ids are filtered out
+  // defensively (the picker UI shouldn't offer them in the first place).
+  // A no-op empty selection is ignored rather than clearing the batch.
+  function startRevealBatch(teamIds) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal") return;
-    if (rd.revealedTeamIds.includes(teamId)) return;
-    rd.currentRevealTeamId = teamId;
+    const ids = (teamIds || []).filter((id) => !rd.revealedTeamIds.includes(id));
+    if (ids.length === 0) return;
+    rd.currentRevealTeamIds = ids;
     rd.revealStage = "hidden";
     touch();
     persist();
   }
 
-  // Staged reveal for the team currently on screen: wager first, then
-  // answer — host controls the pace, and since revealStage lives directly
-  // on rd (synced the same way answers/wagers/currentRevealTeamId already
-  // are), the player's screen advances through the same two stages in
+  // Staged reveal for the whole batch currently on screen: wagers first,
+  // then answers — host controls the pace, and since revealStage lives
+  // directly on rd (synced the same way answers/wagers/currentRevealTeamIds
+  // already are), players' screens advance through the same two stages in
   // lockstep with no separate broadcast needed.
   function revealWager() {
     const rd = currentFinal();
-    if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamId) return;
+    if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamIds?.length) return;
     rd.revealStage = "wager";
     touch();
     persist();
@@ -122,19 +125,21 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
 
   function revealAnswer() {
     const rd = currentFinal();
-    if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamId) return;
+    if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamIds?.length) return;
     rd.revealStage = "answer";
     touch();
     persist();
   }
 
-  // Judges one team at a time, whichever the host picked via
-  // selectRevealTeam. Advances to "done" once every team has been judged,
-  // and always clears currentRevealTeamId afterward so the host lands back
-  // on the picker list to choose the next team (or sees "done" if that was
-  // the last one). Records the verdict in rd.results so PlayerView's
-  // reveal screen (and a host-side recap) can show correct/incorrect for
-  // teams already revealed, not just the score change. "done" starts with
+  // Judges a single team within the current batch (mixed verdicts across
+  // the batch are fine — this is what lets the host correct one team and
+  // wrong another in the same reveal). Removes the team from
+  // currentRevealTeamIds as it's judged; once the batch empties, revealStage
+  // resets to "hidden" so the host lands back on the picker for the next
+  // batch. Advances to "done" once every team overall has been judged.
+  // Records the verdict in rd.results so PlayerView's reveal screen (and
+  // the host-side recap) can show correct/incorrect for teams already
+  // revealed, not just the score change. "done" starts with
   // standingsRevealed=false so the host gets a beat to show the correct
   // answer on its own before advancing to the standings board (see
   // revealStandings below).
@@ -147,7 +152,36 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     rd.results = rd.results || {};
     rd.results[team.id] = correct;
     rd.revealedTeamIds.push(team.id);
-    rd.currentRevealTeamId = null;
+    rd.currentRevealTeamIds = (rd.currentRevealTeamIds || []).filter((id) => id !== team.id);
+    if (rd.currentRevealTeamIds.length === 0) rd.revealStage = "hidden";
+    if (rd.revealedTeamIds.length >= rd.revealOrder.length) {
+      rd.phase = "done";
+      rd.standingsRevealed = false;
+    }
+    touch();
+    persist();
+  }
+
+  // Bulk convenience for "reveal bersamaan": judges every still-unjudged
+  // team in the current batch with the SAME verdict in one go (e.g. "Mark
+  // All Correct"). Teams already judged individually before this is
+  // clicked (mixed verdicts) are simply skipped. Shares the exact same
+  // scoring/results/advance-to-"done" logic as judgeTeam, just looped.
+  function judgeBatch(teams, correct, adjustTeamScore) {
+    const rd = currentFinal();
+    if (!rd || rd.phase !== "reveal") return;
+    const ids = [...(rd.currentRevealTeamIds || [])];
+    ids.forEach((id) => {
+      if (rd.revealedTeamIds.includes(id)) return;
+      const team = teams.find((t) => t.id === id);
+      if (!team) return;
+      const wager = rd.wagers[id] || 0;
+      adjustTeamScore(team, correct ? wager : -wager);
+      rd.results = rd.results || {};
+      rd.results[id] = correct;
+      rd.revealedTeamIds.push(id);
+    });
+    rd.currentRevealTeamIds = [];
     rd.revealStage = "hidden";
     if (rd.revealedTeamIds.length >= rd.revealOrder.length) {
       rd.phase = "done";
@@ -188,7 +222,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     rd.answers = {};
     rd.revealOrder = [];
     rd.revealedTeamIds = [];
-    rd.currentRevealTeamId = null;
+    rd.currentRevealTeamIds = [];
     rd.revealStage = "hidden";
     rd.results = {};
     rd.standingsRevealed = false;
@@ -206,10 +240,11 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     startAnswerPhase,
     setAnswer,
     startReveal,
-    selectRevealTeam,
+    startRevealBatch,
     revealWager,
     revealAnswer,
     judgeTeam,
+    judgeBatch,
     revealStandings,
     setStandingsSfx,
     resetFinal,

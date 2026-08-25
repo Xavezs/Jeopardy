@@ -11,6 +11,8 @@ export default function EditClueModal({
   onSave,
   onClose,
   defaultTimerSeconds,
+  categoryName, 
+  clueValue,    
 }) {
   const [closing, setClosing] = useState(false);
   const mouseDownOnOverlay = React.useRef(false);
@@ -71,11 +73,13 @@ export default function EditClueModal({
       }}
     >
       <div className="modal edit-clue-modal">
-        <div className="modal-title">Edit Clue</div>
+        <div className="modal-title">
+          Edit Clue {categoryName && clueValue ? `${categoryName} ${clueValue}` : ""}
+        </div>
 
         <div className="edit-clue-body">
-          {/* Left column: the text you actually write every time */}
-          <div className="edit-clue-col edit-clue-col-text">
+          {/* Left column: Question Text + Question Media */}
+          <div className="edit-clue-col">
             <div className="form-row">
               <label>Question / Prompt (shown first)</label>
               <textarea
@@ -84,35 +88,7 @@ export default function EditClueModal({
                 onChange={(e) => setEditForm((f) => ({ ...f, question: e.target.value }))}
               />
             </div>
-            <div className="form-row">
-              <label>Answer (revealed on click)</label>
-              <textarea
-                placeholder="e.g. What is The Lion King?"
-                value={editForm.answer}
-                onChange={(e) => setEditForm((f) => ({ ...f, answer: e.target.value }))}
-              />
-            </div>
 
-            <div className="form-row edit-clue-timer-row">
-              <label>Timer override</label>
-              <div className="timer-override-control">
-                <span className="timer-override-icon" aria-hidden="true">⏱</span>
-                <input
-                  type="number"
-                  min="1"
-                  placeholder={`Board default (${defaultTimerSeconds}s)`}
-                  value={editForm.timerSeconds}
-                  onChange={(e) => setEditForm((f) => ({ ...f, timerSeconds: e.target.value }))}
-                  onWheel={(e) => e.target.blur()}
-                />
-                <span className="timer-override-suffix">sec</span>
-              </div>
-            </div>
-          </div>
-
-          {/* Right column: optional media, collapsed visually since most
-              clues won't touch this */}
-          <div className="edit-clue-col edit-clue-col-media">
             <MediaField
               label="Question media (optional)"
               type=""
@@ -123,6 +99,18 @@ export default function EditClueModal({
               onFile={(file) => onMediaFile("media", file)}
               onClear={() => onClearMedia("media")}
             />
+          </div>
+
+          {/* Right column: Answer Text + Answer Media */}
+          <div className="edit-clue-col">
+            <div className="form-row">
+              <label>Answer (revealed on click)</label>
+              <textarea
+                placeholder="e.g. What is The Lion King?"
+                value={editForm.answer}
+                onChange={(e) => setEditForm((f) => ({ ...f, answer: e.target.value }))}
+              />
+            </div>
 
             <MediaField
               label="Answer media (optional)"
@@ -134,6 +122,23 @@ export default function EditClueModal({
               onFile={(file) => onMediaFile("answerMedia", file)}
               onClear={() => onClearMedia("answerMedia")}
             />
+          </div>
+        </div>
+
+        {/* Timer override centered at the bottom */}
+        <div className="form-row edit-clue-timer-row" style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <label>Timer override</label>
+          <div className="timer-override-control" style={{ width: '100%', maxWidth: '260px' }}>
+            <span className="timer-override-icon" aria-hidden="true">⏱</span>
+            <input
+              type="number"
+              min="1"
+              placeholder={`Board default (${defaultTimerSeconds}s)`}
+              value={editForm.timerSeconds}
+              onChange={(e) => setEditForm((f) => ({ ...f, timerSeconds: e.target.value }))}
+              onWheel={(e) => e.target.blur()}
+            />
+            <span className="timer-override-suffix">sec</span>
           </div>
         </div>
 

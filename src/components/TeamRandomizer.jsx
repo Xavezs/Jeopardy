@@ -1,17 +1,18 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
 
 /* =========================================================================
    TEAM RANDOMIZER — slot machine style
-   One reel per turn position. Hitting Spin picks a random order and spins
-   each reel through a shuffled strip of team names, landing on the result
-   left-to-right (reel 1 = "goes first"). Reels lock one at a time to build
-   suspense, then "Use This Order" writes the result back into data.teams
-   so the team cards on the board itself re-render in that left-to-right
-   order.
+   Host mode: pull the lever, get a random order, "Use This Order" applies
+   it to the board and broadcasts it (see onBroadcast/onApplyOrder).
+   Player mode (readOnly): no lever, no apply button. Instead this watches
+   `syncedState` (the host's broadcast) and REPLAYS the same reel animation
+   locally the moment `syncedState.spinning` flips true, landing on
+   `syncedState.order` — never re-randomizes, so the result always matches
+   the host's exactly, it just LOOKS like it's spinning independently.
    ========================================================================= */
 import startSound from "../assets/slot-start.mp3";
-import spinningSound from "../assets/slot-spin.mp3"; 
+import spinningSound from "../assets/slot-spin.mp3";
 import stopSound from "../assets/slot-stop.mp3";
 import winSound from "../assets/slot-win.mp3";
 
@@ -26,12 +27,12 @@ const LEVER_TAP_DISTANCE = 8; // px — drags shorter than this count as a tap, 
 
 // Initialize the sound elements
 const startAudio = new Audio(startSound);
-const spinningAudio = new Audio(spinningSound); // 
+const spinningAudio = new Audio(spinningSound);
 const stopAudio = new Audio(stopSound);
 const winAudio = new Audio(winSound);
 
 startAudio.preload = "auto";
-spinningAudio.preload = "auto"; // 
+spinningAudio.preload = "auto";
 // spinningAudio.loop is intentionally LEFT FALSE so it only plays once!
 stopAudio.preload = "auto";
 winAudio.preload = "auto";
@@ -74,17 +75,12 @@ function getAudioCtx() {
 }
 
 /* --- Sound Control Functions --- */
-// Combined start and spin into a single function to fire them once simultaneously
 function playStartAndSpinOnce() {
   try {
     getAudioCtx();
-    
-    // Play start click sound once
     startAudio.currentTime = 0;
     startAudio.volume = 0.5;
     startAudio.play();
-
-    // Play spinning sound once (will play through and stop naturally)
     spinningAudio.currentTime = 0;
     spinningAudio.volume = 0.4;
     spinningAudio.play();
@@ -94,7 +90,6 @@ function playStartAndSpinOnce() {
 function playStop() {
   try {
     getAudioCtx();
-    // Clone stop node so staggered stopped reels don't clip each other's playback
     const clone = stopAudio.cloneNode();
     clone.volume = 0.6;
     clone.play();
@@ -110,7 +105,14 @@ function playWin() {
   } catch (e) { /* blocked */ }
 }
 
-export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
+export default function TeamRandomizer({
+  teams,
+  onApplyOrder,
+  onClose,
+  onBroadcast,        // host only — (state) => void, mirrors the spin to players
+  readOnly = false,   // player mode: no lever, no back button, no apply button
+  syncedState = null, // player mode: { active, spinning, order, startedAt } from the host
+}) {
   const n = teams.length;
   const [spinning, setSpinning] = useState(false);
   const [finished, setFinished] = useState(false);
@@ -119,11 +121,13 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
 
   const trackRefs = useRef([]);
   const rafIds = useRef([]);
+  // Guards against re-triggering the same broadcast twice (e.g. a second
+  // player joining causes a re-render with the identical syncedState).
+  const lastHandledStartedAt = useRef(null);
 
   const stopAll = () => {
     rafIds.current.forEach((id) => id && cancelAnimationFrame(id));
     rafIds.current = [];
-    // Pause spinning if it's interrupted
     try {
       spinningAudio.pause();
     } catch (e) {}
@@ -139,7 +143,7 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
         const above = others[0] || mid;
         const below = others[1] || others[0] || mid;
         el.innerHTML = [above, mid, below].map((t) => `<div class="slot-cell">${escapeHtml(t.name)}</div>`).join("");
-        el.style.transform = "translateY(0px)"; 
+        el.style.transform = "translateY(0px)";
       }
     },
     [teams]
@@ -147,78 +151,145 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
 
   React.useEffect(() => stopAll, []);
 
-  const spin = useCallback(() => {
-    if (n < 2 || spinning) return;
-    stopAll();
-    setFinished(false);
-    const order = shuffle(teams);
-    setResultOrder(order);
-    setLockedFlags(new Array(n).fill(false));
-    setSpinning(true);
+  // Host-only: let players know the moment this screen opens, not just
+  // when the lever gets pulled. Without this, `onBroadcast` never fires
+  // until `spin()` runs, so a player's `randomizer` state stays null and
+  // their view only switches away from the board on the FIRST spin —
+  // they never see a "getting ready" screen while the host is still
+  // standing at the machine. Guarded by a ref (not state) so it fires
+  // exactly once per mount and never re-fires from unrelated re-renders.
+  const announcedOpenRef = useRef(false);
+  useEffect(() => {
+    if (readOnly || !onBroadcast || announcedOpenRef.current) return;
+    announcedOpenRef.current = true;
+    onBroadcast({ active: true, spinning: false, order: null, startedAt: null });
+  }, [readOnly, onBroadcast]);
 
-    // Plays both start & spin audio files exactly once
-    playStartAndSpinOnce();
+  // Host-only: tell players to leave the randomizer view when the host
+  // backs out to the board, instead of leaving their screen stuck showing
+  // the slot machine (possibly mid-result) indefinitely.
+  const closeAndUnannounce = useCallback(() => {
+    if (!readOnly) onBroadcast?.(null);
+    onClose?.();
+  }, [readOnly, onBroadcast, onClose]);
 
-    order.forEach((team, i) => {
-      const strip = [];
-      for (let l = 0; l < LOOPS; l++) strip.push(...shuffle(teams));
-      strip.push(team); 
-      const targetIndex = strip.length - 1;
-      strip.push(shuffle(teams)[0]); 
+  // Core reel animation — takes an already-decided `order` and plays the
+  // spin-and-land sequence for it. Used by BOTH the host (with a freshly
+  // shuffled order) and the player (replaying the host's broadcast order),
+  // so the visuals are shared code but the order is never re-randomized on
+  // the player's side.
+  const runSpin = useCallback(
+    (order) => {
+      if (!order || order.length < 2) return;
+      stopAll();
+      setFinished(false);
+      setResultOrder(order);
+      setLockedFlags(new Array(n).fill(false));
+      setSpinning(true);
 
-      const finalTranslate = -(targetIndex - 1) * CELL_HEIGHT; 
-      const duration = BASE_DURATION + i * STAGGER;
-      const startTime = performance.now();
+      playStartAndSpinOnce();
 
-      const el = trackRefs.current[i];
-      if (el) {
-        el.style.transition = "none";
-        el.innerHTML = strip.map((t) => `<div class="slot-cell">${escapeHtml(t.name)}</div>`).join("");
-      }
+      order.forEach((team, i) => {
+        const strip = [];
+        for (let l = 0; l < LOOPS; l++) strip.push(...shuffle(teams));
+        strip.push(team);
+        const targetIndex = strip.length - 1;
+        strip.push(shuffle(teams)[0]);
 
-      function step(now) {
-        const t = Math.min(1, (now - startTime) / duration);
-        const eased = easeOutCubic(t);
-        const translate = eased * finalTranslate;
-        if (el) el.style.transform = `translateY(${translate}px)`;
+        const finalTranslate = -(targetIndex - 1) * CELL_HEIGHT;
+        const duration = BASE_DURATION + i * STAGGER;
+        const startTime = performance.now();
 
-        if (t < 1) {
-          rafIds.current[i] = requestAnimationFrame(step);
-        } else {
-          if (el) el.style.transform = `translateY(${finalTranslate}px)`;
-          
-          // Reel Stopped: Play Stop sound cue
-          playStop();
-
-          setLockedFlags((prev) => {
-            const next = [...prev];
-            next[i] = true;
-            
-            // All Locked: Trigger the final Win Sound
-            if (next.every(Boolean)) {
-              setSpinning(false);
-              playWin();
-            }
-            return next;
-          });
+        const el = trackRefs.current[i];
+        if (el) {
+          el.style.transition = "none";
+          el.innerHTML = strip.map((t) => `<div class="slot-cell">${escapeHtml(t.name)}</div>`).join("");
         }
-      }
-      rafIds.current[i] = requestAnimationFrame(step);
-    });
 
-    setTimeout(() => setFinished(true), BASE_DURATION + (n - 1) * STAGGER + 50);
-  }, [teams, n, spinning]);
+        function step(now) {
+          const t = Math.min(1, (now - startTime) / duration);
+          const eased = easeOutCubic(t);
+          const translate = eased * finalTranslate;
+          if (el) el.style.transform = `translateY(${translate}px)`;
+
+          if (t < 1) {
+            rafIds.current[i] = requestAnimationFrame(step);
+          } else {
+            if (el) el.style.transform = `translateY(${finalTranslate}px)`;
+            playStop();
+
+            setLockedFlags((prev) => {
+              const next = [...prev];
+              next[i] = true;
+              if (next.every(Boolean)) {
+                setSpinning(false);
+                playWin();
+              }
+              return next;
+            });
+          }
+        }
+        rafIds.current[i] = requestAnimationFrame(step);
+      });
+
+      setTimeout(() => setFinished(true), BASE_DURATION + (n - 1) * STAGGER + 50);
+    },
+    [teams, n]
+  );
+
+  // HOST PATH: generate a fresh random order, broadcast it to players, then
+  // animate locally. onBroadcast is undefined in readOnly/player mode, so
+  // this never fires there even if something tried to call it.
+  const spin = useCallback(() => {
+    if (readOnly || n < 2 || spinning) return;
+    const order = shuffle(teams);
+    onBroadcast?.({ active: true, spinning: true, order, startedAt: Date.now() });
+    runSpin(order);
+  }, [readOnly, teams, n, spinning, onBroadcast, runSpin]);
+
+  // PLAYER PATH: watch the host's broadcast and replay the same spin
+  // locally the moment a NEW one starts (keyed on startedAt so this only
+  // fires once per spin, not on every re-render with the same payload).
+  // A player who joins mid-spin or after it's already finished just sees
+  // the final result appear without the animation — same trade-off the
+  // roundBanner sync already accepts for its one-off pop-up.
+  useEffect(() => {
+    if (!readOnly || !syncedState?.spinning || !syncedState.order) return;
+    if (lastHandledStartedAt.current === syncedState.startedAt) return;
+    lastHandledStartedAt.current = syncedState.startedAt;
+    runSpin(syncedState.order);
+  }, [readOnly, syncedState, runSpin]);
+
+  // Player mode with no spin in flight yet, but a result already landed
+  // (e.g. this player connected right after the host finished spinning) —
+  // show the static landed reels instead of the initial idle strip.
+  useEffect(() => {
+    if (!readOnly || spinning || resultOrder) return;
+    if (syncedState?.order && !syncedState.spinning) {
+      setResultOrder(syncedState.order);
+      setLockedFlags(new Array(n).fill(true));
+      setFinished(true);
+      syncedState.order.forEach((team, i) => {
+        const el = trackRefs.current[i];
+        if (el) {
+          el.innerHTML = `<div class="slot-cell">${escapeHtml(team.name)}</div>`;
+          el.style.transform = "translateY(0px)";
+        }
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [readOnly, syncedState, n]);
 
   function apply() {
     if (resultOrder) onApplyOrder(resultOrder);
   }
 
-  /* ---------------- LEVER (drag-to-spin) ---------------- */
+  /* ---------------- LEVER (drag-to-spin) — host only ---------------- */
   const handleRef = useRef(null);
   const draggingRef = useRef(false);
   const startYRef = useRef(0);
   const pullPxRef = useRef(0);
-  const canPull = n >= 2 && !spinning;
+  const canPull = !readOnly && n >= 2 && !spinning;
 
   function setHandlePx(px, withSpring) {
     const el = handleRef.current;
@@ -250,9 +321,9 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
       /* already released */
     }
     const px = pullPxRef.current;
-    setHandlePx(0, true); 
+    setHandlePx(0, true);
     if (px < LEVER_TAP_DISTANCE) {
-      quickPull(); 
+      quickPull();
     } else if (px / LEVER_TRAVEL >= LEVER_PULL_THRESHOLD) {
       spin();
     }
@@ -274,9 +345,11 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
 
   return (
     <div className="randomizer-page">
-      <button className="btn randomizer-back" onClick={onClose}>
-        ← Back to Board
-      </button>
+      {!readOnly && (
+        <button className="btn randomizer-back" onClick={closeAndUnannounce}>
+          ← Back to Board
+        </button>
+      )}
 
       <div className="randomizer-body">
         <div className="randomizer-title">Randomizer Order</div>
@@ -305,32 +378,36 @@ export default function TeamRandomizer({ teams, onApplyOrder, onClose }) {
                 </div>
               ))}
 
-              <div className="lever-col">
-                <div className={"lever-track" + (canPull ? "" : " disabled")}>
-                  <div
-                    className="lever-handle"
-                    ref={handleRef}
-                    role="button"
-                    tabIndex={0}
-                    aria-label="Pull lever to spin"
-                    onPointerDown={onLeverPointerDown}
-                    onPointerMove={onLeverPointerMove}
-                    onPointerUp={onLeverPointerUp}
-                    onPointerCancel={onLeverPointerUp}
-                    onKeyDown={onLeverKeyDown}
-                  />
+              {!readOnly && (
+                <div className="lever-col">
+                  <div className={"lever-track" + (canPull ? "" : " disabled")}>
+                    <div
+                      className="lever-handle"
+                      ref={handleRef}
+                      role="button"
+                      tabIndex={0}
+                      aria-label="Pull lever to spin"
+                      onPointerDown={onLeverPointerDown}
+                      onPointerMove={onLeverPointerMove}
+                      onPointerUp={onLeverPointerUp}
+                      onPointerCancel={onLeverPointerUp}
+                      onKeyDown={onLeverKeyDown}
+                    />
+                  </div>
+                  <div className="lever-base" />
                 </div>
-                <div className="lever-base" />
-              </div>
-            </div>
-
-            <div className="randomizer-actions">
-              {finished && !spinning && (
-                <button className="btn gold big" onClick={apply}>
-                  ✓ Use This Order
-                </button>
               )}
             </div>
+
+            {!readOnly && (
+              <div className="randomizer-actions">
+                {finished && !spinning && (
+                  <button className="btn gold big" onClick={apply}>
+                    ✓ Use This Order
+                  </button>
+                )}
+              </div>
+            )}
 
             {finished && !spinning && resultOrder && (
               <div className="randomizer-result">

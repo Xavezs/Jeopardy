@@ -6,6 +6,7 @@ import RoleSelect from "./components/RoleSelect";
 import { getDiscordIdentity } from './discordSdk';
 import { installGlobalBoardSfx } from './lib/boardSfx';
 import '@fontsource/quicksand/300.css';
+import '@fontsource/quicksand/600.css';
 import '@fontsource/quicksand/700.css';
 import '@fontsource/comfortaa/700.css';
 import "./styles/player.css";

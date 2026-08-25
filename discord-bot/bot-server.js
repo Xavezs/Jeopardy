@@ -316,7 +316,9 @@ io.on('connection', (socket) => {
     if (room?.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room?.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+    if (room?.randomizer) socket.emit('randomizerUpdate', room.randomizer);
     if (room) socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
+    if (room?.playerStats) socket.emit('statsUpdate', room.playerStats);
   });
 
   socket.on('activeClueUpdate', ({ roomCode: rawRoomCode, activeClue }) => {
@@ -504,6 +506,22 @@ io.on('connection', (socket) => {
     const room = gameRooms.get(roomCode);
     if (!room) return;
 
+    // Track per-player correct/wrong counts for end-game stats, keyed by
+    // discordUserId — same convention as team/control state, since
+    // socket.id changes on every reconnect. judgeAnswer doesn't carry the
+    // clue's point value, so this is a count of attempts, not a point
+    // total; if a points-based stat is ever needed, the client will need
+    // to start sending `value` alongside discordUserId/correct.
+    if (discordUserId) {
+      room.playerStats = room.playerStats || {};
+      const stats = room.playerStats[discordUserId] || { correct: 0, wrong: 0 };
+      if (correct) stats.correct += 1;
+      else stats.wrong += 1;
+      room.playerStats[discordUserId] = stats;
+      gameRooms.set(roomCode, room);
+      io.to(roomCode).emit('statsUpdate', room.playerStats);
+    }
+
     if (correct && discordUserId) {
       room.controlDiscordUserId = discordUserId;
       gameRooms.set(roomCode, room);
@@ -579,6 +597,22 @@ io.on('connection', (socket) => {
     room.bgm = bgm;
     gameRooms.set(roomCode, room);
     socket.to(roomCode).emit('bgmUpdate', room.bgm);
+  });
+
+  // Team randomizer — same treatment as activeClue/revealedCats: resent to
+  // late-joining sockets (see the joinRoom/joinAsPlayer resends above),
+  // unlike the transient roundBanner. "Host is on the randomizer screen
+  // with this order locked in" should survive a player's refresh mid-spin,
+  // not just be missed like a one-off animation would be.
+  socket.on('randomizerUpdate', ({ roomCode: rawRoomCode, randomizer }) => {
+    if (typeof rawRoomCode !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode) return;
+
+    const room = gameRooms.get(roomCode) || {};
+    room.randomizer = randomizer || null;
+    gameRooms.set(roomCode, room);
+    socket.to(roomCode).emit('randomizerUpdate', room.randomizer);
   });
 
   socket.on('boardUpdate', ({ roomCode: rawRoomCode, data, updatedAt }) => {
@@ -661,7 +695,9 @@ io.on('connection', (socket) => {
       if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
       if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
       if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+      if (room.randomizer) socket.emit('randomizerUpdate', room.randomizer);
       socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
+      if (room.playerStats) socket.emit('statsUpdate', room.playerStats);
       return;
     }
 
@@ -705,7 +741,9 @@ io.on('connection', (socket) => {
     if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
+    if (room.randomizer) socket.emit('randomizerUpdate', room.randomizer);
     socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
+    if (room.playerStats) socket.emit('statsUpdate', room.playerStats);
   });
 
   // Deliberate "Leave" click, as opposed to a disconnect (tab close,

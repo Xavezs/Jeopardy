@@ -61,6 +61,7 @@ export default function Toolbar({
   onToggleDdMinWagerZero,
   ddWagerBasisPlayerScore,
   onToggleDdWagerBasisPlayerScore,
+  onEndGame,
 }) {
   const [copyState, setCopyState] = useState("idle"); // "idle" | "copied" | "error"
 
@@ -148,6 +149,20 @@ export default function Toolbar({
           controlDiscordUserId={controlDiscordUserId}
           onHostSetControl={onHostSetControl}
         />
+
+        {/* Optional — only shows once the host-side hook that assembles
+            finalScores (teams + ranking + playerStats) actually wires up
+            onEndGame. Left out entirely rather than rendered-disabled, so
+            a board mid-refactor doesn't show a dead button. */}
+        {onEndGame && (
+          <button
+            className="btn"
+            onClick={onEndGame}
+            title="Save this playthrough's final scores and stats, ending the game"
+          >
+            🏁 End Game
+          </button>
+        )}
       </div>
 
 
@@ -179,17 +194,17 @@ export default function Toolbar({
           {onToggleDdMinWagerZero && (
             <label title="Off (default): minimum Daily Double wager equals the clue's own value (range: value–2x). On: minimum wager is $0 (range: 0–2x).">
               <input type="checkbox" checked={!!ddMinWagerZero} onChange={onToggleDdMinWagerZero} />
-              Allow $0 min wager
+              Allow $0 Wager
             </label>
           )}
           {onToggleDdWagerBasisPlayerScore && (
-            <label title="Off (default): max Daily Double wager is 2x the clue's own value. On: max wager is the wagering team's own current score. Combines with 'Allow $0 min wager' above for 4 total wager-range options.">
+            <label title="Off (default): max Daily Double wager is 2x the clue's own value. On: max wager is the wagering team's own current score. Combines with 'Allow $0 Wager' above for 4 total wager-range options.">
               <input
                 type="checkbox"
                 checked={!!ddWagerBasisPlayerScore}
                 onChange={onToggleDdWagerBasisPlayerScore}
               />
-              Max wager = team score
+              Max wager = Team Score
             </label>
           )}
         </div>

@@ -52,6 +52,19 @@ export function usePlayerSync(roomCode, me) {
   // updatedAt } or null when no track is loaded. Deliberately carries no
   // volume; each client's volume is local-only (see PlayerBgmWidget).
   const [bgm, setBgm] = useState(null);
+  // Team randomizer state, mirrored from the host via useRandomizerSync —
+  // { active, spinning, order, startedAt } or null when the host isn't on
+  // the randomizer screen. Same "live for the show" treatment as
+  // revealedCats/bgm: resent on (re)join by the server, not part of
+  // boardUpdate. See TeamRandomizer.jsx's readOnly mode for how this
+  // drives the player's own reel animation replay.
+  const [randomizer, setRandomizer] = useState(null);
+  // Per-player correct/wrong counts the server tracks off judgeAnswer —
+  // { [discordUserId]: { correct, wrong } }. Same "live for the show,
+  // resent on join" treatment as bgm/randomizer above (see bot-server.js's
+  // joinRoom/joinAsPlayer handlers). Used by FinalJeopardyView to show a
+  // per-player stats breakdown alongside Final Standings.
+  const [playerStats, setPlayerStats] = useState({});
   const socketRef = useRef(null);
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
@@ -96,6 +109,8 @@ export function usePlayerSync(roomCode, me) {
     socket.on("roundBannerUpdate", (payload) => setRoundBanner(payload || null));
     socket.on("playersUpdate", (list) => setPlayers(Array.isArray(list) ? list : []));
     socket.on("bgmUpdate", (payload) => setBgm(payload || null));
+    socket.on("randomizerUpdate", (payload) => setRandomizer(payload || null));
+    socket.on("statsUpdate", (stats) => setPlayerStats(stats || {}));
 
     return () => socket.disconnect();
   }, []);
@@ -165,5 +180,5 @@ export function usePlayerSync(roomCode, me) {
     });
   }
 
-  return { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, leaveGame };
+  return { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, randomizer, playerStats, leaveGame };
 }

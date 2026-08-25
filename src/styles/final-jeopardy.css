@@ -42,11 +42,11 @@
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 22px;
+  gap: 16px;
   width: 100%;
   max-width: 680px;
   margin: 24px auto;
-  padding: 32px 36px;
+  padding: 26px 30px;
   box-sizing: border-box;
   background: linear-gradient(180deg, #141d5e, #0a0e33);
   border: 1px solid rgba(240, 185, 66, 0.35);
@@ -54,9 +54,6 @@
   box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06);
   animation: fjPopIn 0.25s cubic-bezier(0.19, 1, 0.22, 1) both;
 }
-
-
-
 
 .final-eyebrow {
   font-family: var(--font-display);
@@ -91,6 +88,14 @@
   padding: 6px 10px;
   width: 100%;
   max-width: 480px;
+  box-sizing: border-box;
+  /* A long category name (or the placeholder itself) can easily be
+     wider than 480px at this font size — inputs don't wrap, so without
+     this it was overflowing straight past its own box and the card's
+     edge with a hard, un-ellipsized cut instead of clipping cleanly. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   transition: border-color 0.15s ease;
 }
 .final-category-input:focus {
@@ -130,6 +135,21 @@
   flex-direction: column;
   gap: 10px;
   width: 100%;
+}
+/* Pairs Question/Answer text, and Question/Answer media, side by side
+   instead of stacking every field full-width — the standalone
+   Celebration sound field (not wrapped in a .final-edit-row) stays
+   full-width below, since it has no natural pair. */
+.final-edit-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+  align-items: start;
+}
+@media (max-width: 560px) {
+  .final-edit-row {
+    grid-template-columns: 1fr;
+  }
 }
 .final-clue-input {
   min-height: 64px;
@@ -263,7 +283,8 @@
   box-sizing: border-box;
 }
 
-.final-reveal-card {
+.final-reveal-card,
+.final-reveal-batch {
   align-items: center;
   text-align: center;
   gap: 10px;
@@ -271,8 +292,81 @@
   border-radius: 12px;
   transition: box-shadow 0.2s ease;
 }
-.final-reveal-card.is-flash {
+.final-reveal-card.is-flash,
+.final-reveal-batch.is-flash {
   animation: fjRevealFlash 1.2s ease-out;
+}
+.final-reveal-batch {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+}
+
+/* Grid of small per-team tiles shown side by side once one or more teams
+   are selected for reveal. `.is-single` keeps a single tile centered and
+   comfortably sized rather than stretching it edge-to-edge like a
+   multi-tile grid would. */
+.final-reveal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  width: 100%;
+}
+.final-reveal-grid.is-single {
+  grid-template-columns: minmax(0, 260px);
+  justify-content: center;
+}
+.final-reveal-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 14px 12px;
+  background: rgba(0, 0, 0, 0.22);
+  border: 1px solid rgba(240, 185, 66, 0.25);
+  border-radius: 12px;
+  box-sizing: border-box;
+}
+.final-reveal-tile .final-reveal-avatar-stack {
+  margin-bottom: 2px;
+}
+.final-reveal-tile .final-reveal-avatar,
+.final-reveal-tile .final-reveal-avatar-fallback {
+  width: 44px;
+  height: 44px;
+  font-size: 17px;
+}
+.final-reveal-tile .final-team-name {
+  font-family: var(--font-display);
+  font-size: 16px;
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(240, 185, 66, 0.35);
+  flex: unset;
+  max-width: 100%;
+}
+.final-reveal-tile-hint {
+  margin: 0;
+  font-size: 12px;
+}
+.final-reveal-tile .final-wager-text {
+  font-size: 12px;
+}
+.final-reveal-tile .final-answer-text {
+  font-size: 14px;
+  padding: 8px 12px;
+  max-width: 100%;
+  box-sizing: border-box;
+}
+.final-judge-buttons-tile {
+  margin-top: 4px;
+}
+.final-judge-buttons-tile .final-correct-btn,
+.final-judge-buttons-tile .final-incorrect-btn {
+  padding: 7px 14px;
+  font-size: 12px;
+}
+.final-judge-buttons-batch {
+  margin-top: 4px;
 }
 .final-reveal-avatar-stack {
   display: flex;
@@ -315,7 +409,8 @@
   text-shadow: 0 0 16px rgba(240, 185, 66, 0.4);
   flex: unset;
 }
-.final-reveal-card .final-clue-text {
+.final-reveal-card .final-clue-text,
+.final-reveal-batch .final-clue-text {
   font-size: 15px;
   color: var(--text-dim);
   background: transparent;
@@ -498,6 +593,15 @@
   margin-bottom: 10px;
   box-shadow: 0 0 12px rgba(240, 185, 66, 0.35);
 }
+.final-podium-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 6px;
+  max-width: 130px;
+}
 .final-podium-name {
   font-weight: 700;
   font-size: 15px;
@@ -508,6 +612,31 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/* Per-player correct/wrong pills, sitting right next to the team's name
+   on the podium — for teams outside the podium (rank > 3), the same
+   numbers still show in the standalone .final-player-stats panel below. */
+.final-podium-player-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
+.final-podium-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(240, 185, 66, 0.15);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.final-podium-stat-correct { color: var(--teal); }
+.final-podium-stat-wrong { color: var(--red); }
 .final-podium-score {
   font-family: var(--font-display);
   font-size: 18px;
@@ -543,6 +672,114 @@
   flex-direction: column;
   gap: 8px;
   width: 100%;
+}
+
+/* ---------------- per-player correct/wrong stats ---------------- */
+.final-standings-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 40px;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.final-standings-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.final-player-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 280px;
+  align-self: stretch;
+  padding-left: 16px;
+  border-left: 1px solid rgba(240, 185, 66, 0.18);
+  margin-top: 0;
+}
+
+@media (max-width: 768px) {
+  .final-standings-body {
+    flex-direction: column;
+    align-items: center;
+  }
+  .final-standings-col {
+    width: 100%;
+  }
+  .final-player-stats {
+    max-width: 100%;
+    padding-left: 0;
+    border-left: none;
+    margin-top: 16px;
+  }
+}
+
+.final-player-stats-title {
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  opacity: 0.75;
+  margin: 4px 0 2px;
+}
+.final-player-stats-team {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.final-player-stats-team-name {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gold-dim);
+  padding-left: 4px;
+}
+.final-player-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 12px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(240, 185, 66, 0.12);
+  font-size: 13px;
+}
+.final-player-stats-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.final-player-stats-correct {
+  color: var(--teal);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.final-player-stats-wrong {
+  color: var(--red);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.final-player-stats-accuracy {
+  font-family: var(--font-display);
+  color: var(--gold);
+  font-size: 12px;
+  flex-shrink: 0;
+  min-width: 36px;
+  text-align: right;
 }
 
 .final-reveal-history {
@@ -688,6 +925,40 @@
   border-radius: 16px;
   box-shadow: 0 16px 44px rgba(0, 0, 0, 0.55), inset 0 1px 0 rgba(255, 255, 255, 0.05);
   animation: fjPopIn 0.25s cubic-bezier(0.19, 1, 0.22, 1) both;
+}
+/* Wider panel when Player Stats is shown, so it can sit beside the
+   standings instead of stacking underneath (see .pv-final-body below). */
+.pv-final-panel.has-stats {
+  max-width: 640px;
+}
+.pv-final-body {
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 20px;
+  width: 100%;
+}
+.pv-final-standings-col {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  flex: 1 1 0;
+  min-width: 0;
+}
+/* Below ~560px there isn't room for two columns, so stack Player Stats
+   under the standings again like before. */
+@media (max-width: 560px) {
+  .pv-final-panel.has-stats {
+    max-width: 420px;
+  }
+  .pv-final-body {
+    flex-direction: column;
+    align-items: center;
+  }
+  .pv-final-standings-col {
+    width: 100%;
+  }
 }
 .pv-final-title {
   font-family: var(--font-display);
@@ -880,6 +1151,15 @@
   margin-bottom: 8px;
   box-shadow: 0 0 10px rgba(240, 185, 66, 0.35);
 }
+.pv-podium-name-row {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
+  column-gap: 5px;
+  max-width: 108px;
+}
 .pv-podium-name {
   font-weight: 700;
   font-size: 13px;
@@ -890,6 +1170,27 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.pv-podium-player-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  justify-content: center;
+}
+.pv-podium-stat-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.25);
+  border: 1px solid rgba(240, 185, 66, 0.15);
+  line-height: 1.5;
+  white-space: nowrap;
+}
+.pv-podium-stat-correct { color: var(--teal); }
+.pv-podium-stat-wrong { color: var(--red); }
 .pv-podium-score {
   font-family: var(--font-display);
   font-size: 15px;
@@ -927,7 +1228,88 @@
   width: 100%;
 }
 
-.pv-final-reveal-card {
+/* ---------------- per-player correct/wrong stats ---------------- */
+.pv-final-stats {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 280px;
+  align-self: stretch;
+  padding-left: 16px;
+  border-left: 1px solid rgba(240, 185, 66, 0.18);
+}
+.pv-final-stats-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+  text-align: center;
+  opacity: 0.75;
+  margin: 4px 0 2px;
+}
+@media (max-width: 560px) {
+  .pv-final-stats {
+    max-width: 320px;
+    padding-left: 0;
+    border-left: none;
+    margin-top: 6px;
+  }
+}
+.pv-final-stats-team {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.pv-final-stats-team-name {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--gold-dim);
+  padding-left: 4px;
+}
+.pv-final-stats-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(240, 185, 66, 0.12);
+  font-size: 12px;
+}
+.pv-final-stats-name {
+  flex: 1;
+  min-width: 0;
+  font-weight: 700;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pv-final-stats-correct {
+  color: var(--teal);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.pv-final-stats-wrong {
+  color: var(--red);
+  font-weight: 700;
+  flex-shrink: 0;
+}
+.pv-final-stats-accuracy {
+  font-family: var(--font-display);
+  color: var(--gold);
+  font-size: 11px;
+  flex-shrink: 0;
+  min-width: 32px;
+  text-align: right;
+}
+
+.pv-final-reveal-card,
+.pv-final-reveal-batch {
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -939,12 +1321,55 @@
   border-radius: 12px;
   box-sizing: border-box;
 }
-.pv-final-reveal-card.is-my-turn {
+.pv-final-reveal-card.is-my-turn,
+.pv-final-reveal-batch.is-my-turn {
   border-color: var(--gold);
   animation: fjWinnerGlow 1.6s ease-in-out infinite;
 }
-.pv-final-reveal-card.is-flash {
+.pv-final-reveal-card.is-flash,
+.pv-final-reveal-batch.is-flash {
   animation: fjRevealFlash 1.2s ease-out;
+}
+
+/* Grid of small per-team tiles, mirrors the host's .final-reveal-grid so
+   players see the same "several teams revealed at once" layout. */
+.pv-final-reveal-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 10px;
+  width: 100%;
+}
+.pv-final-reveal-grid.is-single {
+  grid-template-columns: minmax(0, 240px);
+  justify-content: center;
+}
+.pv-final-reveal-tile {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 12px 10px;
+  background: rgba(0, 0, 0, 0.2);
+  border: 1px solid rgba(240, 185, 66, 0.2);
+  border-radius: 10px;
+  box-sizing: border-box;
+}
+.pv-final-reveal-tile.is-mine {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 1px rgba(240, 185, 66, 0.35), 0 0 14px rgba(240, 185, 66, 0.25);
+}
+.pv-final-reveal-tile .pv-podium-avatar,
+.pv-final-reveal-tile .pv-podium-avatar-fallback {
+  width: 40px;
+  height: 40px;
+  font-size: 16px;
+}
+.pv-final-reveal-tile .pv-final-reveal-team {
+  font-size: 15px;
+}
+.pv-final-reveal-tile .pv-final-reveal-answer {
+  font-size: 13px;
+  padding: 6px 10px;
 }
 .pv-final-reveal-eyebrow {
   font-family: var(--font-display);
@@ -1111,6 +1536,26 @@
   margin-bottom: 6px;
 }
  
+.final-reveal-select-all-btn {
+  align-self: center;
+  font-family: var(--font-body);
+  font-weight: 700;
+  font-size: 12px;
+  letter-spacing: 0.4px;
+  padding: 7px 16px;
+  border-radius: 999px;
+  background: transparent;
+  border: 1px dashed var(--gold-dim);
+  color: var(--gold-dim);
+  cursor: pointer;
+  transition: border-color 0.15s ease, color 0.15s ease;
+  margin-bottom: 2px;
+}
+.final-reveal-select-all-btn:hover {
+  border-color: var(--gold);
+  color: var(--gold);
+}
+
 .final-reveal-pick-row {
   display: flex;
   flex-direction: column;
@@ -1126,7 +1571,7 @@
   font-size: 15px;
   text-align: left;
   cursor: pointer;
-  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color 0.15s ease, transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
 }
  
 .final-reveal-pick-row:hover,
@@ -1139,12 +1584,42 @@
 .final-reveal-pick-row:active {
   transform: translateY(0);
 }
+
+.final-reveal-pick-row.is-selected {
+  border-color: var(--gold);
+  background: linear-gradient(180deg, rgba(60, 48, 20, 0.75), rgba(20, 20, 40, 0.9));
+  box-shadow: 0 0 0 1px rgba(245, 185, 66, 0.5), 0 0 18px rgba(245, 185, 66, 0.3);
+}
+
+.final-reveal-pick-checkbox {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 5px;
+  border: 2px solid var(--gold-dim);
+  background: rgba(0, 0, 0, 0.3);
+  color: #1a1200;
+  font-size: 13px;
+  font-weight: 800;
+  margin-right: 2px;
+}
+.final-reveal-pick-row.is-selected .final-reveal-pick-checkbox {
+  border-color: var(--gold);
+  background: linear-gradient(180deg, var(--gold), #c8932c);
+}
  
 .final-reveal-pick-header {
   display: flex;
   align-items: center;
+  gap: 10px;
   justify-content: space-between;
   width: 100%;
+}
+.final-reveal-pick-header .final-team-name {
+  flex: 1;
 }
 
 .final-reveal-pick-row .final-team-name {

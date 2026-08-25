@@ -40,7 +40,14 @@ function calcGain(sliderVolume) {
 }
 
 export default function BackgroundMusicPlayer({
-  settings,
+  // `track` is the currently ACTIVE track — either the universal track or
+  // the current round's track, already resolved by useBgmSettings based
+  // on `mode`. `volume` stays separate/global (see bgmStore.js).
+  track,
+  volume,
+  mode = "universal",
+  onSetMode,
+  roundLabel,
   onUploadFile,
   onSetDirectUrl,
   onClear,
@@ -48,6 +55,8 @@ export default function BackgroundMusicPlayer({
   onToggleLoop,
   ducking = false,
   onPlaybackChange,
+  finalStandingsVolume = 1,
+  onFinalStandingsVolumeChange,
 }) {
   const [open, setOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
@@ -57,6 +66,14 @@ export default function BackgroundMusicPlayer({
   const [urlError, setUrlError] = useState("");
   const audioRef = useRef(null);
   const fadeRafRef = useRef(null);
+  // Tracks whether we were mid-playback right before `track` changed, so
+  // that switching rounds in "perRound" mode can carry playback straight
+  // into the new track instead of forcing the host to hit play again
+  // every round switch.
+  const wasPlayingRef = useRef(false);
+  useEffect(() => {
+    wasPlayingRef.current = playing;
+  }, [playing]);
 
   function cancelFade() {
     if (fadeRafRef.current != null) {
@@ -93,24 +110,49 @@ export default function BackgroundMusicPlayer({
   // settings from before SoundCloud was removed might still have
   // source: "soundcloud" lying around — just ignore that and fall back
   // to fileRef (or nothing) rather than trying to handle it.
+  //
+  // If we were already playing right before `track` changed (typically:
+  // host switched rounds while music was playing in "perRound" mode),
+  // carry playback straight into the new track instead of leaving it
+  // paused — that's the whole point of having different music per round.
   useEffect(() => {
     let cancelled = false;
     let urlToRevoke = "";
+    const shouldResume = wasPlayingRef.current;
 
     async function resolve() {
-      if (!settings.fileRef) {
+      if (!track.fileRef) {
         setMediaUrl("");
+        setPlaying(false);
         return;
       }
-      const url = await getMediaUrl(settings.fileRef);
+      const url = await getMediaUrl(track.fileRef);
       if (cancelled) {
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
         return;
       }
       urlToRevoke = url && url.startsWith("blob:") ? url : "";
       setMediaUrl(url);
+      if (!shouldResume) {
+        setPlaying(false);
+        return;
+      }
+      // Wait a tick so the <audio> element actually picks up the new src
+      // before we try to play it.
+      requestAnimationFrame(() => {
+        if (cancelled) return;
+        const audio = audioRef.current;
+        if (!audio) return;
+        audio.volume = 0;
+        audio
+          .play()
+          .then(() => {
+            setPlaying(true);
+            fadeVolumeTo(calcGain(ducking ? volume * DUCK_LEVEL : volume), FADE_IN_MS);
+          })
+          .catch(() => setPlaying(false));
+      });
     }
-    setPlaying(false);
     resolve();
 
     return () => {
@@ -118,21 +160,21 @@ export default function BackgroundMusicPlayer({
       if (urlToRevoke) URL.revokeObjectURL(urlToRevoke);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.fileRef]);
+  }, [track.fileRef]);
 
   useEffect(() => {
     if (audioRef.current) {
       cancelFade();
-      audioRef.current.volume = calcGain(ducking ? settings.volume * DUCK_LEVEL : settings.volume);
+      audioRef.current.volume = calcGain(ducking ? volume * DUCK_LEVEL : volume);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [settings.volume, mediaUrl]);
+  }, [volume, mediaUrl]);
   useEffect(() => {
-    if (audioRef.current) audioRef.current.loop = settings.loop;
-  }, [settings.loop, mediaUrl]);
+    if (audioRef.current) audioRef.current.loop = track.loop;
+  }, [track.loop, mediaUrl]);
 
   useEffect(() => {
-    const target = calcGain(ducking ? settings.volume * DUCK_LEVEL : settings.volume);
+    const target = calcGain(ducking ? volume * DUCK_LEVEL : volume);
     if (!audioRef.current) return;
     fadeVolumeTo(target);
     return cancelFade;
@@ -145,15 +187,15 @@ export default function BackgroundMusicPlayer({
     if (!onPlaybackChange) return;
     onPlaybackChange({
       source: "file",
-      fileRef: settings.fileRef || "",
-      fileName: settings.fileName || "",
-      loop: !!settings.loop,
+      fileRef: track.fileRef || "",
+      fileName: track.fileName || "",
+      loop: !!track.loop,
       playing,
       positionSeconds: audioRef.current ? audioRef.current.currentTime : 0,
       updatedAt: Date.now(),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [playing, settings.fileRef, settings.loop]);
+  }, [playing, track.fileRef, track.loop]);
 
   function togglePlay() {
     const audio = audioRef.current;
@@ -168,7 +210,7 @@ export default function BackgroundMusicPlayer({
         .play()
         .then(() => {
           setPlaying(true);
-          fadeVolumeTo(calcGain(ducking ? settings.volume * DUCK_LEVEL : settings.volume), FADE_IN_MS);
+          fadeVolumeTo(calcGain(ducking ? volume * DUCK_LEVEL : volume), FADE_IN_MS);
         })
         .catch(() => setPlaying(false));
     }
@@ -194,14 +236,42 @@ export default function BackgroundMusicPlayer({
     setUrlMode(false);
   }
 
-  const trackLabel = settings.fileName || "No track loaded";
-  const hasTrack = !!settings.fileRef;
+  const trackLabel = track.fileName || "No track loaded";
+  const hasTrack = !!track.fileRef;
+  const isPerRound = mode === "perRound";
 
   return (
     <div className="bgm-widget">
       {open && (
         <div className="bgm-panel">
           <div className="bgm-panel-title">Background Music</div>
+
+          {onSetMode && (
+            <div className="bgm-mode-row" role="radiogroup" aria-label="Music mode">
+              <button
+                type="button"
+                className={"bgm-mode-btn" + (!isPerRound ? " is-active" : "")}
+                aria-pressed={!isPerRound}
+                onClick={() => onSetMode("universal")}
+                title="One track plays through every round"
+              >
+                Universal
+              </button>
+              <button
+                type="button"
+                className={"bgm-mode-btn" + (isPerRound ? " is-active" : "")}
+                aria-pressed={isPerRound}
+                onClick={() => onSetMode("perRound")}
+                title="Each round gets its own track"
+              >
+                Per Round
+              </button>
+            </div>
+          )}
+
+          {isPerRound && roundLabel && (
+            <div className="bgm-round-label">Editing track for: {roundLabel}</div>
+          )}
 
           <div className="bgm-track-row">
             <span className="bgm-track-name" title={trackLabel}>
@@ -266,16 +336,16 @@ export default function BackgroundMusicPlayer({
               min="0"
               max="1"
               step="0.01"
-              value={settings.volume}
+              value={volume}
               onChange={(e) => onVolumeChange(parseFloat(e.target.value))}
               title="Volume"
             />
             <button
               type="button"
-              className={"bgm-loop-btn" + (settings.loop ? " is-active" : "")}
+              className={"bgm-loop-btn" + (track.loop ? " is-active" : "")}
               onClick={onToggleLoop}
-              title={settings.loop ? "Loop on" : "Loop off"}
-              aria-pressed={settings.loop}
+              title={track.loop ? "Loop on" : "Loop off"}
+              aria-pressed={track.loop}
             >
               <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M17 2l4 4-4 4" />
@@ -285,6 +355,34 @@ export default function BackgroundMusicPlayer({
               </svg>
             </button>
           </div>
+
+          {onFinalStandingsVolumeChange && (
+            <div className="bgm-fs-volume-row">
+              <span
+                className="bgm-fs-volume-label"
+                title="Volume for the Final Standings celebration sound — separate from the BGM track above"
+              >
+                <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M8 21h8" />
+                  <path d="M12 17v4" />
+                  <path d="M7 4h10v5a5 5 0 0 1-10 0V4Z" />
+                  <path d="M7 5H4a2 2 0 0 0 2 3.5" />
+                  <path d="M17 5h3a2 2 0 0 1-2 3.5" />
+                </svg>
+                Final Standings
+              </span>
+              <input
+                className="bgm-fs-volume-slider"
+                type="range"
+                min="0"
+                max="1"
+                step="0.01"
+                value={finalStandingsVolume}
+                onChange={(e) => onFinalStandingsVolumeChange(parseFloat(e.target.value))}
+                title="Final Standings celebration sound volume"
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -304,9 +402,9 @@ export default function BackgroundMusicPlayer({
         <audio
           ref={audioRef}
           src={mediaUrl}
-          loop={settings.loop}
+          loop={track.loop}
           onEnded={() => {
-            if (!settings.loop) setPlaying(false);
+            if (!track.loop) setPlaying(false);
           }}
         />
       )}

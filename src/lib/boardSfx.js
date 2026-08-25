@@ -1,5 +1,6 @@
 import { createSfx, getSharedAudioCtx, withRunningCtx } from "./sfx";
 import { getMediaUrl } from "./storage";
+import { storeGet, storeSet } from "./storage/kvStore";
 
 /* =========================================================================
    BOARD SOUND EFFECTS
@@ -84,6 +85,58 @@ export const playHoverTick = createSfx({
   volume: 0.1,
   minGapMs: 55, // guards against a rapid mouse-sweep firing a pile of overlapping plays
 });
+
+/* ---------------- BGM DUCKING BUS ----------------
+   A tiny pub/sub so a sound effect fired from anywhere (this module has
+   no idea BackgroundMusicPlayer/PlayerBgmWidget even exist) can signal
+   "duck the music for a moment" without needing props threaded all the
+   way down to it. playStandingsCelebration below is called from
+   FinalJeopardyBoard on the host and from wherever the player-side
+   mirrors it — neither is anywhere near JeopardyBoard/PlayerView's BGM
+   state, so a prop genuinely can't reach this call site directly.
+
+   BackgroundMusicPlayer's existing `ducking` prop (driven by
+   useClueEditor's duckMusic for clue audio/video) and PlayerBgmWidget's
+   own ducking both OR this bus's signal in on top of whatever else is
+   already ducking them — either source is enough to duck the music.
+   ========================================================================= */
+const duckingListeners = new Set();
+let duckingTimeoutId = null;
+let duckingActive = false;
+
+function setDucking(active) {
+  if (active === duckingActive) return;
+  duckingActive = active;
+  for (const listener of duckingListeners) listener(active);
+}
+
+// BackgroundMusicPlayer/PlayerBgmWidget call this once (in a useEffect)
+// to be notified whenever this bus's ducking state changes. Returns an
+// unsubscribe function.
+export function subscribeSfxDucking(listener) {
+  duckingListeners.add(listener);
+  return () => duckingListeners.delete(listener);
+}
+
+// Ducks the BGM for `ms`, then un-ducks — unless another call comes in
+// first, which just extends the window (clearTimeout below) rather than
+// stacking two independent un-duck timers that could turn it back off
+// too early relative to each other.
+function duckBgmFor(ms) {
+  clearTimeout(duckingTimeoutId);
+  setDucking(true);
+  duckingTimeoutId = setTimeout(() => setDucking(false), ms);
+}
+
+// The built-in tone (see playSynthFinalStandingsTone above) is a fixed,
+// known-length chime (~1.5s) or, if final-standings.mp3 exists, an
+// unknown-length file played through createSfx's own internal <audio>
+// (see ./sfx.js) that this module doesn't have a handle to — so unlike
+// the custom-file path in playStandingsCelebration below, there's no
+// `ended` event available to duck against precisely. A fixed window
+// covers the synth tone with room to spare; if you drop in a longer
+// final-standings.mp3, bump this to match.
+const BUILTIN_STANDINGS_DUCK_MS = 3500;
 
 /* ---------------- CLICK ---------------- */
 const clickSfxUrl = new URL("../assets/click.mp3", import.meta.url).href;
@@ -288,12 +341,19 @@ export const playBuzzSfx = createSfx({
    maintaining their own copy. */
 const dailyDoubleSfxUrl = new URL("../assets/daily-double.mp3", import.meta.url).href;
 
+// Active oscillator/gain nodes from the most recent synth fallback tone
+// (see playSynthDailyDoubleTone below) — tracked so stopDailyDoubleSfx()
+// can silence them immediately instead of letting the scheduled ~1.2s
+// envelope play itself out after the player has already left the clue.
+let activeDailyDoubleSynthNodes = [];
+
 function playSynthDailyDoubleTone() {
   try {
     const ctx = getSharedAudioCtx();
     if (!ctx) return;
     withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
+    const nodes = [];
 
     // Rising sweep — builds anticipation for ~0.5s
     const sweep = ctx.createOscillator();
@@ -308,6 +368,7 @@ function playSynthDailyDoubleTone() {
     sweepGain.connect(ctx.destination);
     sweep.start(t0);
     sweep.stop(t0 + 0.52);
+    nodes.push(sweep, sweepGain);
 
     // Bright landing chord once the sweep peaks
     [523.25, 659.25, 783.99].forEach((freq, i) => {
@@ -323,19 +384,73 @@ function playSynthDailyDoubleTone() {
       gain.connect(ctx.destination);
       osc.start(start);
       osc.stop(start + 0.62);
+      nodes.push(osc, gain);
     });
+
+    activeDailyDoubleSynthNodes = nodes;
     });
   } catch (e) {
     /* best effort — silently ignore if audio is blocked */
   }
 }
 
-export const playDailyDoubleSfx = createSfx({
+// Immediately silences whatever nodes the synth tone above last
+// scheduled. .stop(0) on an oscillator that's already stopped (or never
+// started) just throws, so every call is wrapped — this is a
+// best-effort "make it quiet right now", not something that needs to be
+// precise about what's currently actually sounding.
+function stopSynthDailyDoubleTone() {
+  for (const node of activeDailyDoubleSynthNodes) {
+    try {
+      if (typeof node.stop === "function") node.stop(0);
+    } catch (e) {
+      /* already stopped/never started — fine */
+    }
+    try {
+      node.disconnect();
+    } catch (e) {
+      /* fine */
+    }
+  }
+  activeDailyDoubleSynthNodes = [];
+}
+
+// Not exported directly — see playDailyDoubleSfx below, which wraps this
+// with the same BGM-ducking treatment Final Standings gets.
+const playDailyDoubleSfxRaw = createSfx({
   url: dailyDoubleSfxUrl,
   fallbackTone: playSynthDailyDoubleTone,
   volume: 0.18,
   minGapMs: 200,
 });
+
+// The synth tone runs ~1.2s (0.52s sweep + landing chord tail out to
+// ~1.16s); if daily-double.mp3 exists, createSfx plays that instead and
+// this module has no handle on its real length (same limitation as the
+// built-in Final Standings tone — see BUILTIN_STANDINGS_DUCK_MS above).
+// 2s gives either case room to breathe; bump this if you drop in a
+// longer daily-double.mp3.
+const DAILY_DOUBLE_DUCK_MS = 2000;
+
+export function playDailyDoubleSfx() {
+  duckBgmFor(DAILY_DOUBLE_DUCK_MS);
+  playDailyDoubleSfxRaw();
+}
+
+// Stops the Daily Double sting immediately, whichever path is actually
+// sounding — the real daily-double.mp3 clone (via createSfx's own
+// play.stop(), see sfx.js) or the synthesized fallback tone's
+// oscillators — and un-ducks the BGM right away instead of waiting out
+// DAILY_DOUBLE_DUCK_MS. Call this whenever the Daily Double wager screen
+// goes away before the sting has finished on its own: clue closed, host
+// moved on, player left the room, etc. Safe to call even if nothing's
+// currently playing.
+export function stopDailyDoubleSfx() {
+  clearTimeout(duckingTimeoutId);
+  setDucking(false);
+  playDailyDoubleSfxRaw.stop();
+  stopSynthDailyDoubleTone();
+}
 
 /* ---------------- FINAL STANDINGS ----------------
    Plays once, for host and every player alike, the moment Final Standings
@@ -345,10 +460,104 @@ export const playDailyDoubleSfx = createSfx({
    "something exciting is starting". */
 const finalStandingsSfxUrl = new URL("../assets/final-standings.mp3", import.meta.url).href;
 
+/* ---------------- FINAL STANDINGS VOLUME ----------------
+   Unlike BGM (which has always had its own slider), every board SFX —
+   including this one — used to just hardcode a fixed gain with no way
+   for the host to turn it down live. This is the first one made
+   adjustable, surfaced as a slider inside BackgroundMusicPlayer (the one
+   audio widget that's actually still on-screen and reachable in the
+   moment standings get revealed, unlike FinalJeopardyBoard's edit panel
+   where the celebration sound file itself is uploaded).
+
+   Range is 0–1, where 1 ("full") means exactly what each path already
+   played before this existed — not some new louder ceiling — and 0 is
+   silent. That's deliberate: the built-in mp3, the custom-file path, and
+   the synth fallback each had their own independently-tuned base volume
+   (0.2 / 0.6 / a set of peak gains) before this existed; treating the
+   slider as a 0–1 multiplier on each path's own base, rather than
+   inventing one shared absolute number, is what keeps the *default*
+   slider position sounding identical to before across all three paths.
+
+   Persisted the same way BGM settings are (see bgmStore.js): its own
+   small key, loaded once, independent of any session. Kept as plain
+   module state + get/set functions here rather than a React hook, since
+   this needs to be readable from playStandingsCelebration below —
+   nowhere near any component tree — the same way the ducking bus above
+   is.
+   ========================================================================= */
+const FINAL_STANDINGS_VOLUME_KEY = "jp_final_standings_volume";
+// The built-in mp3's own base volume (matches the `volume` given to
+// createSfx below) — the live value pushed via .setVolume() is this
+// times the current slider position, so slider=1 reproduces this exact
+// number, unchanged from before the slider existed.
+const FINAL_STANDINGS_MP3_BASE_VOLUME = 0.2;
+// Same idea, for playStandingsCelebration's custom-uploaded-file path
+// further below — its own separately-tuned base, since it was always a
+// louder foreground sound than the built-in mp3 (an arbitrary user file,
+// not the same fixed clip).
+const FINAL_STANDINGS_CUSTOM_BASE_VOLUME = 0.6;
+
+let finalStandingsVolume = 1;
+
+// Handle to whatever custom celebration <audio> is currently mid-playback
+// (see playStandingsCelebration below), so the slider can adjust it live
+// instead of only affecting the *next* play. Without this, dragging the
+// slider while the celebration sound is actually playing did nothing —
+// and since it only ever fires once automatically per Final Standings
+// reveal, that was effectively the only moment the slider was ever
+// audible at all. Cleared back to null once that clip ends/errors, or
+// (guarded by the audio-identity check) if a newer one starts first.
+let currentCelebrationAudio = null;
+let currentCelebrationBaseVolume = 0;
+
+function applyFinalStandingsVolume() {
+  playFinalStandingsSfx.setVolume(FINAL_STANDINGS_MP3_BASE_VOLUME * finalStandingsVolume);
+  if (currentCelebrationAudio) {
+    currentCelebrationAudio.volume = currentCelebrationBaseVolume * finalStandingsVolume;
+  }
+}
+
+// Called once by JeopardyBoard on mount to hydrate the slider's initial
+// position from storage. Safe to never call at all — everything just
+// keeps using the in-memory default (1 = unchanged from before).
+export async function loadFinalStandingsVolume() {
+  try {
+    const raw = await storeGet(FINAL_STANDINGS_VOLUME_KEY);
+    const parsed = raw != null ? parseFloat(raw) : NaN;
+    if (Number.isFinite(parsed)) {
+      finalStandingsVolume = Math.max(0, Math.min(1, parsed));
+      applyFinalStandingsVolume();
+    }
+  } catch (e) {
+    /* stay on the default if storage is unavailable */
+  }
+  return finalStandingsVolume;
+}
+
+// Called from the slider's onChange. Updates the live built-in-mp3 sound
+// immediately, persists for next time, and — since finalStandingsVolume
+// is read directly by both the synth fallback below and
+// playStandingsCelebration's custom-file path — takes effect on every
+// path, not just the built-in one.
+export function setFinalStandingsVolume(v) {
+  finalStandingsVolume = Math.max(0, Math.min(1, v));
+  applyFinalStandingsVolume();
+  storeSet(FINAL_STANDINGS_VOLUME_KEY, String(finalStandingsVolume)).catch(() => {});
+}
+
+export function getFinalStandingsVolume() {
+  return finalStandingsVolume;
+}
+
 function playSynthFinalStandingsTone() {
   try {
     const ctx = getSharedAudioCtx();
     if (!ctx) return;
+    // 0 just skips scheduling anything — exponentialRampToValueAtTime
+    // below can't ramp to a literal 0 target (WebAudio throws), and
+    // "silent" is simpler to express as "don't play" than as an
+    // infinitesimally quiet ramp.
+    if (finalStandingsVolume <= 0) return;
     withRunningCtx(ctx, () => {
     const t0 = ctx.currentTime;
 
@@ -361,7 +570,7 @@ function playSynthFinalStandingsTone() {
       osc.frequency.value = freq;
       const start = t0 + i * 0.07;
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.16, start + 0.015);
+      gain.gain.exponentialRampToValueAtTime(0.16 * finalStandingsVolume, start + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -379,7 +588,7 @@ function playSynthFinalStandingsTone() {
       osc.frequency.value = freq;
       const start = chordStart + i * 0.015;
       gain.gain.setValueAtTime(0.0001, start);
-      gain.gain.exponentialRampToValueAtTime(0.2, start + 0.03);
+      gain.gain.exponentialRampToValueAtTime(0.2 * finalStandingsVolume, start + 0.03);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.1);
       osc.connect(gain);
       gain.connect(ctx.destination);
@@ -395,7 +604,7 @@ function playSynthFinalStandingsTone() {
 export const playFinalStandingsSfx = createSfx({
   url: finalStandingsSfxUrl,
   fallbackTone: playSynthFinalStandingsTone,
-  volume: 0.2,
+  volume: FINAL_STANDINGS_MP3_BASE_VOLUME,
   minGapMs: 500,
 });
 
@@ -411,15 +620,63 @@ export async function playStandingsCelebration(customRef) {
       const url = await getMediaUrl(customRef);
       if (url) {
         const audio = new Audio(url);
-        audio.volume = 0.6;
+        audio.volume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME * finalStandingsVolume;
+        currentCelebrationAudio = audio;
+        currentCelebrationBaseVolume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME;
+        // Duck for exactly as long as this clip actually plays, rather
+        // than guessing a fixed duration — we own this <audio> element
+        // directly, unlike the built-in tone below, so real 'ended'/
+        // 'error' events are available. The safety-net timeout below
+        // guards against a source that never fires either (e.g. a
+        // stream that stalls) leaving the BGM permanently ducked.
+        clearTimeout(duckingTimeoutId);
+        setDucking(true);
+        const stopTrackingVolume = () => {
+          // Guard against a newer celebration having already taken over
+          // this slot (e.g. host retriggers before this one finished).
+          if (currentCelebrationAudio === audio) currentCelebrationAudio = null;
+        };
+        const unduck = () => setDucking(false);
+        audio.addEventListener("ended", unduck, { once: true });
+        audio.addEventListener("ended", stopTrackingVolume, { once: true });
+        audio.addEventListener("error", unduck, { once: true });
+        audio.addEventListener("error", stopTrackingVolume, { once: true });
+        duckingTimeoutId = setTimeout(unduck, 15000);
         await audio.play();
         return;
       }
     } catch (e) {
+      setDucking(false);
+      currentCelebrationAudio = null;
       /* couldn't load/play the custom sound — fall through to the built-in */
     }
   }
+  duckBgmFor(BUILTIN_STANDINGS_DUCK_MS);
   playFinalStandingsSfx();
+}
+
+// Hard-stops whatever celebration sound is currently playing (custom
+// file/Drive link path only — the built-in tone is a short WebAudio
+// blip with no handle to cancel mid-flight, but at ~1.5s it's not worth
+// the extra plumbing). Also un-ducks the BGM immediately rather than
+// waiting for the natural 'ended'/timeout path, since the reason we're
+// stopping is usually "the moment this sound belonged to is already
+// over" (round changed, player left the room, standings got reset for
+// a replay, component unmounted, etc.) — leaving the BGM ducked for
+// however many seconds were left on a sound nobody will hear the rest
+// of would just be a second, quieter bug on top of the first.
+export function stopStandingsCelebration() {
+  clearTimeout(duckingTimeoutId);
+  setDucking(false);
+  if (currentCelebrationAudio) {
+    try {
+      currentCelebrationAudio.pause();
+      currentCelebrationAudio.currentTime = 0;
+    } catch (e) {
+      /* best effort */
+    }
+    currentCelebrationAudio = null;
+  }
 }
 
 /* ---------------- GLOBAL DELEGATED HANDLERS ---------------- */
