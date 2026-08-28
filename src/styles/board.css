@@ -1152,6 +1152,26 @@
 
   .form-row{ margin-bottom:14px; }
   .form-row label{ display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; letter-spacing:.5px;}
+
+  /* "Has a file?" status badge next to a MediaField's label — quick
+     at-a-glance answer to "is there already audio/image/video attached
+     here" without having to look at the input/chip below it. */
+  .media-field-label-row{
+    display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:5px;
+  }
+  .media-field-label-row label{ margin-bottom:0; }
+  .media-status-badge{
+    display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:bold;
+    padding:2px 8px; border-radius:20px; white-space:nowrap; letter-spacing:.3px;
+  }
+  .media-status-badge.has-media{
+    color:var(--teal); background:rgba(47,214,184,0.1); border:1px solid rgba(47,214,184,0.4);
+  }
+  .media-status-badge.no-media{
+    color:var(--text-dim); background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);
+  }
+  .media-status-icon{ font-size:11px; line-height:1; }
+
   .form-row input[type=text], .form-row input[type=url], .form-row input[type=number], .form-row textarea{
     width:100%; padding:9px 10px; border-radius:6px; border:1px solid rgba(240,185,66,0.3);
     background:#0a0f40; color:var(--text); font-family:var(--font-body); font-size:14px;
@@ -2545,6 +2565,20 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   color: #1a1200;
   border-color: transparent;
   box-shadow: 0 0 8px rgba(240,185,66,0.5);
+}
+
+/* Hover-preview media indicator (ClueGrid.jsx) — top-right corner so it
+   never collides with the DD toggle, which sits top-left. */
+.clue-media-badge{
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(47,214,184,0.35);
+  background: rgba(0,0,0,0.35);
 }
 
 .bgm-mode-row {

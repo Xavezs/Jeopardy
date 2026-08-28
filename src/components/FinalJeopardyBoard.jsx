@@ -15,7 +15,7 @@ import {
   detectMediaTypeFromUrl,
 } from "../lib/storage";
 import { discordSdk } from "../discordSdk";
-import { playStandingsCelebration, stopStandingsCelebration, playCatRevealSfx, playCorrectSfx, playIncorrectSfx } from "../lib/boardSfx";
+import { playStandingsCelebration, stopStandingsCelebration, preloadStandingsCelebration, playCatRevealSfx, playCorrectSfx, playIncorrectSfx, holdBgmDuck } from "../lib/boardSfx";
 
 // Same escape hatch ClueModal uses — YouTube can't be embedded inside
 // Discord's Activity CSP, so open it in the user's real browser instead.
@@ -73,6 +73,29 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
       if (toRevoke) URL.revokeObjectURL(toRevoke);
     };
   }, [mediaRef, mediaType]);
+
+  // Unlike normal clues (ClueModal.jsx's onDuckMusic), Final Jeopardy
+  // media had no BGM-ducking at all — this component manages its own
+  // local play state independently on host and player, with no host-
+  // driven sync to hang a duck call off of, so it needs to duck itself
+  // directly off `playing`. Images obviously don't produce sound, so
+  // only video/audio hold the duck.
+  const duckReleaseRef = useRef(null);
+  useEffect(() => {
+    const audible = (renderAs === "video" || renderAs === "audio") && playing;
+    if (audible && !duckReleaseRef.current) {
+      duckReleaseRef.current = holdBgmDuck();
+    } else if (!audible && duckReleaseRef.current) {
+      duckReleaseRef.current();
+      duckReleaseRef.current = null;
+    }
+    return () => {
+      if (duckReleaseRef.current) {
+        duckReleaseRef.current();
+        duckReleaseRef.current = null;
+      }
+    };
+  }, [renderAs, playing]);
 
   if (!url || !renderAs) return null;
 
@@ -299,6 +322,19 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
     }
   }, [rd.standingsRevealed]);
 
+  // Starts loading the custom celebration sound as soon as this whole
+  // Final Jeopardy screen is up — well before standingsRevealed actually
+  // flips true — so its first request through the Google Drive proxy has
+  // time to finish in the background while the round is still being
+  // played out. Without this, that first request only started at the
+  // exact moment playStandingsCelebration() fired, which is what made the
+  // celebration sound feel delayed. Re-runs if the host changes the file
+  // mid-round; preloadStandingsCelebration itself no-ops if it's already
+  // holding a preload for that same ref.
+  useEffect(() => {
+    preloadStandingsCelebration(rd.standingsSfxUrl);
+  }, [rd.standingsSfxUrl]);
+
   // Belt-and-suspenders: this component only renders while the current
   // round is Final Jeopardy (see JeopardyBoard.jsx), so switching to a
   // different round unmounts it — same as navigating away from the board
@@ -307,6 +343,34 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
   useEffect(() => {
     return () => stopStandingsCelebration();
   }, []);
+
+  // Separate, longer-lived duck: BGM should stay OFF for the entire time
+  // Final Standings is on screen, not just for however long the
+  // celebration sound itself plays. playStandingsCelebration's own duck
+  // (above) is released as soon as that sound finishes — that's correct
+  // for the sound, but left the BGM free to fade back in mid-standings
+  // whenever the celebration clip was short (e.g. the default built-in
+  // tone, ~1.5s). This hold is opened the moment standingsRevealed goes
+  // true and only released when it goes false again or this component
+  // unmounts, so the BGM has no window to creep back in while the
+  // standings screen is still showing.
+  const standingsDuckReleaseRef = useRef(null);
+  useEffect(() => {
+    if (rd.standingsRevealed) {
+      if (!standingsDuckReleaseRef.current) {
+        standingsDuckReleaseRef.current = holdBgmDuck();
+      }
+    } else if (standingsDuckReleaseRef.current) {
+      standingsDuckReleaseRef.current();
+      standingsDuckReleaseRef.current = null;
+    }
+    return () => {
+      if (standingsDuckReleaseRef.current) {
+        standingsDuckReleaseRef.current();
+        standingsDuckReleaseRef.current = null;
+      }
+    };
+  }, [rd.standingsRevealed]);
 
   // "Now Revealing" batch flashes + plays a cue whenever the host confirms
   // a NEW selection — same one-shot-per-change pattern as
@@ -657,14 +721,28 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
             groups.push({ rank, score: team.score, teams: [team] });
           }
         }
-        const podiumGroups = groups.filter((g) => g.rank <= 3);
-        const restGroups = groups.filter((g) => g.rank > 3);
-        const groupsByRank = {};
-        podiumGroups.forEach((g) => { groupsByRank[g.rank] = g; });
-        // Left-to-right: 2nd, 1st, 3rd — whichever of those rank groups
-        // actually exist (a tie for 1st can mean there's no "2nd" at all).
-        const podiumOrder = [2, 1, 3].map((r) => groupsByRank[r]).filter(Boolean);
-        const podiumHeightByRank = { 1: 210, 2: 164, 3: 128 };
+        // Podium shows the top 3 distinct SCORE TIERS, not "whichever
+        // groups happen to have rank <= 3". Those aren't the same thing
+        // once ties are involved: standard competition ranking (1, 2, 2,
+        // 2, 5, ...) means a 3-way tie for 2nd consumes ranks 2/3/4
+        // entirely, so no group ever lands on rank 3 and the podium used
+        // to render only 2 columns even though a clear 3rd-place tier
+        // existed just below. Taking the first 3 groups by score instead
+        // always fills the podium (when there are ≥3 tiers) — each
+        // column's badge still shows that group's real rank (which can
+        // legitimately read "5", same as an Olympic medal table skipping
+        // a rank after a tie), only the podium's left/center/right
+        // *position* and height are decided by tier order rather than by
+        // the rank number itself.
+        const podiumGroups = groups.slice(0, 3);
+        const restGroups = groups.slice(3);
+        const podiumHeightByPosition = [210, 164, 128]; // gold, silver, bronze
+        // Left-to-right: silver, gold, bronze — whichever of the top 3
+        // tiers actually exist (fewer than 3 teams overall just means a
+        // shorter podium).
+        const podiumOrder = [podiumGroups[1], podiumGroups[0], podiumGroups[2]]
+          .map((group) => (group ? { group, position: podiumGroups.indexOf(group) } : null))
+          .filter(Boolean);
 
         return (
           <div className="final-phase-panel final-standings">
@@ -673,8 +751,8 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
             <div className="final-standings-body">
               <div className="final-standings-col">
                 <div className="final-podium-row">
-                  {podiumOrder.map((group) => (
-                    <div key={group.rank} className={`final-podium-col${group.rank === 1 ? " is-first" : ""}`}>
+                  {podiumOrder.map(({ group, position }) => (
+                    <div key={group.rank} className={`final-podium-col${position === 0 ? " is-first" : ""}`}>
                       <div className="final-podium-team-list">
                         {group.teams.map((team) => {
                           const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
@@ -729,7 +807,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                         })}
                       </div>
                       <div className="final-podium-score">${group.score}</div>
-                      <div className="final-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
+                      <div className="final-podium-block" style={{ height: podiumHeightByPosition[position] }}>
                         <div className="final-podium-rank">{group.rank}</div>
                       </div>
                     </div>

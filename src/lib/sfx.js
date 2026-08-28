@@ -133,7 +133,7 @@ export function unlockAudioPlayback() {
  * @param {number} [minGapMs=40] - Minimum ms between plays; guards against double-fires
  * @returns {() => void} play() — call this to trigger the sound
  */
-export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
+export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40, onEnded }) {
   const audioTemplate = typeof Audio !== "undefined" ? new Audio(url) : null;
   let fileAvailable = !!audioTemplate;
   if (audioTemplate) {
@@ -159,6 +159,12 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40 }) {
       const untrack = () => activeNodes.delete(node);
       node.addEventListener("ended", untrack, { once: true });
       node.addEventListener("error", untrack, { once: true });
+      // Fires only on a genuine natural finish — not on error, and not
+      // on stop() (see play.stop() below, which doesn't dispatch
+      // 'ended'). Lets a caller duck/hold for exactly this clip's real
+      // length instead of guessing a fixed duration that may not match
+      // the actual asset (see playFinalStandingsSfx in boardSfx.js).
+      if (onEnded) node.addEventListener("ended", onEnded, { once: true });
       const playPromise = node.play();
       if (playPromise && typeof playPromise.catch === "function") {
         playPromise.catch(() => {

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from "react";
 import { getMediaUrl } from "../lib/storage";
 import { isSoundCloudUrl } from "../lib/soundcloud";
+import { subscribeSfxDucking } from "../lib/boardSfx";
 
 /* =========================================================================
    BACKGROUND MUSIC PLAYER
@@ -20,7 +21,16 @@ import { isSoundCloudUrl } from "../lib/soundcloud";
    SoundCloud link is now just rejected with a clear message instead of
    silently failing.
    ========================================================================= */
-const DUCK_LEVEL = 0.15;
+// How much quieter the track gets while ducked (Daily Double, Final
+// Standings celebration, Final Jeopardy media, clue video/audio, etc.)
+// — 0 means fully silent. Was 0.15 (still faintly audible under
+// whatever triggered the duck); changed to a hard mute since that's
+// what "duck the BGM" was actually meant to mean here — e.g. Final
+// Standings is supposed to be the celebration sound alone, not the
+// celebration mixed with a quiet BGM bed. The transition itself is
+// still smooth (see fadeVolumeTo below) — only the target changed, not
+// how it gets there.
+const DUCK_LEVEL = 0;
 const DUCK_FADE_MS = 700;
 // Master ceiling for the BGM source itself — even at slider max, actual
 // gain never exceeds this. Keep in sync with PlayerBgmWidget.jsx so the
@@ -29,6 +39,12 @@ const MASTER_BGM_GAIN = 0.6;
 // How long the fade-in takes whenever playback actually starts, so it
 // doesn't snap straight to full gain. Keep in sync with PlayerBgmWidget.jsx.
 const FADE_IN_MS = 900;
+// How long the OLD track fades out before a round switch (perRound mode)
+// swaps the <audio> src to the new round's track. Kept shorter than
+// FADE_IN_MS so a round change reads as "duck out, then bloom back in"
+// rather than two equally-long fades blurring into one long crossfade.
+// Keep in sync with PlayerBgmWidget.jsx.
+const ROUND_FADE_OUT_MS = 500;
 
 // Human hearing perceives loudness roughly logarithmically, while
 // <audio>.volume is linear — squaring the slider value (a common taper
@@ -53,11 +69,36 @@ export default function BackgroundMusicPlayer({
   onClear,
   onVolumeChange,
   onToggleLoop,
-  ducking = false,
+  ducking: duckingProp = false,
   onPlaybackChange,
   finalStandingsVolume = 1,
   onFinalStandingsVolumeChange,
 }) {
+  // Merge the caller's own ducking signal (clue video/audio play state,
+  // wired in from JeopardyBoard/useClueEditor) with boardSfx's shared bus
+  // (Daily Double sting, Final Standings celebration, Final Jeopardy
+  // media) — either source is enough to duck. Previously this component
+  // only ever looked at the prop, so the bus's signal never actually
+  // reached the host's own BGM despite PlayerBgmWidget already listening
+  // to it on the player side.
+  const [busDucking, setBusDucking] = useState(false);
+  useEffect(() => subscribeSfxDucking(setBusDucking), []);
+  const ducking = duckingProp || busDucking;
+  // Effects below that intentionally exclude `ducking`/`volume` from
+  // their dependency array (round-transition fade-in, mainly) still
+  // need the *current* value at the moment they actually act, not
+  // whatever was captured when the effect was set up — the async gap
+  // between "effect starts" (old track fading out, new URL resolving)
+  // and "fade-in actually happens" is exactly the kind of window
+  // ducking can flip during. Mirrored via refs kept in sync every
+  // render instead.
+  const duckingRef = useRef(ducking);
+  const volumeRef = useRef(volume);
+  useEffect(() => {
+    duckingRef.current = ducking;
+    volumeRef.current = volume;
+  });
+
   const [open, setOpen] = useState(false);
   const [playing, setPlaying] = useState(false);
   const [mediaUrl, setMediaUrl] = useState("");
@@ -148,12 +189,32 @@ export default function BackgroundMusicPlayer({
           .play()
           .then(() => {
             setPlaying(true);
-            fadeVolumeTo(calcGain(ducking ? volume * DUCK_LEVEL : volume), FADE_IN_MS);
+            fadeVolumeTo(calcGain(duckingRef.current ? volumeRef.current * DUCK_LEVEL : volumeRef.current), FADE_IN_MS);
           })
           .catch(() => setPlaying(false));
       });
     }
-    resolve();
+
+    async function run() {
+      // If a track was already playing right before this switch (a
+      // round change in "perRound" mode is the only way `track` changes
+      // while music is live), fade it out first instead of just letting
+      // React swap the <audio> src out from under it — without this,
+      // switching rounds hard-cut the old track dead silent the instant
+      // the src attribute changed, then hard-started the new one at full
+      // volume a tick later. This makes it read as a proper "duck out,
+      // swap, bloom in" transition instead.
+      const audio = audioRef.current;
+      if (shouldResume && audio && !audio.paused) {
+        await new Promise((res) => {
+          fadeVolumeTo(0, ROUND_FADE_OUT_MS);
+          setTimeout(res, ROUND_FADE_OUT_MS);
+        });
+        if (cancelled) return;
+      }
+      await resolve();
+    }
+    run();
 
     return () => {
       cancelled = true;

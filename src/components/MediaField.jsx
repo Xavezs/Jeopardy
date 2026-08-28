@@ -1,5 +1,30 @@
 import React, { useRef, useState } from "react";
 
+// Extension -> kind lookup for the "has media?" badge below. Deliberately
+// small/local (rather than importing the shared detectMediaTypeFromUrl
+// from mediaStore.js) so this component doesn't pick up a dependency on
+// wherever that file happens to live — this only has to answer "image,
+// video, audio, or unknown", nothing else needs it to be exact.
+const MEDIA_EXT_KIND = {
+  image: ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "avif"],
+  video: ["mp4", "webm", "ogv", "mov", "m4v"],
+  audio: ["mp3", "wav", "ogg", "oga", "m4a", "aac", "flac", "weba"],
+};
+function detectKindFromName(name) {
+  if (!name) return "";
+  const cleaned = name.split(/[?#]/)[0];
+  const ext = (cleaned.split(".").pop() || "").toLowerCase();
+  for (const [kind, exts] of Object.entries(MEDIA_EXT_KIND)) {
+    if (exts.includes(ext)) return kind;
+  }
+  return "";
+}
+const KIND_BADGE = {
+  image: { icon: "🖼", label: "Image attached" },
+  video: { icon: "🎬", label: "Video attached" },
+  audio: { icon: "🎵", label: "Audio attached" },
+};
+
 export default function MediaField({ label, type, accept, placeholder, value, onUrlChange, onFile, onClear, hint }) {
   const fileInputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -15,9 +40,31 @@ export default function MediaField({ label, type, accept, placeholder, value, on
     handleFiles(e.dataTransfer.files);
   };
 
+  // "Is there actually media here right now" — a file upload counts once
+  // it has a fileName, a URL counts once it's non-blank. Drive share
+  // links and other extension-less URLs still count as "attached", they
+  // just fall back to the generic 📎 badge below since we can't sniff
+  // image/video/audio from the link text alone (same limitation as
+  // detectMediaTypeFromUrl in mediaStore.js).
+  const hasMedia = value.mode === "file" ? !!value.fileName : !!(value.url && value.url.trim());
+  const kind = hasMedia ? detectKindFromName(value.mode === "file" ? value.fileName : value.url) : "";
+  const badge = hasMedia ? KIND_BADGE[kind] || { icon: "📎", label: "File attached" } : null;
+
   return (
     <div className="form-row">
-      <label>{label}</label>
+      <div className="media-field-label-row">
+        <label>{label}</label>
+        <span className={`media-status-badge${hasMedia ? " has-media" : " no-media"}`}>
+          {hasMedia ? (
+            <>
+              <span className="media-status-icon">{badge.icon}</span>
+              {badge.label}
+            </>
+          ) : (
+            "No file"
+          )}
+        </span>
+      </div>
 
       {value.mode === "file" && value.fileName ? (
         <div className="dropzone-file-chip">

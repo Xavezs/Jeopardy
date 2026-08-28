@@ -23,6 +23,8 @@ import {
   stopDailyDoubleSfx,
   playStandingsCelebration,
   stopStandingsCelebration,
+  preloadStandingsCelebration,
+  holdBgmDuck,
 } from "../lib/boardSfx";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
@@ -282,6 +284,28 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
     };
   }, [mediaRef, mediaType]);
 
+  // Mirrors the host's identical fix (FinalJeopardyBoard.jsx) — Final
+  // Jeopardy media manages its own local play state per-device with no
+  // host-driven sync, so it needs to duck this player's own BGM directly
+  // off `playing` rather than off any shared clue-play signal. Images
+  // don't produce sound, so only video/audio hold the duck.
+  const duckReleaseRef = useRef(null);
+  useEffect(() => {
+    const audible = (renderAs === "video" || renderAs === "audio") && playing;
+    if (audible && !duckReleaseRef.current) {
+      duckReleaseRef.current = holdBgmDuck();
+    } else if (!audible && duckReleaseRef.current) {
+      duckReleaseRef.current();
+      duckReleaseRef.current = null;
+    }
+    return () => {
+      if (duckReleaseRef.current) {
+        duckReleaseRef.current();
+        duckReleaseRef.current = null;
+      }
+    };
+  }, [renderAs, playing]);
+
   if (!url || !renderAs) return null;
 
   return (
@@ -354,6 +378,15 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     }
   }, [rd.standingsRevealed]);
 
+  // Mirrors the same preload fix on the host side (FinalJeopardyBoard.jsx)
+  // — starts loading the custom celebration sound as soon as this Final
+  // Jeopardy view is up, not just at the exact moment standings reveal.
+  // rd.standingsSfxUrl is already synced board state, so each player can
+  // preload it independently, same as the host.
+  useEffect(() => {
+    preloadStandingsCelebration(rd.standingsSfxUrl);
+  }, [rd.standingsSfxUrl]);
+
   // Belt-and-suspenders: this view only renders while the current round
   // is Final Jeopardy (see PlayerBoard below), so it unmounts both when
   // the round changes AND when the player leaves the room entirely
@@ -363,6 +396,33 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   useEffect(() => {
     return () => stopStandingsCelebration();
   }, []);
+
+  // Separate, longer-lived duck: BGM should stay OFF for the entire time
+  // Final Standings is on screen, not just for however long the
+  // celebration sound itself plays — mirrors the same fix on the host
+  // side (FinalJeopardyBoard.jsx). playStandingsCelebration's own duck
+  // (above) is released as soon as that sound finishes, which left the
+  // BGM free to fade back in mid-standings whenever the celebration clip
+  // was short (e.g. the default built-in tone, ~1.5s). This hold opens
+  // the moment standingsRevealed goes true and only releases when it
+  // goes false again or this view unmounts.
+  const standingsDuckReleaseRef = useRef(null);
+  useEffect(() => {
+    if (rd.standingsRevealed) {
+      if (!standingsDuckReleaseRef.current) {
+        standingsDuckReleaseRef.current = holdBgmDuck();
+      }
+    } else if (standingsDuckReleaseRef.current) {
+      standingsDuckReleaseRef.current();
+      standingsDuckReleaseRef.current = null;
+    }
+    return () => {
+      if (standingsDuckReleaseRef.current) {
+        standingsDuckReleaseRef.current();
+        standingsDuckReleaseRef.current = null;
+      }
+    };
+  }, [rd.standingsRevealed]);
 
   // Same batch-change and new-history-entry cues as the host's
   // FinalJeopardyBoard — each side plays its own copy locally since
@@ -604,14 +664,22 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
       groups.push({ rank, score: team.score, teams: [team] });
     }
   }
-  const podiumGroups = groups.filter((g) => g.rank <= 3);
-  const restGroups = groups.filter((g) => g.rank > 3);
-  const groupsByRank = {};
-  podiumGroups.forEach((g) => { groupsByRank[g.rank] = g; });
-  // Left-to-right: 2nd, 1st, 3rd — whichever of those rank groups actually
-  // exist (a tie for 1st can mean there's no "2nd" at all).
-  const podiumOrder = [2, 1, 3].map((r) => groupsByRank[r]).filter(Boolean);
-  const podiumHeightByRank = { 1: 190, 2: 148, 3: 116 };
+  // Podium shows the top 3 distinct SCORE TIERS (mirrors the same fix on
+  // the host's FinalJeopardyBoard) — not "whichever groups happen to have
+  // rank <= 3". A 3-way tie for 2nd, under standard competition ranking,
+  // consumes ranks 2/3/4 entirely, so filtering by rank <= 3 used to leave
+  // the podium with only 2 columns even when a clear 3rd tier existed just
+  // below. Taking the first 3 groups by score always fills the podium
+  // (when ≥3 tiers exist); each badge still shows that group's real rank
+  // (can legitimately read "5", same as an Olympic medal table skipping a
+  // rank after a tie) — only left/center/right position and height are
+  // decided by tier order, not by the rank number itself.
+  const podiumGroups = groups.slice(0, 3);
+  const restGroups = groups.slice(3);
+  const podiumHeightByPosition = [190, 148, 116]; // gold, silver, bronze
+  const podiumOrder = [podiumGroups[1], podiumGroups[0], podiumGroups[2]]
+    .map((group) => (group ? { group, position: podiumGroups.indexOf(group) } : null))
+    .filter(Boolean);
 
   function TeamAvatarStack({ team }) {
     const members = (discordMembersByTeam?.[team.id] || []).slice(0, 3);
@@ -651,8 +719,8 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
       <div className="pv-final-body">
         <div className="pv-final-standings-col">
           <div className="pv-podium-row">
-            {podiumOrder.map((group) => (
-              <div key={group.rank} className={`pv-podium-col${group.rank === 1 ? " is-first" : ""}`}>
+            {podiumOrder.map(({ group, position }) => (
+              <div key={group.rank} className={`pv-podium-col${position === 0 ? " is-first" : ""}`}>
                 <div className="pv-podium-team-list">
                   {group.teams.map((team) => {
                     // Same per-player lookup pv-final-stats uses below — for
@@ -690,7 +758,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
                   })}
                 </div>
                 <div className="pv-podium-score">${group.score}</div>
-                <div className="pv-podium-block" style={{ height: podiumHeightByRank[group.rank] }}>
+                <div className="pv-podium-block" style={{ height: podiumHeightByPosition[position] }}>
                   <div className="pv-podium-rank">{group.rank}</div>
                 </div>
               </div>
@@ -1419,6 +1487,35 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       cancelled = true;
     };
   }, [openClue?.mediaUrl, openClue?.mediaType, openClue?.answerMediaUrl, openClue?.answerMediaType]);
+
+  // Duck this player's own BGM while the clue's video/audio media is
+  // actually sounding on this device. Unlike Final Jeopardy media (see
+  // FinalMediaPlayer above), playback here is fully host-driven
+  // (isPlaying={openClue.isPlaying}, disablePlayPause on every player)
+  // rather than a local play state, so the duck just follows that same
+  // flag directly instead of anything self-managed. Covers both normal
+  // clues and Daily Double, since they share this exact rendering path —
+  // this is the one that was missing entirely on the player side before
+  // (the host already had this via ClueModal.jsx's onDuckMusic).
+  const clueDuckReleaseRef = useRef(null);
+  useEffect(() => {
+    const questionAudible = !!mediaUrl && (renderAs === "video" || renderAs === "audio");
+    const answerAudible =
+      !!openClue?.revealed && !!answerMediaUrl && (answerRenderAs === "video" || answerRenderAs === "audio");
+    const audible = !!openClue?.isPlaying && (questionAudible || answerAudible);
+    if (audible && !clueDuckReleaseRef.current) {
+      clueDuckReleaseRef.current = holdBgmDuck();
+    } else if (!audible && clueDuckReleaseRef.current) {
+      clueDuckReleaseRef.current();
+      clueDuckReleaseRef.current = null;
+    }
+    return () => {
+      if (clueDuckReleaseRef.current) {
+        clueDuckReleaseRef.current();
+        clueDuckReleaseRef.current = null;
+      }
+    };
+  }, [openClue?.isPlaying, openClue?.revealed, mediaUrl, renderAs, answerMediaUrl, answerRenderAs]);
 
   const prevScoresRef = useRef({});
   const [pulseMap, setPulseMap] = useState({});

@@ -1,6 +1,15 @@
 import React from "react";
 import { playHoverTick, playClickSfx } from "../lib/boardSfx";
 
+// Small icon for the hover-preview media badge — falls back to a generic
+// 📎 when there's a URL but no sniffable type (e.g. a Google Drive share
+// link; see detectMediaTypeFromUrl in mediaStore.js, which returns "" for
+// exactly that case). Presence of the badge is driven by the *Url field,
+// not the *Type field, so it still shows up even when type is unknown.
+function mediaBadgeIcon(type) {
+  return { image: "🖼", video: "🎬", audio: "🎵" }[type] || "📎";
+}
+
 /* =========================================================================
    CLUE GRID
    The category headers + clue-value cells for the currently active round.
@@ -194,6 +203,14 @@ export default function ClueGrid({
                           <div className="cell-flip-face cell-flip-front">
                             <div className="clue-value">${v}</div>
                             <div className="cell-preview-text">{questionText}</div>
+                            {clue.mediaUrl && (
+                              <span
+                                className="clue-media-badge"
+                                title={`${clue.mediaType || "file"} attached to the question`}
+                              >
+                                {mediaBadgeIcon(clue.mediaType)}
+                              </span>
+                            )}
                             <button
                               type="button"
                               className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
@@ -209,6 +226,14 @@ export default function ClueGrid({
                           <div className="cell-flip-face cell-flip-back">
                             <div className="cell-preview-label">Answer</div>
                             <div className="cell-preview-text">{answerText}</div>
+                            {clue.answerMediaUrl && (
+                              <span
+                                className="clue-media-badge"
+                                title={`${clue.answerMediaType || "file"} attached to the answer`}
+                              >
+                                {mediaBadgeIcon(clue.answerMediaType)}
+                              </span>
+                            )}
                             {/* Same DD toggle, mirrored onto the back face — without
                                 this the badge only existed on the front face and
                                 effectively vanished once the card was flipped

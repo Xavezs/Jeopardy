@@ -62,17 +62,22 @@ const DRIFT_TOLERANCE_S = 1.5;
 // gain never exceeds this. Lower this if the track is just too loud
 // overall regardless of anyone's individual slider setting.
 const MASTER_BGM_GAIN = 0.6;
-// How much quieter the track gets while ducked (Final Standings'
-// celebration sound, etc. — see subscribeSfxDucking below). Keep in sync
-// with BackgroundMusicPlayer.jsx's DUCK_LEVEL so host and players duck
-// by the same proportion.
-const DUCK_LEVEL = 0.15;
+// How much quieter the track gets while ducked (Daily Double, Final
+// Standings celebration, Final Jeopardy media, clue video/audio, etc. —
+// see subscribeSfxDucking below). 0 = fully silent. Keep in sync with
+// BackgroundMusicPlayer.jsx's DUCK_LEVEL so host and players mute by
+// the same amount.
+const DUCK_LEVEL = 0;
 const DUCK_FADE_MS = 700;
 // How long the fade-in takes whenever playback actually starts (player
 // just joined mid-song, or the host just hit play). Without this, the
 // track snaps straight to full gain the instant it starts, which reads
 // as a sudden loud "jolt" even when the steady-state volume is fine.
 const FADE_IN_MS = 900;
+// How long the OLD track fades out before the host switching rounds
+// (perRound mode) swaps bgm.fileRef to the new round's track. Keep in
+// sync with BackgroundMusicPlayer.jsx's identical constant.
+const ROUND_FADE_OUT_MS = 500;
 
 function calcGain(sliderVolume) {
   return sliderVolume * sliderVolume * MASTER_BGM_GAIN;
@@ -125,6 +130,24 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
   const audioRef = useRef(null);
   const fadeRafRef = useRef(null);
   const prevPlayingRef = useRef(false);
+  // Live-value mirrors of `ducking`/`volume` for the async .then()
+  // callbacks below (after audio.play() resolves) — by the time those
+  // fire, the values captured in the effect's closure at the moment it
+  // started could already be stale if ducking flipped in between. Same
+  // fix as BackgroundMusicPlayer.jsx's identical refs.
+  const duckingRef = useRef(ducking);
+  const volumeRef = useRef(volume);
+  useEffect(() => {
+    duckingRef.current = ducking;
+    volumeRef.current = volume;
+  });
+  // Set right before swapping to a new round's track (see the
+  // bgm.fileRef effect below) whenever we just faded the previous track
+  // out — forces the play/pause-mirroring effect further down to treat
+  // this as a fresh fade-in even though `bgm.playing` never actually
+  // went false across the switch (the host kept "playing" continuously
+  // through the round change; only the track itself changed).
+  const forceFadeInRef = useRef(false);
 
   function cancelFade() {
     if (fadeRafRef.current != null) {
@@ -159,21 +182,43 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
 
   useEffect(() => cancelFade, []);
 
-  // Resolve the current track's fileRef into a playable URL.
+  // Resolve the current track's fileRef into a playable URL. If the
+  // previous track was actually playing, fade it out first instead of
+  // letting the <audio> src swap out from under it silently mid-note —
+  // mirrors BackgroundMusicPlayer.jsx's identical fix on the host side,
+  // so a round change (perRound mode) sounds like "duck out, swap,
+  // bloom back in" for players too, not a hard cut.
   useEffect(() => {
     let cancelled = false;
+
     async function resolve() {
       if (!bgm?.fileRef) {
         setMediaUrl("");
         return;
       }
       const url = await getMediaUrl(bgm.fileRef);
-      if (!cancelled) setMediaUrl(url);
+      if (cancelled) return;
+      forceFadeInRef.current = true;
+      setMediaUrl(url);
     }
-    resolve();
+
+    async function run() {
+      const audio = audioRef.current;
+      if (prevPlayingRef.current && audio && !audio.paused) {
+        await new Promise((res) => {
+          fadeVolumeTo(0, ROUND_FADE_OUT_MS);
+          setTimeout(res, ROUND_FADE_OUT_MS);
+        });
+        if (cancelled) return;
+      }
+      await resolve();
+    }
+    run();
+
     return () => {
       cancelled = true;
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgm?.fileRef]);
 
   // Keep this player's own volume local-only — saved per room so it
@@ -224,13 +269,16 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
     }
 
     if (bgm.playing) {
-      const startingPlayback = !prevPlayingRef.current;
+      const startingPlayback = !prevPlayingRef.current || forceFadeInRef.current;
       if (startingPlayback) audio.volume = 0;
       audio
         .play()
         .then(() => {
           setNeedsGesture(false);
-          if (startingPlayback) fadeVolumeTo(calcDuckedGain(volume, ducking));
+          if (startingPlayback) {
+            forceFadeInRef.current = false;
+            fadeVolumeTo(calcDuckedGain(volumeRef.current, duckingRef.current));
+          }
         })
         .catch(() => setNeedsGesture(true));
     } else {
@@ -248,7 +296,7 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
       .play()
       .then(() => {
         setNeedsGesture(false);
-        fadeVolumeTo(calcDuckedGain(volume, ducking));
+        fadeVolumeTo(calcDuckedGain(volumeRef.current, duckingRef.current));
       })
       .catch(() => setNeedsGesture(true));
   }

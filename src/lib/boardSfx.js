@@ -87,27 +87,37 @@ export const playHoverTick = createSfx({
 });
 
 /* ---------------- BGM DUCKING BUS ----------------
-   A tiny pub/sub so a sound effect fired from anywhere (this module has
-   no idea BackgroundMusicPlayer/PlayerBgmWidget even exist) can signal
-   "duck the music for a moment" without needing props threaded all the
-   way down to it. playStandingsCelebration below is called from
-   FinalJeopardyBoard on the host and from wherever the player-side
-   mirrors it — neither is anywhere near JeopardyBoard/PlayerView's BGM
-   state, so a prop genuinely can't reach this call site directly.
+   A tiny pub/sub so anything from anywhere (this module has no idea
+   BackgroundMusicPlayer/PlayerBgmWidget even exist, and callers like
+   PlayerView's clue renderer have no direct line to either widget's
+   state) can signal "duck the music right now" without needing props
+   threaded all the way down. playStandingsCelebration below is called
+   from FinalJeopardyBoard on the host and its player-side mirror;
+   holdBgmDuck below is called from clue media playback on both sides —
+   neither is anywhere near JeopardyBoard/PlayerView's BGM state, so a
+   prop genuinely can't reach these call sites.
 
-   BackgroundMusicPlayer's existing `ducking` prop (driven by
-   useClueEditor's duckMusic for clue audio/video) and PlayerBgmWidget's
-   own ducking both OR this bus's signal in on top of whatever else is
-   already ducking them — either source is enough to duck the music.
+   BackgroundMusicPlayer and PlayerBgmWidget both subscribe to this bus
+   and OR it on top of whatever else is already ducking them — either
+   source is enough to duck the music.
+
+   HOLD-BASED, not a single timer: several independent things can want
+   the music ducked at once (e.g. a Daily Double sting still finishing
+   its fade-out just as the host presses play on the clue's video), and
+   a single shared timeout can't represent that — whichever finishes
+   first would incorrectly un-duck for the other. Each caller gets its
+   own token in `activeDuckHolds`; the bus stays ducked as long as
+   *any* hold is open, and only un-ducks once the set is empty.
    ========================================================================= */
 const duckingListeners = new Set();
-let duckingTimeoutId = null;
+const activeDuckHolds = new Set();
 let duckingActive = false;
 
-function setDucking(active) {
-  if (active === duckingActive) return;
-  duckingActive = active;
-  for (const listener of duckingListeners) listener(active);
+function recomputeDucking() {
+  const shouldDuck = activeDuckHolds.size > 0;
+  if (shouldDuck === duckingActive) return;
+  duckingActive = shouldDuck;
+  for (const listener of duckingListeners) listener(duckingActive);
 }
 
 // BackgroundMusicPlayer/PlayerBgmWidget call this once (in a useEffect)
@@ -118,25 +128,44 @@ export function subscribeSfxDucking(listener) {
   return () => duckingListeners.delete(listener);
 }
 
-// Ducks the BGM for `ms`, then un-ducks — unless another call comes in
-// first, which just extends the window (clearTimeout below) rather than
-// stacking two independent un-duck timers that could turn it back off
-// too early relative to each other.
-function duckBgmFor(ms) {
-  clearTimeout(duckingTimeoutId);
-  setDucking(true);
-  duckingTimeoutId = setTimeout(() => setDucking(false), ms);
+// Opens an indefinite ducking hold — the bus stays ducked until the
+// returned release() is called. Use this for anything whose duration
+// isn't known up front — a video/audio clue actually playing (host or
+// player), or a fixed-asset SFX like Daily Double/Final Standings whose
+// real file length isn't known here either (see playDailyDoubleSfx and
+// playStandingsCelebration below, which each pair this with their own
+// generous safety-net timer in case the underlying asset's 'ended'
+// event never fires). release() is idempotent — safe to call more than
+// once, or never if the caller unmounts having already released.
+export function holdBgmDuck() {
+  const token = {};
+  activeDuckHolds.add(token);
+  recomputeDucking();
+  let released = false;
+  return () => {
+    if (released) return;
+    released = true;
+    activeDuckHolds.delete(token);
+    recomputeDucking();
+  };
 }
 
 // The built-in tone (see playSynthFinalStandingsTone above) is a fixed,
-// known-length chime (~1.5s) or, if final-standings.mp3 exists, an
-// unknown-length file played through createSfx's own internal <audio>
-// (see ./sfx.js) that this module doesn't have a handle to — so unlike
-// the custom-file path in playStandingsCelebration below, there's no
-// `ended` event available to duck against precisely. A fixed window
-// covers the synth tone with room to spare; if you drop in a longer
-// final-standings.mp3, bump this to match.
-const BUILTIN_STANDINGS_DUCK_MS = 3500;
+// known-length chime (~1.5s). final-standings.mp3, if one's actually
+// been dropped in as the built-in asset, is unknown-length — this used
+// to duck for a fixed BUILTIN_STANDINGS_DUCK_MS window as its *primary*
+// release mechanism, with a comment saying to manually bump that value
+// to match if a longer mp3 was ever used. Nobody did, so any
+// final-standings.mp3 longer than 3.5s ducked the BGM for its own fixed
+// window and then un-ducked while the celebration sound was still very
+// audibly playing — sounding like the BGM "popped back in" mid-
+// celebration. Now that createSfx (see ./sfx.js) supports an `onEnded`
+// callback, playFinalStandingsSfx's own definition below releases the
+// duck at the real end of whatever asset actually plays; this constant
+// is now just a generous safety net for the rare case that never fires
+// (e.g. the synth fallback tone plays instead, which has no 'ended'
+// event to hook).
+const BUILTIN_STANDINGS_SAFETY_MS = 15000;
 
 /* ---------------- CLICK ---------------- */
 const clickSfxUrl = new URL("../assets/click.mp3", import.meta.url).href;
@@ -416,24 +445,45 @@ function stopSynthDailyDoubleTone() {
 }
 
 // Not exported directly — see playDailyDoubleSfx below, which wraps this
-// with the same BGM-ducking treatment Final Standings gets.
 const playDailyDoubleSfxRaw = createSfx({
   url: dailyDoubleSfxUrl,
   fallbackTone: playSynthDailyDoubleTone,
   volume: 0.18,
   minGapMs: 200,
+  // Same fix as playFinalStandingsSfx's onEnded below: releases the duck
+  // hold at the real end of whatever asset actually plays (the file, if
+  // it loads/plays fine) instead of guessing its length.
+  onEnded: () => {
+    if (releaseDailyDoubleDuck) {
+      releaseDailyDoubleDuck();
+      releaseDailyDoubleDuck = null;
+    }
+  },
 });
 
-// The synth tone runs ~1.2s (0.52s sweep + landing chord tail out to
-// ~1.16s); if daily-double.mp3 exists, createSfx plays that instead and
-// this module has no handle on its real length (same limitation as the
-// built-in Final Standings tone — see BUILTIN_STANDINGS_DUCK_MS above).
-// 2s gives either case room to breathe; bump this if you drop in a
-// longer daily-double.mp3.
-const DAILY_DOUBLE_DUCK_MS = 2000;
+// No longer the primary release mechanism (see onEnded above and the
+// same fix's explanation on BUILTIN_STANDINGS_SAFETY_MS) — just a
+// generous safety net for the rare case 'ended' never fires, e.g. the
+// synth fallback tone plays instead (no 'ended' event to hook) or
+// daily-double.mp3 fails partway through without erroring cleanly.
+const DAILY_DOUBLE_DUCK_SAFETY_MS = 15000;
+
+// release() for whichever duck hold the most recent playDailyDoubleSfx()
+// call opened — tracked so stopDailyDoubleSfx() can release exactly that
+// hold (and only that hold; see the hold-based bus above) rather than
+// reaching into some shared timer that no longer represents this sound.
+let releaseDailyDoubleDuck = null;
 
 export function playDailyDoubleSfx() {
-  duckBgmFor(DAILY_DOUBLE_DUCK_MS);
+  if (releaseDailyDoubleDuck) releaseDailyDoubleDuck();
+  releaseDailyDoubleDuck = holdBgmDuck();
+  const thisDuckRelease = releaseDailyDoubleDuck;
+  setTimeout(() => {
+    if (releaseDailyDoubleDuck === thisDuckRelease && releaseDailyDoubleDuck) {
+      releaseDailyDoubleDuck();
+      releaseDailyDoubleDuck = null;
+    }
+  }, DAILY_DOUBLE_DUCK_SAFETY_MS);
   playDailyDoubleSfxRaw();
 }
 
@@ -441,13 +491,15 @@ export function playDailyDoubleSfx() {
 // sounding — the real daily-double.mp3 clone (via createSfx's own
 // play.stop(), see sfx.js) or the synthesized fallback tone's
 // oscillators — and un-ducks the BGM right away instead of waiting out
-// DAILY_DOUBLE_DUCK_MS. Call this whenever the Daily Double wager screen
-// goes away before the sting has finished on its own: clue closed, host
-// moved on, player left the room, etc. Safe to call even if nothing's
-// currently playing.
+// DAILY_DOUBLE_DUCK_SAFETY_MS. Call this whenever the Daily Double wager
+// screen goes away before the sting has finished on its own: clue
+// closed, host moved on, player left the room, etc. Safe to call even
+// if nothing's currently playing.
 export function stopDailyDoubleSfx() {
-  clearTimeout(duckingTimeoutId);
-  setDucking(false);
+  if (releaseDailyDoubleDuck) {
+    releaseDailyDoubleDuck();
+    releaseDailyDoubleDuck = null;
+  }
   playDailyDoubleSfxRaw.stop();
   stopSynthDailyDoubleTone();
 }
@@ -509,6 +561,12 @@ let finalStandingsVolume = 1;
 // (guarded by the audio-identity check) if a newer one starts first.
 let currentCelebrationAudio = null;
 let currentCelebrationBaseVolume = 0;
+
+// Preloaded <audio> element for the custom (uploaded/URL/Google Drive)
+// celebration sound — see preloadStandingsCelebration below. Keyed by the
+// raw ref (rd.standingsSfxUrl) so a re-preload can cheaply no-op if it's
+// already loading/loaded the same one.
+let preloadedCelebration = null; // { ref, audio }
 
 function applyFinalStandingsVolume() {
   playFinalStandingsSfx.setVolume(FINAL_STANDINGS_MP3_BASE_VOLUME * finalStandingsVolume);
@@ -606,6 +664,22 @@ export const playFinalStandingsSfx = createSfx({
   fallbackTone: playSynthFinalStandingsTone,
   volume: FINAL_STANDINGS_MP3_BASE_VOLUME,
   minGapMs: 500,
+  // The duck for this path is opened as an INDEFINITE hold in
+  // playStandingsCelebration below (not a fixed-duration timer)
+  // specifically so it can be released HERE, the instant the actual
+  // final-standings.mp3 asset finishes playing — rather than guessing
+  // how long it runs and un-ducking on a timer that might fire before
+  // (or long after) the clip is actually done. This only fires for the
+  // real-file path; the synth fallback tone has no 'ended' event to
+  // hook, so playStandingsCelebration also keeps a generous safety-net
+  // timer for that (rare — only happens if the mp3 itself fails to
+  // load/play) case.
+  onEnded: () => {
+    if (releaseStandingsDuck) {
+      releaseStandingsDuck();
+      releaseStandingsDuck = null;
+    }
+  },
 });
 
 // Plays the host's custom celebration sound if one's set on the round
@@ -614,12 +688,83 @@ export const playFinalStandingsSfx = createSfx({
 // falls back to the built-in playFinalStandingsSfx above. Kept as a plain
 // <audio> element rather than routed through the WebAudio SFX plumbing
 // above, since it's an arbitrary user file rather than a short fixed clip.
+// release() for whichever duck hold the most recent playStandingsCelebration()
+// call opened (either the indefinite custom-file hold or the timed
+// built-in-tone hold) — tracked so stopStandingsCelebration() can
+// release exactly that hold. See releaseDailyDoubleDuck above for the
+// same pattern.
+let releaseStandingsDuck = null;
+
+// Kicks off loading the custom celebration sound (rd.standingsSfxUrl)
+// well BEFORE Final Standings actually appears, so playStandingsCelebration
+// can start playback instantly instead of only starting to fetch the file
+// at that exact moment. getMediaUrl(customRef) itself resolves fast even
+// for a Google Drive ref (it just builds a same-origin proxy URL string,
+// no network call) — the real delay players were hearing is the <audio>
+// element's OWN first request to that proxy URL, which round-trips to
+// Drive on a cold fetch. Calling this early gives that round-trip time to
+// finish in the background while the round is still being played out,
+// instead of happening live at reveal time.
+//
+// Safe to call repeatedly (e.g. every time rd.standingsSfxUrl is read) —
+// no-ops if we're already holding a preload for that exact ref. Safe to
+// call with "" / undefined too (just clears any stale preload).
+export async function preloadStandingsCelebration(customRef) {
+  if (!customRef) {
+    preloadedCelebration = null;
+    return;
+  }
+  if (preloadedCelebration && preloadedCelebration.ref === customRef) return;
+  try {
+    const url = await getMediaUrl(customRef);
+    if (!url) {
+      preloadedCelebration = null;
+      return;
+    }
+    const audio = new Audio(url);
+    audio.preload = "auto";
+    audio.load();
+    preloadedCelebration = { ref: customRef, audio };
+  } catch (e) {
+    preloadedCelebration = null;
+    /* best effort — playStandingsCelebration below still falls back to
+       resolving + loading live if this didn't pan out */
+  }
+}
+
 export async function playStandingsCelebration(customRef) {
+  // Open the duck hold FIRST — synchronously, before any await — so
+  // there's no gap between whatever was ducking the BGM a moment ago
+  // (typically Final Jeopardy media finishing, see FinalMediaPlayer's
+  // duck effect) releasing and this sound's own duck kicking in.
+  // getMediaUrl(customRef) below can take a real, sometimes-not-tiny
+  // amount of time (resolving a Google Drive link, reading out of
+  // MediaStore, etc.) — with the hold opened only *after* that resolved
+  // (as this used to do), the BGM had that whole window to fade all the
+  // way back up to full volume, then got the celebration sound started
+  // right on top of it. Sounded like the BGM "popped back in" together
+  // with the celebration instead of staying ducked through it.
+  if (releaseStandingsDuck) releaseStandingsDuck();
+  releaseStandingsDuck = holdBgmDuck();
+
   if (customRef) {
     try {
-      const url = await getMediaUrl(customRef);
-      if (url) {
-        const audio = new Audio(url);
+      // Reuse the preloaded element (see preloadStandingsCelebration
+      // above) when it's for this exact ref — its first request to the
+      // proxy URL has typically already completed in the background by
+      // now, so .play() below starts near-instantly instead of only
+      // starting to fetch the file at this exact moment. Falls back to
+      // resolving + loading live (the old behavior) if there's no
+      // matching preload — still correct, just not instant.
+      let audio;
+      if (preloadedCelebration && preloadedCelebration.ref === customRef) {
+        audio = preloadedCelebration.audio;
+        audio.currentTime = 0;
+      } else {
+        const url = await getMediaUrl(customRef);
+        audio = url ? new Audio(url) : null;
+      }
+      if (audio) {
         audio.volume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME * finalStandingsVolume;
         currentCelebrationAudio = audio;
         currentCelebrationBaseVolume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME;
@@ -629,29 +774,52 @@ export async function playStandingsCelebration(customRef) {
         // 'error' events are available. The safety-net timeout below
         // guards against a source that never fires either (e.g. a
         // stream that stalls) leaving the BGM permanently ducked.
-        clearTimeout(duckingTimeoutId);
-        setDucking(true);
         const stopTrackingVolume = () => {
           // Guard against a newer celebration having already taken over
           // this slot (e.g. host retriggers before this one finished).
           if (currentCelebrationAudio === audio) currentCelebrationAudio = null;
         };
-        const unduck = () => setDucking(false);
+        const unduck = () => {
+          if (releaseStandingsDuck) {
+            releaseStandingsDuck();
+            releaseStandingsDuck = null;
+          }
+        };
         audio.addEventListener("ended", unduck, { once: true });
         audio.addEventListener("ended", stopTrackingVolume, { once: true });
         audio.addEventListener("error", unduck, { once: true });
         audio.addEventListener("error", stopTrackingVolume, { once: true });
-        duckingTimeoutId = setTimeout(unduck, 15000);
+        setTimeout(unduck, 15000);
         await audio.play();
         return;
       }
     } catch (e) {
-      setDucking(false);
       currentCelebrationAudio = null;
-      /* couldn't load/play the custom sound — fall through to the built-in */
+      /* couldn't load/play the custom sound — fall through to the
+         built-in below, which reuses (rather than re-opens) the hold
+         already open from the top of this function */
     }
   }
-  duckBgmFor(BUILTIN_STANDINGS_DUCK_MS);
+  // Built-in path: the indefinite hold opened at the top of this
+  // function (before the customRef branch above) is still open — reuse
+  // it rather than opening a second one. playFinalStandingsSfx's
+  // onEnded (see its definition above) releases this hold the instant
+  // the real final-standings.mp3 asset actually finishes — previously
+  // this used a fixed BUILTIN_STANDINGS_DUCK_MS timer as the *primary*
+  // release mechanism, which cut the duck short (BGM audibly creeping
+  // back in mid-celebration) if the actual asset ran any longer than
+  // that guessed duration. The timer below is now just a safety net for
+  // the rare case 'ended' never fires at all (e.g. the synth fallback
+  // tone plays instead, which has no 'ended' event to hook) — identity-
+  // checked against `thisDuckRelease` so it can't release a *different*,
+  // newer hold if the celebration gets retriggered before this fires.
+  const thisDuckRelease = releaseStandingsDuck;
+  setTimeout(() => {
+    if (releaseStandingsDuck === thisDuckRelease && releaseStandingsDuck) {
+      releaseStandingsDuck();
+      releaseStandingsDuck = null;
+    }
+  }, BUILTIN_STANDINGS_SAFETY_MS);
   playFinalStandingsSfx();
 }
 
@@ -666,8 +834,10 @@ export async function playStandingsCelebration(customRef) {
 // however many seconds were left on a sound nobody will hear the rest
 // of would just be a second, quieter bug on top of the first.
 export function stopStandingsCelebration() {
-  clearTimeout(duckingTimeoutId);
-  setDucking(false);
+  if (releaseStandingsDuck) {
+    releaseStandingsDuck();
+    releaseStandingsDuck = null;
+  }
   if (currentCelebrationAudio) {
     try {
       currentCelebrationAudio.pause();
