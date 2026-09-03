@@ -621,8 +621,25 @@ io.on('connection', (socket) => {
     if (!roomCode) return;
 
     const room = gameRooms.get(roomCode) || {};
+    const isFirstBoardForRoom = !room.board;
     room.board = { data, updatedAt: updatedAt || Date.now() };
     gameRooms.set(roomCode, room);
+
+    // First board this room has ever received (host just started hosting
+    // this session) — warm every clue's media ONCE here, server-side,
+    // instead of relying only on the per-clue prewarm in selectClue/
+    // activeClueUpdate above. That per-clue prewarm still covers "reveal
+    // this specific clue right now"; this covers "the whole game is about
+    // to be played" up front, so by the time any clue gets picked its
+    // media is very likely already sitting in the server's own cache —
+    // see prewarmAllBoardMedia's own comment in media.js for why this
+    // doesn't turn into N-players-worth of extra load. Deliberately NOT
+    // re-run on every subsequent boardUpdate (which fires on every
+    // autosave tick while the host is still editing) — just once per
+    // room's lifetime.
+    if (isFirstBoardForRoom) {
+      mediaRouter.prewarmAllBoardMedia(data);
+    }
     
     // socket.to(...) ensures the host doesn't receive its own echo back
     socket.to(roomCode).emit('boardUpdate', room.board);

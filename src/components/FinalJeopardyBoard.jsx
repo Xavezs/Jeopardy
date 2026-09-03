@@ -17,6 +17,19 @@ import {
 import { discordSdk } from "../discordSdk";
 import { playStandingsCelebration, stopStandingsCelebration, preloadStandingsCelebration, playCatRevealSfx, playCorrectSfx, playIncorrectSfx, holdBgmDuck } from "../lib/boardSfx";
 
+// The six Final Jeopardy phases in order — drives the progress stepper at
+// the top of the board (and could drive a matching one in PlayerView.jsx).
+// Kept as plain data here rather than duplicated inline JSX so the label
+// wording only needs to change in one place.
+const FINAL_PHASES = [
+  { key: "category", label: "Category" },
+  { key: "wager", label: "Wager" },
+  { key: "clue", label: "Clue" },
+  { key: "answer", label: "Answer" },
+  { key: "reveal", label: "Reveal" },
+  { key: "done", label: "Done" },
+];
+
 // Same escape hatch ClueModal uses — YouTube can't be embedded inside
 // Discord's Activity CSP, so open it in the user's real browser instead.
 async function openYoutubeExternally(url) {
@@ -135,6 +148,39 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
 }
 
 /* =========================================================================
+   UndoLastJudgmentButton
+   Reverses the single most recent Correct/Incorrect (or "Mark All ...")
+   judgment — used both mid-reveal (between batches) and on the "Final
+   Jeopardy Is Over" beat right before standings, so a misjudged team is
+   never more than one confirm dialog away from being fixed, wherever the
+   host happens to notice it. Shared here rather than duplicated in both
+   spots since the logic (and the confirm copy) needs to stay identical.
+   ========================================================================= */
+function UndoLastJudgmentButton({ rd, teams, final, adjustTeamScore, appConfirm }) {
+  const lastEntry = rd.judgeHistory[rd.judgeHistory.length - 1];
+  const lastTeam = teams.find((t) => t.id === lastEntry.teamId);
+  const sign = lastEntry.delta >= 0 ? "+" : "";
+  return (
+    <button
+      type="button"
+      className="final-undo-btn"
+      onClick={async () => {
+        const label = lastTeam?.name || "that team";
+        if (
+          await appConfirm(
+            `Undo judging for "${label}"? This reverses ${sign}${lastEntry.delta} points and puts them back up for re-judging.`
+          )
+        ) {
+          final.undoLastJudge(teams, adjustTeamScore);
+        }
+      }}
+    >
+      ↩ Undo Last Judgment{lastTeam ? ` (${lastTeam.name})` : ""}
+    </button>
+  );
+}
+
+/* =========================================================================
    FinalRevealPicker
    Multi-select version of the old "pick who's next" list: every remaining
    (not-yet-judged) team gets a checkbox-style row the host can tap to
@@ -231,6 +277,38 @@ function FinalRevealPicker({ teams, wagers, answers, onConfirm }) {
    ========================================================================= */
 export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustTeamScore, appConfirm, appAlert, resolveDiscordMembersForTeam, players, playerStats }) {
   const [localAnswerDraft, setLocalAnswerDraft] = useState({});
+
+  // Per-team point-award override for judging — a small number input
+  // right next to Correct/Incorrect on each tile, always visible (no
+  // toggle click needed to reach it). Empty = judge with the team's full
+  // wager, same as before this feature existed. Typing a number in it
+  // overrides the amount for that one team's judgment (partial credit,
+  // correcting a wager typo, etc). Purely a host-side judging
+  // convenience, not synced to players and not part of rd, since it only
+  // matters in the instant before a Correct/Incorrect click and has no
+  // meaning once a team's already been judged. Keyed by teamId; cleared
+  // the moment that team is actually judged (see the cleanup in the judge
+  // button handlers below) so a stale value from an earlier batch never
+  // silently carries over to a team revealed later.
+  const [judgeCustomAmount, setJudgeCustomAmount] = useState({}); // teamId -> string (raw input)
+
+  // Resolves the actual point amount a Correct/Incorrect click should
+  // apply for one team. Blank input = the team's full wager. A non-blank,
+  // valid number overrides it.
+  function resolveJudgeAmount(teamId, wager) {
+    const raw = judgeCustomAmount[teamId];
+    if (raw === undefined || raw === "") return wager;
+    const n = Number(raw);
+    return Number.isFinite(n) ? Math.max(0, n) : wager;
+  }
+
+  function clearJudgeAmount(teamId) {
+    setJudgeCustomAmount((p) => {
+      const next = { ...p };
+      delete next[teamId];
+      return next;
+    });
+  }
 
   // Teams at or above $0 wager up to their score, as usual. Teams already
   // in the negative can wager up to the size of their debt — correct
@@ -446,6 +524,31 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
         )}
       </div>
 
+      {/* Progress stepper — lets the host tell at a glance which phase
+          they're in without reading the panel title, and gives players
+          the same "where are we" context while they wait. Hidden once
+          the game reaches "done": at that point the Final Standings
+          board (or the correct-answer beat right before it) takes over
+          as the thing on screen, and the stepper would just be dead
+          weight above it. */}
+      {!editMode && rd.phase !== "done" && (
+        <div className="final-progress-stepper">
+          {FINAL_PHASES.map((p, i) => {
+            const currentIndex = FINAL_PHASES.findIndex((fp) => fp.key === rd.phase);
+            const state = i < currentIndex ? "done" : i === currentIndex ? "active" : "upcoming";
+            return (
+              <React.Fragment key={p.key}>
+                <div className={`final-progress-step is-${state}`}>
+                  <span className="final-progress-step-dot">{state === "done" ? "✓" : i + 1}</span>
+                  <span className="final-progress-step-label">{p.label}</span>
+                </div>
+                {i < FINAL_PHASES.length - 1 && <div className={`final-progress-connector${state === "done" ? " is-done" : ""}`} />}
+              </React.Fragment>
+            );
+          })}
+        </div>
+      )}
+
       {editMode && (
         <div className="final-edit-clue">
           <div className="final-edit-row">
@@ -500,49 +603,65 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
         </div>
       )}
 
-      {!editMode && rd.phase === "wager" && (
-        <div className="final-phase-panel">
-          <h3 className="final-phase-title">Wagers</h3>
-          <p className="final-phase-hint">Every team bets 0 up to their current score.</p>
-          {teams.map((team) => (
-            <div className="final-wager-row" key={team.id}>
-              <span className="final-team-name">{team.name}</span>
-              <span className="final-team-score">${team.score}</span>
-              <input
-                type="number"
-                min={0}
-                max={maxWager(team)}
-                value={rd.wagers[team.id] ?? ""}
-                placeholder="wager"
-                onChange={(e) => {
-                  const val = Math.max(0, Math.min(maxWager(team), parseInt(e.target.value, 10) || 0));
-                  final.setWager(team.id, val);
-                }}
-              />
-            </div>
-          ))}
-          <button
-            className="final-advance-btn"
-            disabled={teams.some((t) => rd.wagers[t.id] === undefined)}
-            onClick={final.startClue}
-          >
-            Lock Wagers & Show Clue
-          </button>
-        </div>
-      )}
+      {!editMode && rd.phase === "wager" && (() => {
+        const notWagered = teams.filter((t) => rd.wagers[t.id] === undefined);
+        return (
+          <div className="final-phase-panel">
+            <h3 className="final-phase-title">Wagers</h3>
+            <p className="final-phase-hint">Every team bets 0 up to their current score.</p>
+            <p className="final-phase-hint">
+              {teams.length - notWagered.length} / {teams.length} teams wagered
+            </p>
+            {teams.map((team) => (
+              <div className="final-wager-row" key={team.id}>
+                <span className="final-team-name">{team.name}</span>
+                <span className="final-team-score">${team.score}</span>
+                <input
+                  type="number"
+                  min={0}
+                  max={maxWager(team)}
+                  value={rd.wagers[team.id] ?? ""}
+                  placeholder="wager"
+                  onChange={(e) => {
+                    const val = Math.max(0, Math.min(maxWager(team), parseInt(e.target.value, 10) || 0));
+                    final.setWager(team.id, val);
+                  }}
+                />
+              </div>
+            ))}
+            {notWagered.length > 0 && (
+              <p className="final-waiting-on">Waiting on: {notWagered.map((t) => t.name).join(", ")}</p>
+            )}
+            <button
+              className="final-advance-btn"
+              disabled={notWagered.length > 0}
+              onClick={final.startClue}
+            >
+              Lock Wagers & Show Clue
+            </button>
+          </div>
+        );
+      })()}
 
-      {!editMode && rd.phase === "clue" && (
-        <div className="final-phase-panel final-clue-reveal">
-          <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
-          <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
-          <p className="final-phase-hint">
-            {teams.filter((t) => rd.answers[t.id] != null).length} / {teams.length} teams locked in
-          </p>
-          <button className="final-advance-btn" onClick={final.startAnswerPhase}>
-            Time's Up — Collect Answers
-          </button>
-        </div>
-      )}
+      {!editMode && rd.phase === "clue" && (() => {
+        const notAnswered = teams.filter((t) => rd.answers[t.id] == null);
+        const answeredCount = teams.length - notAnswered.length;
+        return (
+          <div className="final-phase-panel final-clue-reveal">
+            <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
+            <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
+            <p className="final-phase-hint">
+              {answeredCount} / {teams.length} teams locked in
+            </p>
+            {notAnswered.length > 0 && (
+              <p className="final-waiting-on">Waiting on: {notAnswered.map((t) => t.name).join(", ")}</p>
+            )}
+            <button className="final-advance-btn" onClick={final.startAnswerPhase}>
+              Time's Up — Collect Answers
+            </button>
+          </div>
+        );
+      })()}
 
       {!editMode && rd.phase === "answer" && (
         <div className="final-phase-panel">
@@ -550,10 +669,11 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
           {teams.map((team) => (
             <div className="final-answer-row" key={team.id}>
               <span className="final-team-name">{team.name}</span>
-              <input
-                type="text"
+              <textarea
+                rows={1}
                 placeholder="What they answered…"
                 value={localAnswerDraft[team.id] ?? rd.answers[team.id] ?? ""}
+                title={localAnswerDraft[team.id] ?? rd.answers[team.id] ?? ""}
                 onChange={(e) => setLocalAnswerDraft((p) => ({ ...p, [team.id]: e.target.value }))}
                 onBlur={(e) => final.setAnswer(team.id, e.target.value)}
               />
@@ -615,11 +735,40 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                         )}
 
                         {stage === "answer" && (
+                          <div className="final-judge-preset-row">
+                            <label className="final-judge-custom-label" htmlFor={`judge-amt-${team.id}`}>
+                              Points
+                            </label>
+                            <input
+                              id={`judge-amt-${team.id}`}
+                              type="number"
+                              className="final-judge-custom-input"
+                              placeholder={`${rd.wagers[team.id] || 0}`}
+                              value={judgeCustomAmount[team.id] ?? ""}
+                              onChange={(e) => setJudgeCustomAmount((p) => ({ ...p, [team.id]: e.target.value }))}
+                              onWheel={(e) => e.target.blur()}
+                            />
+                          </div>
+                        )}
+
+                        {stage === "answer" && (
                           <div className="final-judge-buttons final-judge-buttons-tile">
-                            <button className="final-correct-btn" onClick={() => final.judgeTeam(team, true, adjustTeamScore)}>
+                            <button
+                              className="final-correct-btn"
+                              onClick={() => {
+                                final.judgeTeam(team, true, adjustTeamScore, resolveJudgeAmount(team.id, rd.wagers[team.id] || 0));
+                                clearJudgeAmount(team.id);
+                              }}
+                            >
                               Correct
                             </button>
-                            <button className="final-incorrect-btn" onClick={() => final.judgeTeam(team, false, adjustTeamScore)}>
+                            <button
+                              className="final-incorrect-btn"
+                              onClick={() => {
+                                final.judgeTeam(team, false, adjustTeamScore, resolveJudgeAmount(team.id, rd.wagers[team.id] || 0));
+                                clearJudgeAmount(team.id);
+                              }}
+                            >
                               Incorrect
                             </button>
                           </div>
@@ -643,10 +792,22 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
 
                 {stage === "answer" && isBatch && (
                   <div className="final-judge-buttons final-judge-buttons-batch">
-                    <button className="final-correct-btn" onClick={() => final.judgeBatch(teams, true, adjustTeamScore)}>
+                    <button
+                      className="final-correct-btn"
+                      onClick={() => {
+                        final.judgeBatch(teams, true, adjustTeamScore, (id, wager) => resolveJudgeAmount(id, wager));
+                        activeTeams.forEach((t) => clearJudgeAmount(t.id));
+                      }}
+                    >
                       Mark All Correct
                     </button>
-                    <button className="final-incorrect-btn" onClick={() => final.judgeBatch(teams, false, adjustTeamScore)}>
+                    <button
+                      className="final-incorrect-btn"
+                      onClick={() => {
+                        final.judgeBatch(teams, false, adjustTeamScore, (id, wager) => resolveJudgeAmount(id, wager));
+                        activeTeams.forEach((t) => clearJudgeAmount(t.id));
+                      }}
+                    >
                       Mark All Incorrect
                     </button>
                   </div>
@@ -661,6 +822,15 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                   onConfirm={(ids) => final.startRevealBatch(ids)}
                 />
               )
+            )}
+            {rd.judgeHistory?.length > 0 && (
+              <UndoLastJudgmentButton
+                rd={rd}
+                teams={teams}
+                final={final}
+                adjustTeamScore={adjustTeamScore}
+                appConfirm={appConfirm}
+              />
             )}
             {revealedTeams.length > 0 && (
               <div className="final-reveal-history">
@@ -698,6 +868,15 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
             <p className="final-correct-answer-text">{rd.clue.answer || "(no answer set)"}</p>
             <FinalMediaPlayer mediaRef={rd.clue.answerMediaUrl} mediaType={rd.clue.answerMediaType} className="final-answer-media" />
           </div>
+          {rd.judgeHistory?.length > 0 && (
+            <UndoLastJudgmentButton
+              rd={rd}
+              teams={teams}
+              final={final}
+              adjustTeamScore={adjustTeamScore}
+              appConfirm={appConfirm}
+            />
+          )}
           <button className="final-advance-btn" onClick={final.revealStandings}>
             Show Final Standings
           </button>
@@ -753,13 +932,20 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                 <div className="final-podium-row">
                   {podiumOrder.map(({ group, position }) => (
                     <div key={group.rank} className={`final-podium-col${position === 0 ? " is-first" : ""}`}>
-                      <div className="final-podium-team-list">
+                      <div
+                        className={
+                          "final-podium-team-list" +
+                          (group.teams.length >= 7 ? " is-dense-lg" : group.teams.length >= 4 ? " is-dense" : "")
+                        }
+                      >
                         {group.teams.map((team) => {
                           const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
-                          // Same per-player correct/wrong lookup the standalone
-                          // "Player Stats" panel below uses — for podium teams
-                          // (rank <= 3) we render it inline next to the name
-                          // instead, so it doesn't get shown twice.
+                          // Per-player correct/wrong (+ accuracy) lookup —
+                          // shown inline under the team name here instead
+                          // of in a separate standalone panel, so a
+                          // team's stats always sit right next to that
+                          // team regardless of whether they landed on the
+                          // podium or in the list below.
                           const teamPlayers =
                             players && playerStats
                               ? players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId])
@@ -788,6 +974,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                                   <div className="final-podium-player-stats">
                                     {teamPlayers.map((p) => {
                                       const s = playerStats[p.discordUserId];
+                                      const total = (s.correct || 0) + (s.wrong || 0);
                                       return (
                                         <span
                                           className="final-podium-stat-pill"
@@ -796,6 +983,11 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                                         >
                                           <span className="final-podium-stat-correct">✓{s.correct || 0}</span>
                                           <span className="final-podium-stat-wrong">✗{s.wrong || 0}</span>
+                                          {total > 0 && (
+                                            <span className="final-podium-stat-accuracy">
+                                              {Math.round((s.correct / total) * 100)}%
+                                            </span>
+                                          )}
                                         </span>
                                       );
                                     })}
@@ -817,46 +1009,48 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                 {restGroups.length > 0 && (
                   <div className="final-rest-list">
                     {restGroups.map((group) =>
-                      group.teams.map((team) => (
-                        <div className="final-standing-row" key={team.id}>
-                          <span className="final-standing-rank">{group.rank}</span>
-                          <span className="final-team-name">{team.name}</span>
-                          <span className="final-team-score">${team.score}</span>
-                        </div>
-                      ))
+                      group.teams.map((team) => {
+                        const teamPlayers =
+                          players && playerStats
+                            ? players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId])
+                            : [];
+                        return (
+                          <div className="final-standing-row" key={team.id}>
+                            <div className="final-standing-row-main">
+                              <span className="final-standing-rank">{group.rank}</span>
+                              <span className="final-team-name">{team.name}</span>
+                              <span className="final-team-score">${team.score}</span>
+                            </div>
+                            {teamPlayers.length > 0 && (
+                              <div className="final-podium-player-stats final-standing-player-stats">
+                                {teamPlayers.map((p) => {
+                                  const s = playerStats[p.discordUserId];
+                                  const total = (s.correct || 0) + (s.wrong || 0);
+                                  return (
+                                    <span
+                                      className="final-podium-stat-pill"
+                                      key={p.discordUserId}
+                                      title={p.discordUsername || "Player"}
+                                    >
+                                      <span className="final-podium-stat-correct">✓{s.correct || 0}</span>
+                                      <span className="final-podium-stat-wrong">✗{s.wrong || 0}</span>
+                                      {total > 0 && (
+                                        <span className="final-podium-stat-accuracy">
+                                          {Math.round((s.correct / total) * 100)}%
+                                        </span>
+                                      )}
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })
                     )}
                   </div>
                 )}
               </div>
-
-              {players && playerStats && Object.keys(playerStats).length > 0 && restGroups.length > 0 && (
-                <div className="final-player-stats">
-                  <div className="final-player-stats-title">Player Stats</div>
-                  {restGroups.flatMap((g) => g.teams).map((team) => {
-                    const teamPlayers = players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId]);
-                    if (teamPlayers.length === 0) return null;
-                    return (
-                      <div className="final-player-stats-team" key={team.id}>
-                        <div className="final-player-stats-team-name">{team.name}</div>
-                        {teamPlayers.map((p) => {
-                          const s = playerStats[p.discordUserId];
-                          const total = (s.correct || 0) + (s.wrong || 0);
-                          return (
-                            <div className="final-player-stats-row" key={p.discordUserId}>
-                              <span className="final-player-stats-name">{p.discordUsername || "Player"}</span>
-                              <span className="final-player-stats-correct">✓ {s.correct || 0}</span>
-                              <span className="final-player-stats-wrong">✗ {s.wrong || 0}</span>
-                              {total > 0 && (
-                                <span className="final-player-stats-accuracy">{Math.round((s.correct / total) * 100)}%</span>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
             </div>
           </div>
         );

@@ -4,7 +4,7 @@ const { io } = require('socket.io-client');
 const socket = io('http://localhost:4001');
 
 socket.on('connect', () => {
-  console.log('✅ Connected to bot-server.js');
+  console.log('Connected to bot-server.js');
 });
 
 socket.on('voiceState', (members) => {
@@ -19,5 +19,5 @@ socket.on('voiceState', (members) => {
 });
 
 socket.on('connect_error', (err) => {
-  console.log('❌ Connection error:', err.message);
+  console.log('Connection error:', err.message);
 });

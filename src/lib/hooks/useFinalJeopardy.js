@@ -90,6 +90,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     rd.currentRevealTeamIds = [];
     rd.revealStage = "hidden";
     rd.results = {};
+    rd.judgeHistory = [];
     rd.phase = "reveal";
     touch();
     persist();
@@ -143,20 +144,38 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
   // standingsRevealed=false so the host gets a beat to show the correct
   // answer on its own before advancing to the standings board (see
   // revealStandings below).
-  function judgeTeam(team, correct, adjustTeamScore) {
+  //
+  // `amountOverride`: how many points to actually apply, instead of the
+  // team's full wager — the host's Full/Half/Custom preset picker in
+  // FinalJeopardyBoard.jsx feeds this. Undefined/null means "no override,
+  // use the wager as-is", so every existing caller that doesn't pass this
+  // keeps behaving exactly as before.
+  //
+  // Every judgment (here and in judgeBatch below) also pushes an entry
+  // onto rd.judgeHistory — {teamId, delta, advancedToDone} — which is
+  // ALL undoLastJudge needs to cleanly reverse it: reapply -delta to that
+  // team's score, un-mark them as revealed, and if this was the specific
+  // judgment that flipped the round to "done", drop back to "reveal".
+  function judgeTeam(team, correct, adjustTeamScore, amountOverride) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal") return;
     if (rd.revealedTeamIds.includes(team.id)) return;
     const wager = rd.wagers[team.id] || 0;
-    adjustTeamScore(team, correct ? wager : -wager);
+    const amount = amountOverride != null ? amountOverride : wager;
+    const delta = correct ? amount : -amount;
+    adjustTeamScore(team, delta);
     rd.results = rd.results || {};
     rd.results[team.id] = correct;
     rd.revealedTeamIds.push(team.id);
     rd.currentRevealTeamIds = (rd.currentRevealTeamIds || []).filter((id) => id !== team.id);
     if (rd.currentRevealTeamIds.length === 0) rd.revealStage = "hidden";
+    rd.judgeHistory = rd.judgeHistory || [];
+    const historyEntry = { teamId: team.id, delta, advancedToDone: false };
+    rd.judgeHistory.push(historyEntry);
     if (rd.revealedTeamIds.length >= rd.revealOrder.length) {
       rd.phase = "done";
       rd.standingsRevealed = false;
+      historyEntry.advancedToDone = true;
     }
     touch();
     persist();
@@ -166,27 +185,79 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
   // team in the current batch with the SAME verdict in one go (e.g. "Mark
   // All Correct"). Teams already judged individually before this is
   // clicked (mixed verdicts) are simply skipped. Shares the exact same
-  // scoring/results/advance-to-"done" logic as judgeTeam, just looped.
-  function judgeBatch(teams, correct, adjustTeamScore) {
+  // scoring/results/advance-to-"done" logic as judgeTeam, just looped —
+  // including pushing one rd.judgeHistory entry PER team, so "Undo" after
+  // a batch judgment always undoes exactly one team at a time, the same
+  // as after an individual judgment.
+  //
+  // `getAmount(teamId, wager)`: same override idea as judgeTeam's
+  // amountOverride, but per-team since each team in the batch can have its
+  // own Full/Half/Custom preset selected. Omitting it falls back to each
+  // team's own wager, same as before this parameter existed.
+  function judgeBatch(teams, correct, adjustTeamScore, getAmount) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal") return;
     const ids = [...(rd.currentRevealTeamIds || [])];
+    rd.judgeHistory = rd.judgeHistory || [];
     ids.forEach((id) => {
       if (rd.revealedTeamIds.includes(id)) return;
       const team = teams.find((t) => t.id === id);
       if (!team) return;
       const wager = rd.wagers[id] || 0;
-      adjustTeamScore(team, correct ? wager : -wager);
+      const amount = getAmount ? getAmount(id, wager) : wager;
+      const delta = correct ? amount : -amount;
+      adjustTeamScore(team, delta);
       rd.results = rd.results || {};
       rd.results[id] = correct;
       rd.revealedTeamIds.push(id);
+      rd.judgeHistory.push({ teamId: id, delta, advancedToDone: false });
     });
     rd.currentRevealTeamIds = [];
     rd.revealStage = "hidden";
     if (rd.revealedTeamIds.length >= rd.revealOrder.length) {
       rd.phase = "done";
       rd.standingsRevealed = false;
+      if (rd.judgeHistory.length > 0) rd.judgeHistory[rd.judgeHistory.length - 1].advancedToDone = true;
     }
+    touch();
+    persist();
+  }
+
+  // Reverses the single most recent judgment (from either judgeTeam or
+  // judgeBatch — see rd.judgeHistory, a flat list either one pushes onto
+  // regardless of which was used). Reapplies -delta to that team's score,
+  // un-marks them as revealed/judged, and puts them back into
+  // currentRevealTeamIds with revealStage="answer" so the host can
+  // immediately re-judge them without re-running the wager/answer reveal
+  // beats. If that judgment was the one that flipped the round to "done",
+  // drops back to "reveal" too (and clears standingsRevealed, though it
+  // should never have been true yet — see the guard below).
+  //
+  // Deliberately refuses once standings are actually showing
+  // (phase "done" && standingsRevealed): by then the host has already
+  // moved on to presenting final results, possibly with saveGameResult
+  // about to fire, and silently rewinding score history under that is
+  // more likely to confuse than help. Undo is for "wait, I misjudged
+  // that" in the moment, not for re-litigating after the fact.
+  function undoLastJudge(teams, adjustTeamScore) {
+    const rd = currentFinal();
+    if (!rd) return;
+    if (rd.phase === "done" && rd.standingsRevealed) return;
+    if (rd.phase !== "reveal" && rd.phase !== "done") return;
+    const history = rd.judgeHistory || [];
+    if (history.length === 0) return;
+    const last = history[history.length - 1];
+    const team = teams.find((t) => t.id === last.teamId);
+    if (team) adjustTeamScore(team, -last.delta);
+    if (rd.results) delete rd.results[last.teamId];
+    rd.revealedTeamIds = rd.revealedTeamIds.filter((id) => id !== last.teamId);
+    rd.currentRevealTeamIds = [...new Set([...(rd.currentRevealTeamIds || []), last.teamId])];
+    rd.revealStage = "answer";
+    if (last.advancedToDone) {
+      rd.phase = "reveal";
+      rd.standingsRevealed = false;
+    }
+    rd.judgeHistory = history.slice(0, -1);
     touch();
     persist();
   }
@@ -226,6 +297,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     rd.revealStage = "hidden";
     rd.results = {};
     rd.standingsRevealed = false;
+    rd.judgeHistory = [];
     touch();
     persist();
   }
@@ -245,6 +317,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     revealAnswer,
     judgeTeam,
     judgeBatch,
+    undoLastJudge,
     revealStandings,
     setStandingsSfx,
     resetFinal,

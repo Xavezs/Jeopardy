@@ -508,6 +508,51 @@ function prewarmDriveMedia(url) {
   });
 }
 
+// Same fire-and-forget idea as prewarmDriveMedia, for a plain third-party
+// http(s) link (the /proxy route's cache — see getProxiedMedia below).
+function prewarmProxyMedia(url) {
+  getProxiedMedia(url).catch((e) => {
+    console.warn('[media] proxy prewarm failed for', url, '-', e.message);
+  });
+}
+
+// Walks EVERY clue in the board (both grid rounds — Final Jeopardy's
+// single clue/celebration sound is warmed by its own client-side
+// preloadStandingsCelebration flow instead, see boardSfx.js) and kicks
+// off a prewarm for each attached media URL, once, the moment this
+// room's board data first arrives from the host — not per clue reveal,
+// and never per-player. That's the key difference from client-side
+// preloading: a room with 6 players doesn't turn into 6x the network
+// cost, because no player's device ever fetches anything until the
+// server's own cache (driveFileCache / proxyFileCache above) already has
+// it. DRIVE_MAX_CONCURRENT + DRIVE_MIN_GAP_MS above already throttle the
+// actual Drive-bound requests this produces, so firing potentially dozens
+// of these at once here is safe — no separate queue needed on top.
+// `media:...` (Supabase-hosted upload) refs are skipped: those resolve to
+// a direct Supabase URL the browser fetches straight from Supabase's own
+// CDN, never through this server, so there's nothing here to warm.
+function prewarmAllBoardMedia(boardData) {
+  const rounds = boardData?.rounds || [];
+  for (const round of rounds) {
+    if (round.type === 'final') continue;
+    for (const cat of round.categories || []) {
+      for (const clue of Object.values(cat.clues || {})) {
+        for (const url of [clue.mediaUrl, clue.answerMediaUrl]) {
+          if (!url) continue;
+          if (/youtu\.?be/i.test(url)) continue; // iframe embed, never proxied/warmable
+          if (url.startsWith('media:')) continue; // Supabase-hosted — served directly, not through us
+          if (extractDriveFileId(url)) {
+            prewarmDriveMedia(url);
+          } else if (/^https?:\/\//i.test(url)) {
+            prewarmProxyMedia(url);
+          }
+        }
+      }
+    }
+  }
+}
+
+
 
 // CSP allowlist, and the actual file bytes get served from a
 // googleusercontent.com redirect target that isn't fixed per-file, so a
@@ -757,6 +802,7 @@ setInterval(() => {
 module.exports = router;
 module.exports.deleteMediaForBoardData = deleteMediaForBoardData;
 module.exports.prewarmDriveMedia = prewarmDriveMedia;
+module.exports.prewarmAllBoardMedia = prewarmAllBoardMedia;
 
 // Copies every Supabase Storage file attached to a board's clue data into
 // new keys namespaced under `newOwnerId`, and rewrites the clue refs to

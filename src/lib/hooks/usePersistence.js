@@ -4,6 +4,34 @@ import { SessionStore } from "../storage";
 
 const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
 
+// A board can disappear out from under an open session — deleted by its
+// owner from another device/tab, a delete that succeeded server-side even
+// though the client never got a clean response, etc. Saving against a
+// board id the server no longer has returns 404 "Not found" (boards.js's
+// requireRole finds no matching row, so role is null, which maps to 404 —
+// see requireRole in boards.js). Left unhandled, that 404 propagates
+// straight out of flushPersist/persist and aborts whatever called them —
+// most visibly createAndSwitchToNewSession, whose very first step is
+// flushPersist()'ing the CURRENTLY open (now-deleted) board before it can
+// even attempt to create the new one. Treat "board no longer exists" as
+// nothing left to save, not a failure worth propagating.
+function isBoardGoneError(err) {
+  const msg = String(err?.message || "");
+  return err?.status === 404 || /not found/i.test(msg);
+}
+async function saveSessionTolerant(s) {
+  try {
+    await SessionStore.saveSession(s);
+    return true;
+  } catch (err) {
+    if (isBoardGoneError(err)) {
+      console.warn('Skipped saving "' + s.name + '" — this board no longer exists on the server.');
+      return false;
+    }
+    throw err;
+  }
+}
+
 /* =========================================================================
    usePersistence
    Owns session STATE and its autosave plumbing. Role-aware via `isHost`:
@@ -200,7 +228,9 @@ export function usePersistence(isHost = true) {
       const s = sessionRef.current;
       if (!s) return;
 
-      await SessionStore.saveSession(s);
+      const saved = await saveSessionTolerant(s);
+      if (!saved) return; // board's gone — nothing to broadcast either
+
       setSaveMsg('Saved to "' + s.name + '"');
       clearTimeout(saveMsgTimeout.current);
       saveMsgTimeout.current = setTimeout(() => setSaveMsg(""), 1800);
@@ -221,14 +251,14 @@ export function usePersistence(isHost = true) {
       persistTimeout.current = null;
     }
     const s = sessionRef.current;
-    if (s) await SessionStore.saveSession(s);
+    if (s) await saveSessionTolerant(s);
   }, []);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (persistTimeout.current) {
         const s = sessionRef.current;
-        if (s) SessionStore.saveSession(s);
+        if (s) SessionStore.saveSession(s).catch(() => {});
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);

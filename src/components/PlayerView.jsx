@@ -337,6 +337,41 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
   );
 }
 
+// Same six phases as the host's FINAL_PHASES in FinalJeopardyBoard.jsx —
+// kept in sync manually since these live in separate files/bundles, not
+// shared through an import. Read-only here: players never drive rd.phase,
+// they just watch it, so there's no interaction to wire up.
+const FINAL_PHASES = [
+  { key: "category", label: "Category" },
+  { key: "wager", label: "Wager" },
+  { key: "clue", label: "Clue" },
+  { key: "answer", label: "Answer" },
+  { key: "reveal", label: "Reveal" },
+  { key: "done", label: "Done" },
+];
+
+function FinalProgressStepper({ phase }) {
+  const currentIndex = FINAL_PHASES.findIndex((fp) => fp.key === phase);
+  return (
+    <div className="pv-final-progress-stepper">
+      {FINAL_PHASES.map((p, i) => {
+        const state = i < currentIndex ? "done" : i === currentIndex ? "active" : "upcoming";
+        return (
+          <React.Fragment key={p.key}>
+            <div className={`pv-final-progress-step is-${state}`}>
+              <span className="pv-final-progress-step-dot">{state === "done" ? "✓" : i + 1}</span>
+              <span className="pv-final-progress-step-label">{p.label}</span>
+            </div>
+            {i < FINAL_PHASES.length - 1 && (
+              <div className={`pv-final-progress-connector${state === "done" ? " is-done" : ""}`} />
+            )}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
 function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFinalAnswer, discordMembersByTeam, players, playerStats }) {
   const myTeamId = joinedTeam?.teamId;
   const myTeam = teams.find((t) => t.id === myTeamId);
@@ -378,15 +413,6 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     }
   }, [rd.standingsRevealed]);
 
-  // Mirrors the same preload fix on the host side (FinalJeopardyBoard.jsx)
-  // — starts loading the custom celebration sound as soon as this Final
-  // Jeopardy view is up, not just at the exact moment standings reveal.
-  // rd.standingsSfxUrl is already synced board state, so each player can
-  // preload it independently, same as the host.
-  useEffect(() => {
-    preloadStandingsCelebration(rd.standingsSfxUrl);
-  }, [rd.standingsSfxUrl]);
-
   // Belt-and-suspenders: this view only renders while the current round
   // is Final Jeopardy (see PlayerBoard below), so it unmounts both when
   // the round changes AND when the player leaves the room entirely
@@ -397,15 +423,23 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     return () => stopStandingsCelebration();
   }, []);
 
+  // Same preload fix as the host side (FinalJeopardyBoard.jsx) — starts
+  // loading the custom celebration sound as soon as this Final Jeopardy
+  // view is up, not just at the exact moment standings reveal. Each
+  // player independently preloads from the same synced rd.standingsSfxUrl.
+  useEffect(() => {
+    preloadStandingsCelebration(rd.standingsSfxUrl);
+  }, [rd.standingsSfxUrl]);
+
   // Separate, longer-lived duck: BGM should stay OFF for the entire time
   // Final Standings is on screen, not just for however long the
   // celebration sound itself plays — mirrors the same fix on the host
-  // side (FinalJeopardyBoard.jsx). playStandingsCelebration's own duck
-  // (above) is released as soon as that sound finishes, which left the
-  // BGM free to fade back in mid-standings whenever the celebration clip
-  // was short (e.g. the default built-in tone, ~1.5s). This hold opens
-  // the moment standingsRevealed goes true and only releases when it
-  // goes false again or this view unmounts.
+  // side. playStandingsCelebration's own duck (inside boardSfx.js) is
+  // released as soon as that sound finishes, which left the BGM free to
+  // fade back in mid-standings whenever the celebration clip was short
+  // (e.g. the default built-in tone, ~1.5s). This hold opens the moment
+  // standingsRevealed goes true and only releases when it goes false
+  // again or this view unmounts.
   const standingsDuckReleaseRef = useRef(null);
   useEffect(() => {
     if (rd.standingsRevealed) {
@@ -481,6 +515,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   if (rd.phase === "category") {
     return (
       <div className="pv-final-panel">
+        <FinalProgressStepper phase={rd.phase} />
         <div className="pv-final-title">Final Jeopardy</div>
         <p className="pv-final-hint pulse">Waiting for the host to reveal the category…</p>
       </div>
@@ -490,6 +525,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   if (rd.phase === "wager") {
     return (
       <div className="pv-final-panel">
+        <FinalProgressStepper phase={rd.phase} />
         <div className="pv-final-category">{rd.category}</div>
         {myWagerLocked || wagerSubmitted ? (
           <p className="pv-final-hint pulse">Wager locked in — waiting for other teams…</p>
@@ -534,6 +570,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   if (rd.phase === "clue" || rd.phase === "answer") {
     return (
       <div className="pv-final-panel">
+        <FinalProgressStepper phase={rd.phase} />
         <div className="pv-final-category">{rd.category}</div>
         <p className="pv-final-clue-text">{rd.clue?.question || "(no question set)"}</p>
         <FinalMediaPlayer mediaRef={rd.clue?.mediaUrl} mediaType={rd.clue?.mediaType} />
@@ -545,6 +582,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
             <input
               type="text"
               value={answerInput}
+              title={answerInput}
               autoFocus
               maxLength={300}
               onChange={(e) => setAnswerInput(e.target.value)}
@@ -579,6 +617,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     const stage = rd.revealStage || "hidden"; // "hidden" -> "wager" -> "answer"
     return (
       <div className="pv-final-panel">
+        <FinalProgressStepper phase={rd.phase} />
         <div className="pv-final-category">{rd.category}</div>
         {activeTeams.length > 0 ? (
           <div className={`pv-final-reveal-batch${isMyTurnActive ? " is-my-turn" : ""}${justChangedTeam ? " is-flash" : ""}`}>
@@ -721,11 +760,18 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
           <div className="pv-podium-row">
             {podiumOrder.map(({ group, position }) => (
               <div key={group.rank} className={`pv-podium-col${position === 0 ? " is-first" : ""}`}>
-                <div className="pv-podium-team-list">
+                <div
+                  className={
+                    "pv-podium-team-list" +
+                    (group.teams.length >= 7 ? " is-dense-lg" : group.teams.length >= 4 ? " is-dense" : "")
+                  }
+                >
                   {group.teams.map((team) => {
-                    // Same per-player lookup pv-final-stats uses below — for
-                    // podium teams (rank <= 3) we show it inline next to the
-                    // name instead, so it isn't duplicated in both places.
+                    // Per-player correct/wrong (+ accuracy) — shown inline
+                    // under the team name here instead of in a separate
+                    // standalone panel, so a team's stats always sit right
+                    // next to that team regardless of whether they landed
+                    // on the podium or in the list below.
                     const teamPlayers =
                       players && playerStats
                         ? players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId])
@@ -739,6 +785,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
                             <div className="pv-podium-player-stats">
                               {teamPlayers.map((p) => {
                                 const s = playerStats[p.discordUserId];
+                                const total = (s.correct || 0) + (s.wrong || 0);
                                 return (
                                   <span
                                     className="pv-podium-stat-pill"
@@ -747,6 +794,11 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
                                   >
                                     <span className="pv-podium-stat-correct">✓{s.correct || 0}</span>
                                     <span className="pv-podium-stat-wrong">✗{s.wrong || 0}</span>
+                                    {total > 0 && (
+                                      <span className="pv-podium-stat-accuracy">
+                                        {Math.round((s.correct / total) * 100)}%
+                                      </span>
+                                    )}
                                   </span>
                                 );
                               })}
@@ -768,52 +820,48 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
           {restGroups.length > 0 && (
             <div className="pv-final-rest-list">
               {restGroups.map((group) =>
-                group.teams.map((t) => (
-                  <div className="pv-final-standing-row" key={t.id}>
-                    <span className="pv-final-standing-rank">{group.rank}</span>
-                    <span className="pv-final-standing-name">{t.name}</span>
-                    <span className="pv-final-standing-score">${t.score}</span>
-                  </div>
-                ))
+                group.teams.map((t) => {
+                  const teamPlayers =
+                    players && playerStats
+                      ? players.filter((p) => p.teamId === t.id && playerStats[p.discordUserId])
+                      : [];
+                  return (
+                    <div className="pv-final-standing-row" key={t.id}>
+                      <div className="pv-final-standing-row-main">
+                        <span className="pv-final-standing-rank">{group.rank}</span>
+                        <span className="pv-final-standing-name">{t.name}</span>
+                        <span className="pv-final-standing-score">${t.score}</span>
+                      </div>
+                      {teamPlayers.length > 0 && (
+                        <div className="pv-podium-player-stats pv-final-standing-player-stats">
+                          {teamPlayers.map((p) => {
+                            const s = playerStats[p.discordUserId];
+                            const total = (s.correct || 0) + (s.wrong || 0);
+                            return (
+                              <span
+                                className="pv-podium-stat-pill"
+                                key={p.discordUserId}
+                                title={p.discordUsername || "Player"}
+                              >
+                                <span className="pv-podium-stat-correct">✓{s.correct || 0}</span>
+                                <span className="pv-podium-stat-wrong">✗{s.wrong || 0}</span>
+                                {total > 0 && (
+                                  <span className="pv-podium-stat-accuracy">
+                                    {Math.round((s.correct / total) * 100)}%
+                                  </span>
+                                )}
+                              </span>
+                            );
+                          })}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })
               )}
             </div>
           )}
         </div>
-
-        {/* Correct/wrong breakdown per player, grouped by team — built from
-            playerStats (server-tracked counts, no identity) resolved against
-            `players` (the live roster, has discordUsername/teamId). Only
-            shows players the server has at least one judged attempt for.
-            Sits beside the standings (not stacked below) so the panel
-            doesn't grow too tall. */}
-        {hasPlayerStats && restGroups.length > 0 && (
-          <div className="pv-final-stats">
-            <div className="pv-final-stats-title">Player Stats</div>
-            {restGroups.flatMap((g) => g.teams).map((team) => {
-              const teamPlayers = players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId]);
-              if (teamPlayers.length === 0) return null;
-              return (
-                <div className="pv-final-stats-team" key={team.id}>
-                  <div className="pv-final-stats-team-name">{team.name}</div>
-                  {teamPlayers.map((p) => {
-                    const s = playerStats[p.discordUserId];
-                    const total = (s.correct || 0) + (s.wrong || 0);
-                    return (
-                      <div className="pv-final-stats-row" key={p.discordUserId}>
-                        <span className="pv-final-stats-name">{p.discordUsername || "Player"}</span>
-                        <span className="pv-final-stats-correct">✓ {s.correct || 0}</span>
-                        <span className="pv-final-stats-wrong">✗ {s.wrong || 0}</span>
-                        {total > 0 && (
-                          <span className="pv-final-stats-accuracy">{Math.round((s.correct / total) * 100)}%</span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              );
-            })}
-          </div>
-        )}
       </div>
     </div>
   );
