@@ -146,3 +146,14 @@ Create a production frontend build with:
 ```powershell
 npm run build
 ```
+
+## Tests
+
+Run the production-logic tests with:
+
+```powershell
+npm test
+```
+
+The current tests cover the Final Jeopardy phase machine, invalid phase
+transitions, batch scoring, wager overrides, and undo behavior.

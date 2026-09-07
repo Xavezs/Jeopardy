@@ -99,7 +99,7 @@ export function usePersistence(isHost = true) {
     socket.on("connect", () => {
       const roomCode = roomCodeRef.current;
       if (!roomCode) return;
-      socket.emit("joinRoom", roomCode);
+      socket.emit("joinRoom", { roomCode, role: "host" });
       const s = sessionRef.current;
       if (s && isHostRef.current) {
         socket.emit("boardUpdate", {
@@ -205,7 +205,7 @@ export function usePersistence(isHost = true) {
   const setRoomCode = useCallback((code) => {
     roomCodeRef.current = code || null;
     if (code && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", code);
+      socketRef.current.emit("joinRoom", { roomCode: code, role: "host" });
       const s = sessionRef.current;
       if (s && isHostRef.current) {
         socketRef.current.emit("boardUpdate", {

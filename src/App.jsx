@@ -11,9 +11,26 @@ import '@fontsource/quicksand/700.css';
 import '@fontsource/comfortaa/700.css';
 import "./styles/player.css";
 
+const ACTIVE_PLAYER_ROOM_KEY = "jeopardy:active-player-room";
+const ACTIVE_PLAYER_ROOM_SAVED_AT_KEY = "jeopardy:active-player-room-saved-at";
+const ACTIVE_PLAYER_ROOM_MAX_AGE_MS = 30 * 60 * 1000;
+
 export default function App() {
   // 1. ALL HOOKS MUST BE AT THE VERY TOP (Never conditional or after an early return)
-  const [currentPath, setCurrentPath] = useState(window.location.pathname);
+  const [currentPath, setCurrentPath] = useState(() => {
+    if (window.location.pathname.startsWith("/play")) return window.location.pathname;
+    const savedRoom = sessionStorage.getItem(ACTIVE_PLAYER_ROOM_KEY);
+    const savedAt = Number(sessionStorage.getItem(ACTIVE_PLAYER_ROOM_SAVED_AT_KEY));
+    const isRecent = Number.isFinite(savedAt) && Date.now() - savedAt <= ACTIVE_PLAYER_ROOM_MAX_AGE_MS;
+    if (!savedRoom || !isRecent) {
+      sessionStorage.removeItem(ACTIVE_PLAYER_ROOM_KEY);
+      sessionStorage.removeItem(ACTIVE_PLAYER_ROOM_SAVED_AT_KEY);
+      return window.location.pathname;
+    }
+    const restoredPath = `/play?room=${encodeURIComponent(savedRoom)}`;
+    window.history.replaceState({}, "", restoredPath);
+    return restoredPath;
+  });
   const [hostMode, setHostMode] = useState(false);
 
   const [joining, setJoining] = useState(false);
@@ -82,6 +99,8 @@ export default function App() {
 
     // Soft navigate to /play without a hard reload
     window.history.pushState({}, '', `/play?room=${code}`);
+    sessionStorage.setItem(ACTIVE_PLAYER_ROOM_KEY, code);
+    sessionStorage.setItem(ACTIVE_PLAYER_ROOM_SAVED_AT_KEY, String(Date.now()));
     setCurrentPath(`/play?room=${code}`);
   };
 

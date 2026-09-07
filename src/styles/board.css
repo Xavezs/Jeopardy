@@ -967,12 +967,95 @@
   transition: filter 0.15s ease, transform 0.15s ease;
 }
 
+.clue-flip-front.is-media-loading {
+  cursor: wait;
+}
+
+.clue-flip-front.is-media-loading:hover {
+  filter: none;
+}
+
+.clue-preload-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 13px;
+  border: 1px solid rgba(240, 185, 66, 0.28);
+  border-radius: 999px;
+  background: rgba(5, 8, 30, 0.52);
+  color: var(--text-dim);
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.35px;
+}
+
+.clue-preload-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--gold-dim);
+  box-shadow: 0 0 8px rgba(240, 185, 66, 0.45);
+}
+
+.clue-preload-status.is-preparing .clue-preload-status-dot {
+  animation: cluePreloadPulse 1.2s ease-in-out infinite;
+}
+
+.clue-preload-status.is-ready {
+  border-color: rgba(91, 214, 151, 0.42);
+  color: #a8f0c7;
+}
+
+.clue-preload-status.is-ready .clue-preload-status-dot {
+  background: #5bd697;
+  box-shadow: 0 0 8px rgba(91, 214, 151, 0.65);
+}
+
+.clue-preload-status.is-error {
+  border-color: rgba(255, 112, 112, 0.55);
+  color: #ffb1b1;
+}
+
+.clue-preload-status.is-error .clue-preload-status-dot {
+  background: var(--red);
+  box-shadow: 0 0 8px rgba(255, 112, 112, 0.6);
+}
+
+.clue-preload-retry {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.clue-preload-retry:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+@keyframes cluePreloadPulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
 .clue-flip-front:hover {
   filter: brightness(1.1);
 }
 
 .clue-flip-front:active {
   transform: scale(0.985);
+}
+
+.host-reveal-clue-btn:disabled {
+  cursor: wait;
+  opacity: 0.68;
+  box-shadow: none;
 }
 
 .clue-flip-front-category {

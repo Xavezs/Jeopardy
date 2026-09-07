@@ -19,7 +19,10 @@ const CLIENT_ID = process.env.CLIENT_ID;
 // the team (if they were its last member), and the reconnect that follows
 // a moment later can't find that team anymore and creates a fresh one at
 // score 0 — the "team resurrection" bug.
-const DISCONNECT_GRACE_MS = 12000;
+const DISCONNECT_GRACE_MS = 5 * 60 * 1000;
+const MAX_BOARD_PAYLOAD_BYTES = 1_000_000;
+const MAX_ROOM_CODE_LENGTH = 8;
+const MAX_TEAM_NAME_LENGTH = 24;
 
 // 1. Initialize Express App
 const app = express();
@@ -302,11 +305,13 @@ function findClueMediaUrls(boardData, catId, value) {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
-  socket.on('joinRoom', (rawRoomCode) => {
+  socket.on('joinRoom', (payload) => {
+    const rawRoomCode = typeof payload === 'string' ? payload : payload?.roomCode;
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
+    socket.isHost = payload && typeof payload === 'object' && payload.role === 'host';
     socket.join(roomCode);
     socket.gameRoomCode = roomCode;
 
@@ -324,7 +329,7 @@ io.on('connection', (socket) => {
   socket.on('activeClueUpdate', ({ roomCode: rawRoomCode, activeClue }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode) || {};
     const prevClue = room.activeClue;
@@ -373,7 +378,7 @@ io.on('connection', (socket) => {
   socket.on('selectClue', ({ roomCode: rawRoomCode, catId, value, discordUserId }) => {
     if (typeof rawRoomCode !== 'string' || !catId || value == null) return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode);
     if (!room) return;
@@ -419,7 +424,7 @@ io.on('connection', (socket) => {
   socket.on('submitWager', ({ roomCode: rawRoomCode, amount, discordUserId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode);
     if (!room) return;
@@ -453,7 +458,7 @@ io.on('connection', (socket) => {
   socket.on('submitFinalWager', ({ roomCode: rawRoomCode, amount, discordUserId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode);
     if (!room) return;
@@ -477,7 +482,7 @@ io.on('connection', (socket) => {
   socket.on('submitFinalAnswer', ({ roomCode: rawRoomCode, answer, discordUserId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode);
     if (!room) return;
@@ -501,7 +506,7 @@ io.on('connection', (socket) => {
   socket.on('judgeAnswer', ({ roomCode: rawRoomCode, discordUserId, correct }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode);
     if (!room) return;
@@ -538,7 +543,7 @@ io.on('connection', (socket) => {
   socket.on('hostSetControl', ({ roomCode: rawRoomCode, discordUserId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
-    if (!roomCode) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
 
     const room = gameRooms.get(roomCode);
     if (!room) return;
@@ -619,28 +624,27 @@ io.on('connection', (socket) => {
     if (typeof rawRoomCode !== 'string' || !data) return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     if (!roomCode) return;
+    if (!socket.isHost || socket.gameRoomCode !== roomCode) {
+      socket.emit('errorMsg', 'Only the host can update the board.');
+      return;
+    }
+
+    let payloadBytes;
+    try {
+      payloadBytes = Buffer.byteLength(JSON.stringify(data), 'utf8');
+    } catch {
+      socket.emit('errorMsg', 'Invalid board data.');
+      return;
+    }
+    if (payloadBytes > MAX_BOARD_PAYLOAD_BYTES || typeof data !== 'object' || Array.isArray(data)) {
+      socket.emit('errorMsg', 'Board data is invalid or too large.');
+      return;
+    }
 
     const room = gameRooms.get(roomCode) || {};
-    const isFirstBoardForRoom = !room.board;
     room.board = { data, updatedAt: updatedAt || Date.now() };
     gameRooms.set(roomCode, room);
 
-    // First board this room has ever received (host just started hosting
-    // this session) — warm every clue's media ONCE here, server-side,
-    // instead of relying only on the per-clue prewarm in selectClue/
-    // activeClueUpdate above. That per-clue prewarm still covers "reveal
-    // this specific clue right now"; this covers "the whole game is about
-    // to be played" up front, so by the time any clue gets picked its
-    // media is very likely already sitting in the server's own cache —
-    // see prewarmAllBoardMedia's own comment in media.js for why this
-    // doesn't turn into N-players-worth of extra load. Deliberately NOT
-    // re-run on every subsequent boardUpdate (which fires on every
-    // autosave tick while the host is still editing) — just once per
-    // room's lifetime.
-    if (isFirstBoardForRoom) {
-      mediaRouter.prewarmAllBoardMedia(data);
-    }
-    
     // socket.to(...) ensures the host doesn't receive its own echo back
     socket.to(roomCode).emit('boardUpdate', room.board);
   });
@@ -668,7 +672,7 @@ io.on('connection', (socket) => {
     if (typeof rawRoomCode !== 'string' || typeof teamName !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     const trimmedName = teamName.trim();
-    if (!roomCode || !trimmedName) return;
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH || !trimmedName || trimmedName.length > MAX_TEAM_NAME_LENGTH) return;
 
     socket.join(roomCode);
     socket.gameRoomCode = roomCode;

@@ -143,6 +143,13 @@ function playAlertSound() {
 }
 
 const RING_CIRCUMFERENCE = 2 * Math.PI * 27;
+const MEDIA_PRELOAD_TIMEOUT_MS = 45000;
+
+async function preloadMedia(url, signal) {
+  const response = await fetch(url, { signal, cache: "default" });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  return response.blob();
+}
 
 
 
@@ -211,6 +218,10 @@ export default function ClueModal({
   // mediaUrl/renderAs directly, which race the reveal click while still
   // empty/mid-fetch (see the flipped+mediaResolved effect further down).
   const [mediaResolved, setMediaResolved] = useState(false);
+  const [mediaStatus, setMediaStatus] = useState("preparing");
+  const [mediaStatusMessage, setMediaStatusMessage] = useState("");
+  const [mediaRetryCount, setMediaRetryCount] = useState(0);
+  const [preparedMediaUrl, setPreparedMediaUrl] = useState("");
 
   const effectiveDuration = Math.max(1, parseInt(timerSeconds, 10) || 30);
   const [remaining, setRemaining] = useState(effectiveDuration);
@@ -302,6 +313,7 @@ export default function ClueModal({
   // reading mediaUrl/renderAs synchronously (which are still empty on a
   // fast reveal click, before convertIds resolves).
   const revealClue = () => {
+    if (mediaStatus !== "ready") return;
     playRevealSfx();
     if (onFlip) {
       onFlip();
@@ -326,10 +338,71 @@ export default function ClueModal({
     setQuestionPlaying(false);
     setAnswerPlaying(false);
     setMediaResolved(false);
+    setMediaStatus(clue?.mediaUrl ? "preparing" : "ready");
+    setMediaStatusMessage("");
+    setMediaRetryCount(0);
+    setPreparedMediaUrl("");
     setWagerTeamId(pickingTeam ? pickingTeam.id : null);
     setWagerInput("");
     setManualWagerOverride(false);
   }, [clueId, effectiveDuration]);
+
+  // Download the question media before the host can reveal the clue. The
+  // media players use the same URL afterwards, so the browser/server cache
+  // can reuse this prepared response instead of starting from zero again.
+  useEffect(() => {
+    if (!mediaResolved) return;
+
+    let cancelled = false;
+    let preparedBlobUrl = null;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), MEDIA_PRELOAD_TIMEOUT_MS);
+    setPreparedMediaUrl("");
+
+    async function prepareQuestionMedia() {
+      if (!mediaUrl || !renderAs || (renderAs === "video" && isYoutubeUrl(mediaUrl))) {
+        if (mediaUrl && renderAs === "video" && isYoutubeUrl(mediaUrl)) {
+          setPreparedMediaUrl(mediaUrl);
+        }
+        setMediaStatus("ready");
+        return;
+      }
+
+      setMediaStatus("preparing");
+      setMediaStatusMessage("");
+      try {
+        if (mediaUrl.startsWith("blob:") || mediaUrl.startsWith("data:")) {
+          setPreparedMediaUrl(mediaUrl);
+          setMediaStatus("ready");
+          return;
+        }
+        const blob = await preloadMedia(mediaUrl, controller.signal);
+        if (!cancelled) {
+          preparedBlobUrl = URL.createObjectURL(blob);
+          setPreparedMediaUrl(preparedBlobUrl);
+          setMediaStatus("ready");
+        }
+      } catch (error) {
+        if (cancelled) return;
+        setMediaStatus("error");
+        setMediaStatusMessage(
+          controller.signal.aborted
+            ? "Media took too long to prepare."
+            : error?.message || "Media could not be prepared."
+        );
+      } finally {
+        clearTimeout(timeoutId);
+      }
+    }
+
+    prepareQuestionMedia();
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
+      if (preparedBlobUrl) URL.revokeObjectURL(preparedBlobUrl);
+    };
+  }, [mediaResolved, mediaUrl, renderAs, mediaRetryCount]);
 
   // Countdown tick while running
   useEffect(() => {
@@ -726,6 +799,7 @@ export default function ClueModal({
 
   // Identify winning team if a player buzzed in
   const winningTeam = buzzerWinner && resolveTeamForDiscordUser ? resolveTeamForDiscordUser(buzzerWinner.id) : null;
+  const questionMediaSrc = preparedMediaUrl || mediaUrl;
 
   return (
     <div
@@ -743,12 +817,13 @@ export default function ClueModal({
       <div className="modal clue-modal-flip-outer">
         <div className={"clue-flip-inner" + (flipped ? " is-flipped" : "")}>
           <div
-            className="clue-flip-face clue-flip-front"
             data-sfx-handled
             onClick={revealClue}
             role="button"
             tabIndex={0}
-            aria-label="Reveal clue"
+            aria-label={mediaStatus === "ready" ? "Reveal clue" : "Waiting for clue media"}
+            aria-disabled={mediaStatus !== "ready"}
+            className={"clue-flip-face clue-flip-front" + (mediaStatus !== "ready" ? " is-media-loading" : "")}
             onKeyDown={(e) => {
               if (e.key === "Enter") {
                 e.preventDefault();
@@ -759,7 +834,31 @@ export default function ClueModal({
             <div className="clue-flip-front-category">{activeCat.name}</div>
             <div className="clue-flip-front-value">${effectiveValue}</div>
             <div className="clue-flip-front-hint">
-              {isDailyDouble ? `Daily Double — wager $${effectiveValue} — click to reveal` : "Click to reveal"}
+              {isDailyDouble
+                ? `Daily Double — wager $${effectiveValue}`
+                : mediaStatus === "ready"
+                ? "Click to reveal"
+                : "Please wait until media is ready"}
+            </div>
+            <div className={"clue-preload-status is-" + mediaStatus} role="status" aria-live="polite">
+              <span className="clue-preload-status-dot" aria-hidden="true" />
+              {mediaStatus === "ready" && (clue?.mediaUrl ? "Media ready" : "Ready to reveal")}
+              {mediaStatus === "preparing" && "Preparing media..."}
+              {mediaStatus === "error" && (
+                <>
+                  <span>{mediaStatusMessage}</span>
+                  <button
+                    type="button"
+                    className="clue-preload-retry"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      setMediaRetryCount((count) => count + 1);
+                    }}
+                  >
+                    Retry
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
@@ -781,11 +880,11 @@ export default function ClueModal({
                 "(no question text set — edit this clue in Edit Board mode)"
               )}
             </div>
-            {mediaUrl && renderAs && (
+            {flipped && questionMediaSrc && renderAs && (
               <div className="clue-media">
                 {renderAs === "image" && (
                   <ClueMediaImage
-                    src={mediaUrl}
+                    src={questionMediaSrc}
                     alt=""
                     onLoadError={() => {
                       // Only fall through to "maybe it's actually a video"
@@ -798,9 +897,9 @@ export default function ClueModal({
                   />
                 )}
                 {renderAs === "video" &&
-                  (isYoutubeUrl(mediaUrl) ? (
+                  (isYoutubeUrl(questionMediaSrc) ? (
                     <YoutubePlayer
-                      src={mediaUrl}
+                      src={questionMediaSrc}
                       isPlaying={questionPlaying}
                       onPlayStateChange={(playing, time) => {
                         questionTimeRef.current = time ?? questionTimeRef.current;
@@ -810,11 +909,11 @@ export default function ClueModal({
                       }}
                     />
                   ) : (
-                    <CustomVideoPlayer 
-                      src={mediaUrl} 
+                    <CustomVideoPlayer
+                      src={questionMediaSrc}
                       onError={() => {
                         if (!renderTypeConfident) setRenderAs("audio");
-                      }} 
+                      }}
                       isPlaying={questionPlaying}
                       onPlayStateChange={(playing, time) => {
                         questionTimeRef.current = time ?? questionTimeRef.current;
@@ -826,7 +925,7 @@ export default function ClueModal({
                   ))}
                 {renderAs === "audio" && (
                   <CustomAudioPlayer 
-                    src={mediaUrl} 
+                    src={questionMediaSrc}
                     isPlaying={questionPlaying}
                     onPlayStateChange={(playing, time) => {
                       questionTimeRef.current = time ?? questionTimeRef.current;
@@ -984,9 +1083,11 @@ export default function ClueModal({
               className="btn host-action-btn host-reveal-clue-btn"
               data-sfx-handled
               onClick={revealClue}
-            >
-              Reveal Clue
-            </button>
+               disabled={mediaStatus !== "ready"}
+               title={mediaStatus === "ready" ? "Reveal clue" : "Waiting for clue media"}
+             >
+               {mediaStatus === "ready" ? "Reveal Clue" : "Preparing Media..."}
+             </button>
           ) : (
             <button
               className="btn host-action-btn"

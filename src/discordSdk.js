@@ -292,7 +292,6 @@ export function getDiscordIdentity() {
 
   identityPromise = (async () => {
     const code = await setupDiscordSdk();
-    console.log("[speaking-debug] setupDiscordSdk code:", code ? "(got code)" : code);
     if (!code) {
       // Don't leave a failed attempt cached forever. Discord frequently
       // suspends/hides the Activity iframe instead of destroying it when
@@ -306,7 +305,6 @@ export function getDiscordIdentity() {
     }
 
     const identity = await authenticateDiscordUser(code);
-    console.log("[speaking-debug] authenticateDiscordUser identity:", identity ? { ...identity, access_token: identity.access_token ? "(present)" : identity.access_token } : identity);
     if (!identity) {
       identityPromise = null;
       return null;
@@ -326,12 +324,11 @@ export function getDiscordIdentity() {
     if (discordSdk && access_token) {
       try {
         await discordSdk.commands.authenticate({ access_token });
-        console.log("[speaking-debug] discordSdk.commands.authenticate() succeeded");
       } catch (err) {
-        console.warn("[speaking-debug] discordSdk.commands.authenticate() failed:", err.message, err);
+        console.warn("Discord SDK authentication failed:", err.message);
       }
     } else {
-      console.warn("[speaking-debug] authenticate() skipped: discordSdk =", !!discordSdk, "access_token =", !!access_token);
+      console.warn("Discord SDK authentication skipped: missing SDK or access token.");
     }
 
     return user; // { id, username, avatarUrl } — same shape as before

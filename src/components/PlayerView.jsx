@@ -1042,6 +1042,8 @@ export default function PlayerView() {
       roomCode={roomCode}
       me={me}
       onLeave={() => {
+        sessionStorage.removeItem("jeopardy:active-player-room");
+        sessionStorage.removeItem("jeopardy:active-player-room-saved-at");
         window.history.pushState({}, '', '/');
         window.dispatchEvent(new PopStateEvent('popstate'));
       }}
@@ -1053,7 +1055,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   const { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, randomizer, playerStats, leaveGame } = usePlayerSync(roomCode, me);
 
   // The actual "I'm leaving" action. Tells the server immediately (skips
-  // the 12s disconnect grace period entirely, since this is deliberate),
+  // the disconnect grace period entirely, since this is deliberate),
   // wipes the cached identity so coming back to this room code starts
   // fresh instead of silently rejoining, then hands off to the parent's
   // onLeave for navigation.
@@ -1475,6 +1477,9 @@ function PlayerBoard({ roomCode, me, onLeave }) {
   const [renderAs, setRenderAs] = useState("");
   const [answerMediaUrl, setAnswerMediaUrl] = useState("");
   const [answerRenderAs, setAnswerRenderAs] = useState("");
+  const [preparedMediaUrl, setPreparedMediaUrl] = useState("");
+  const [mediaStatus, setMediaStatus] = useState("ready");
+  const [mediaRetryCount, setMediaRetryCount] = useState(0);
 
   // Daily Double wager, entered on THIS device by whoever is the specific
   // picker (see isSpecificPicker above). `wagerJustSubmitted` covers the
@@ -1535,6 +1540,63 @@ function PlayerBoard({ roomCode, me, onLeave }) {
       cancelled = true;
     };
   }, [openClue?.mediaUrl, openClue?.mediaType, openClue?.answerMediaUrl, openClue?.answerMediaType]);
+
+  // Players prepare the same question media locally while the clue is still
+  // hidden. This makes the status visible to everyone and lets the media
+  // player reuse the already-downloaded blob after the host reveals it.
+  useEffect(() => {
+    let cancelled = false;
+    let blobUrl = null;
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 45000);
+
+    setPreparedMediaUrl("");
+    setMediaStatus(mediaUrl ? "preparing" : "ready");
+    if (!mediaUrl || !renderAs || (renderAs === "video" && isYoutubeUrl(mediaUrl))) {
+      if (mediaUrl && renderAs === "video" && isYoutubeUrl(mediaUrl)) {
+        setPreparedMediaUrl(mediaUrl);
+      }
+      setMediaStatus("ready");
+      return () => {
+        controller.abort();
+        clearTimeout(timeoutId);
+      };
+    }
+
+    if (mediaUrl.startsWith("blob:") || mediaUrl.startsWith("data:")) {
+      setPreparedMediaUrl(mediaUrl);
+      setMediaStatus("ready");
+      return () => {
+        controller.abort();
+        clearTimeout(timeoutId);
+      };
+    }
+
+    fetch(mediaUrl, { signal: controller.signal, cache: "default" })
+      .then((response) => {
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        return response.blob();
+      })
+      .then((blob) => {
+        if (cancelled) return;
+        blobUrl = URL.createObjectURL(blob);
+        setPreparedMediaUrl(blobUrl);
+        setMediaStatus("ready");
+      })
+      .catch(() => {
+        if (!cancelled) setMediaStatus("error");
+      })
+      .finally(() => clearTimeout(timeoutId));
+
+    return () => {
+      cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    };
+  }, [mediaUrl, renderAs, mediaRetryCount]);
+
+  const playerMediaSrc = preparedMediaUrl || mediaUrl;
 
   // Duck this player's own BGM while the clue's video/audio media is
   // actually sounding on this device. Unlike Final Jeopardy media (see
@@ -1718,6 +1780,23 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                     <div className="pv-clue-front-hint">Waiting for host to reveal...</div>
                   </>
                 )}
+                <div className={"pv-media-readiness is-" + mediaStatus} role="status" aria-live="polite">
+                  <span className="pv-media-readiness-dot" aria-hidden="true" />
+                  {mediaStatus === "ready" && (mediaUrl ? "Media ready" : "Ready")}
+                  {mediaStatus === "preparing" && "Preparing media..."}
+                  {mediaStatus === "error" && (
+                    <>
+                      <span>Media is still loading</span>
+                      <button
+                        type="button"
+                        className="pv-media-readiness-retry"
+                        onClick={() => setMediaRetryCount((count) => count + 1)}
+                      >
+                        Retry
+                      </button>
+                    </>
+                  )}
+                </div>
               </div>
 
               <div className="pv-clue-flip-face pv-clue-flip-back">
@@ -1727,15 +1806,15 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                 </div>
                 <div className="pv-clue-question">{openClue.question || "(no question text set)"}</div>
 
-                {mediaUrl && renderAs && (
+                {playerMediaSrc && renderAs && (
                   <div className="pv-clue-media">
                     {renderAs === "image" && (
-                      <img src={mediaUrl} alt="" onError={() => setRenderAs("video")} />
+                      <img src={playerMediaSrc} alt="" onError={() => setRenderAs("video")} />
                     )}
                     {renderAs === "video" &&
-                      (isYoutubeUrl(mediaUrl) ? (
+                      (isYoutubeUrl(playerMediaSrc) ? (
                         <YoutubePlayer
-                          src={mediaUrl}
+                          src={playerMediaSrc}
                           disablePlayPause={true}
                           disableSeeking={true}
                           isPlaying={openClue.isPlaying}
@@ -1743,7 +1822,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                         />
                       ) : (
                         <CustomVideoPlayer 
-                          src={mediaUrl} 
+                          src={playerMediaSrc}
                           onError={() => setRenderAs("audio")} 
                           disablePlayPause={true}
                           disableSeeking={true}
@@ -1753,7 +1832,7 @@ function PlayerBoard({ roomCode, me, onLeave }) {
                       ))}
                     {renderAs === "audio" && (
                       <CustomAudioPlayer 
-                        src={mediaUrl} 
+                        src={playerMediaSrc}
                         disablePlayPause={true}
                         disableSeeking={true}
                         isPlaying={openClue.isPlaying}
