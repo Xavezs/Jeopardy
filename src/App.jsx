@@ -14,6 +14,34 @@ import "./styles/player.css";
 const ACTIVE_PLAYER_ROOM_KEY = "jeopardy:active-player-room";
 const ACTIVE_PLAYER_ROOM_SAVED_AT_KEY = "jeopardy:active-player-room-saved-at";
 const ACTIVE_PLAYER_ROOM_MAX_AGE_MS = 30 * 60 * 1000;
+const ACTIVE_HOST_MODE_KEY = "jeopardy:active-host-mode";
+
+// Discord launches the Activity with `frame_id` (and `channel_id`,
+// `instance_id`) in the URL query string — discordSdk.js reads `frame_id`
+// at MODULE LOAD TIME to decide whether it's safe to construct a real
+// DiscordSDK instance at all (`hasFrameId`). Building the /play URL with a
+// plain template literal like `/play?room=${code}` REPLACES the entire
+// query string, silently dropping frame_id along with it.
+//
+// This is harmless as long as the page never does a full reload after
+// that point — hasFrameId was already computed once, before the
+// pushState/replaceState ran. But the moment anything forces a real
+// reload afterward (a failed HMR update falling back to a full refresh, a
+// manual browser refresh, Discord itself reloading the iframe, etc.), the
+// browser re-parses whatever URL is CURRENTLY in the address bar — which
+// by then has no frame_id — and hasFrameId permanently evaluates to
+// false. From that point on, getDiscordIdentity() is skipped entirely for
+// every player, with no visible error: buzzing still works (it never
+// needed Discord identity), but avatars and buzz-queue team attribution
+// silently break for everyone, and no further reload can fix it — only
+// closing and relaunching the Activity fresh from Discord restores
+// frame_id. Preserving the existing query string when building /play URLs
+// avoids ever entering that state.
+function buildPlayPath(roomCode) {
+  const params = new URLSearchParams(window.location.search);
+  params.set("room", roomCode);
+  return `/play?${params.toString()}`;
+}
 
 export default function App() {
   // 1. ALL HOOKS MUST BE AT THE VERY TOP (Never conditional or after an early return)
@@ -27,11 +55,11 @@ export default function App() {
       sessionStorage.removeItem(ACTIVE_PLAYER_ROOM_SAVED_AT_KEY);
       return window.location.pathname;
     }
-    const restoredPath = `/play?room=${encodeURIComponent(savedRoom)}`;
+    const restoredPath = buildPlayPath(savedRoom);
     window.history.replaceState({}, "", restoredPath);
     return restoredPath;
   });
-  const [hostMode, setHostMode] = useState(false);
+  const [hostMode, setHostMode] = useState(() => sessionStorage.getItem(ACTIVE_HOST_MODE_KEY) === "1");
 
   const [joining, setJoining] = useState(false);
 
@@ -55,7 +83,12 @@ export default function App() {
   if (hostMode) {
     return (
       <LoginGate>
-        <JeopardyBoard onBack={() => setHostMode(false)} />
+        <JeopardyBoard
+          onBack={() => {
+            sessionStorage.removeItem(ACTIVE_HOST_MODE_KEY);
+            setHostMode(false);
+          }}
+        />
       </LoginGate>
     );
   }
@@ -98,7 +131,7 @@ export default function App() {
     }
 
     // Soft navigate to /play without a hard reload
-    window.history.pushState({}, '', `/play?room=${code}`);
+    window.history.pushState({}, '', buildPlayPath(code));
     sessionStorage.setItem(ACTIVE_PLAYER_ROOM_KEY, code);
     sessionStorage.setItem(ACTIVE_PLAYER_ROOM_SAVED_AT_KEY, String(Date.now()));
     setCurrentPath(`/play?room=${code}`);
@@ -106,7 +139,10 @@ export default function App() {
 
   return (
     <RoleSelect
-      onSelectHost={() => setHostMode(true)}
+      onSelectHost={() => {
+        sessionStorage.setItem(ACTIVE_HOST_MODE_KEY, "1");
+        setHostMode(true);
+      }}
       onSelectPlayer={handleSelectPlayer}
       isJoining={joining}
     />

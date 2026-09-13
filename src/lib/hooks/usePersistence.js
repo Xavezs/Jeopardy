@@ -228,7 +228,27 @@ export function usePersistence(isHost = true) {
       const s = sessionRef.current;
       if (!s) return;
 
-      const saved = await saveSessionTolerant(s);
+      let saved;
+      try {
+        saved = await saveSessionTolerant(s);
+      } catch (err) {
+        // Network was down (or the API call otherwise failed) when this
+        // fired. Previously this rejection had no catch anywhere in the
+        // chain — it became a silent unhandled promise rejection, and the
+        // edit that triggered this persist() was just lost: never saved,
+        // never broadcast, with no retry once connectivity came back.
+        // Schedule one retry attempt shortly after reconnect instead of
+        // dropping it. If `s` has since changed again, that later edit's
+        // own persist() call will already cover this save, so re-running
+        // saveSessionTolerant here is harmless (same tolerant path).
+        console.warn("Autosave failed, will retry once reconnected:", err.message);
+        const retry = () => {
+          socketRef.current?.off("connect", retry);
+          persist();
+        };
+        socketRef.current?.once ? socketRef.current.once("connect", retry) : socketRef.current?.on("connect", retry);
+        return;
+      }
       if (!saved) return; // board's gone — nothing to broadcast either
 
       setSaveMsg('Saved to "' + s.name + '"');

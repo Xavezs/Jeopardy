@@ -7,16 +7,17 @@ import { DiscordContext } from "./DiscordContext";
 export default function LoginGate({ children }) {
   const [status, setStatus] = useState("initializing");
   const [authData, setAuthData] = useState(null);
-  // Bumping this re-runs the effect below, letting the Retry button below
-  // re-attempt the whole flow in place — no more closing and reopening the
-  // entire Activity window just to get a fresh attempt.
   const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
-    async function setupDiscordActivity() {
-      const queryParams = new URLSearchParams(window.location.search);
-      const isDiscordIframe = queryParams.has("frame_id");
+    let cancelled = false;
+    const isDiscordIframe = new URLSearchParams(window.location.search).has("frame_id");
 
+    function setStatusIfActive(nextStatus) {
+      if (!cancelled) setStatus(nextStatus);
+    }
+
+    async function setupDiscordActivity() {
       if (isDiscordIframe) {
         // --- 1. RUNNING INSIDE DISCORD ACTIVITY IFRAME ---
         // Reuses the shared, page-lifetime-cached getDiscordIdentity()
@@ -41,24 +42,26 @@ export default function LoginGate({ children }) {
         // access_token. It returns { id, username, avatarUrl } or null.
         if (!discordSdk) {
           console.error("Discord SDK unavailable: missing VITE_DISCORD_CLIENT_ID or SDK construction failed.");
-          setStatus("error");
+          setStatusIfActive("error");
           return;
         }
         try {
           const user = await getDiscordIdentity();
           if (!user) throw new Error("No identity returned from Discord");
 
-          setAuthData({
-            sdk: discordSdk,
-            user,
-            guildId: discordSdk.guildId,
-            channelId: discordSdk.channelId,
-            instanceId: discordSdk.instanceId,
-          });
-          setStatus("in");
+          if (!cancelled) {
+            setAuthData({
+              sdk: discordSdk,
+              user,
+              guildId: discordSdk.guildId,
+              channelId: discordSdk.channelId,
+              instanceId: discordSdk.instanceId,
+            });
+            setStatus("in");
+          }
         } catch (err) {
           console.error("Discord SDK authorization failed:", err);
-          setStatus("error");
+          setStatusIfActive("error");
         }
       } else {
         // --- 2. RUNNING IN STANDALONE BROWSER MODE ---
@@ -77,31 +80,37 @@ export default function LoginGate({ children }) {
 
             const data = await res.json();
 
-            setAuthData({
-              sdk: null,
-              user: data.user,
-              guildId: "mock_guild",
-              channelId: "mock_channel",
-              instanceId: "mock_instance",
-            });
-            setStatus("in");
+            if (!cancelled) {
+              setAuthData({
+                sdk: null,
+                user: data.user,
+                guildId: "mock_guild",
+                channelId: "mock_channel",
+                instanceId: "mock_instance",
+              });
+              setStatus("in");
+            }
           } catch (err) {
             console.error("Dev authentication failed:", err);
-            setStatus("error");
+            setStatusIfActive("error");
           }
           return;
         }
 
-        setStatus("error");
+        setStatusIfActive("error");
       }
     }
 
     setupDiscordActivity();
+
+    return () => {
+      cancelled = true;
+    };
   }, [retryCount]);
 
   if (status === "initializing") {
     return (
-      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff", background: "#070a20" }}>
         <h3>Loading Discord Activity…</h3>
       </main>
     );
@@ -109,7 +118,7 @@ export default function LoginGate({ children }) {
 
   if (status === "error") {
     return (
-      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column", gap: "12px" }}>
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column", gap: "12px", background: "#070a20" }}>
         <h3>Failed to connect to Discord</h3>
         <p>Make sure this app is running inside Discord as an Activity or backend server is active.</p>
         <button

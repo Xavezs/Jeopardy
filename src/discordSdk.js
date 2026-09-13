@@ -91,6 +91,15 @@ export const activityChannelId = hasFrameId
 // Callers that arrive while a call is in progress just await the same
 // promise instead of starting a new one.
 let setupPromise = null;
+const DISCORD_COMMAND_TIMEOUT_MS = 15000;
+
+function withDiscordTimeout(promise, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`Discord ${label} timeout`)), DISCORD_COMMAND_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
 
 // Separate, permanent cache for the ready() handshake itself. Promise.race
 // against a timeout only makes OUR code stop waiting — it does not cancel
@@ -126,13 +135,27 @@ function getReadyPromise() {
 // this will go through the entire ready() -> authorize() -> authenticate()
 // flow from scratch on a live connection.
 export function resetDiscordSdk() {
+  // discordSdk.close() does two things a plain removeEventListener()
+  // doesn't: it also posts a CLOSE opcode to the Discord client
+  // (window.parent) telling it the old RPC session is being torn down.
+  // Without that, Discord's side still thinks the old session is live,
+  // so a fresh handshake() from the brand-new instance below can land in
+  // an inconsistent state on Discord's end — which is exactly why the
+  // Retry button used to appear to do nothing until the whole Activity
+  // panel was closed and reopened (that fully destroys the iframe and
+  // forces Discord to drop the old session regardless).
+  try {
+    discordSdk?.close(1000, "Client requested reconnect");
+  } catch (err) {
+    console.warn("discordSdk.close() failed, continuing with reset anyway:", err.message);
+  }
   setupPromise = null;
   readyPromise = null;
   identityPromise = null;
   discordSdk = createSdkInstance();
 }
 
-export async function setupDiscordSdk(_isSelfHealRetry = false) {
+export async function setupDiscordSdk() {
   if (!discordSdk) {
     console.warn("Discord SDK skipped: no frame_id (not running inside Discord) or VITE_DISCORD_CLIENT_ID is missing.");
     return null;
@@ -142,57 +165,10 @@ export async function setupDiscordSdk(_isSelfHealRetry = false) {
 
   setupPromise = (async () => {
     try {
-      let timeoutId;
-      const timeoutPromise = new Promise((_, reject) => {
-        timeoutId = setTimeout(() => reject(new Error('Discord SDK ready timeout')), 15000);
-      });
-
-      try {
-        await Promise.race([getReadyPromise(), timeoutPromise]);
-      } catch (raceErr) {
-        // IMPORTANT: do NOT null out readyPromise here just because OUR
-        // side gave up waiting. Promise.race doesn't cancel
-        // discordSdk.ready() — the real handshake keeps running in the
-        // background and can still succeed a moment later. If we discard
-        // readyPromise on every timeout, the next retry (including the
-        // Retry button) starts a brand-new ready() call while the old one
-        // is still in flight, and the two concurrent handshakes can
-        // interfere with each other on Discord's RPC channel — this is
-        // what caused "sometimes it works, sometimes it doesn't" even
-        // after raising the timeout value. If the underlying ready()
-        // promise genuinely rejects (not just slow), getReadyPromise()'s
-        // own .catch already nulls readyPromise for us, so a real retry
-        // still gets a fresh attempt when it's actually warranted.
-        //
-        // SELF-HEAL: a timeout here has a second, very common cause besides
-        // "just slow" — the Activity panel was closed and reopened, the old
-        // DiscordSDK instance's RPC transport is now permanently dead, and
-        // no amount of waiting will ever make it resolve. We can't tell
-        // "slow" apart from "dead" in advance, so: on the FIRST timeout,
-        // try exactly once more with a completely fresh instance
-        // (resetDiscordSdk) before surfacing the error. This makes the
-        // dead-connection case (closing/reopening the Activity) recover
-        // automatically without the user having to hit Retry manually,
-        // while still only costing one extra ~15s wait in the genuinely-
-        // slow case. Bounded to one retry (_isSelfHealRetry guard) so a
-        // truly broken setup (e.g. missing OAuth scope approval) still
-        // fails and shows the error screen instead of looping forever.
-        if (!_isSelfHealRetry) {
-          console.warn("Discord SDK ready() timed out — retrying once with a fresh connection (Activity panel may have been closed/reopened).");
-          resetDiscordSdk();
-          // `return await` (not just `return`) matters here: it keeps this
-          // function's own `finally { setupPromise = null }` below from
-          // running until the retried attempt actually finishes, instead
-          // of clearing setupPromise the instant the retry merely starts.
-          return await setupDiscordSdk(true);
-        }
-        throw raceErr;
-      } finally {
-        clearTimeout(timeoutId);
-      }
+      await withDiscordTimeout(getReadyPromise(), "ready handshake");
       console.log("Discord SDK is ready!");
 
-      const { code } = await discordSdk.commands.authorize({
+      const { code } = await withDiscordTimeout(discordSdk.commands.authorize({
         client_id: clientId,
         response_type: 'code',
         state: '',
@@ -216,7 +192,7 @@ export async function setupDiscordSdk(_isSelfHealRetry = false) {
         // failed" loop this scope caused before it was removed). Confirm
         // that approval is in place before relying on this in real testing.
         scope: ['identify', 'rpc.voice.read'],
-      });
+      }), "authorization");
 
       return code;
     } catch (err) {

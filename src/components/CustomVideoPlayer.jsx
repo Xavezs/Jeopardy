@@ -81,6 +81,7 @@ export default function CustomVideoPlayer({
     let blobUrl = null;
     setResolvedSrc('');
     setPrefetchError('');
+    setPrefetching(false);
 
     if (!src) return;
 

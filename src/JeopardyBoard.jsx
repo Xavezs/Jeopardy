@@ -154,20 +154,40 @@ export default function JeopardyBoard({ onBack }) {
   bgmApiRef.current.initBgm = bgm.initBgm;
 
   const roomCode = session.session?.roomCode || null;
-
-  function ensureRoomCode() {
-    if (session.session.roomCode) return session.session.roomCode;
-    const code = Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
-    session.session.roomCode = code;
-    persistence.persist();
-    return code;
-  }
+  const roomCodeRequestRef = useRef(null);
 
   useEffect(() => {
-    if (session.ready && session.session && !session.session.roomCode) {
-      ensureRoomCode();
+    if (
+      !session.ready ||
+      !session.session ||
+      session.session.roomCode ||
+      roomCodeRequestRef.current === session.session.id
+    ) {
+      return;
     }
-  }, [session.ready, session.session]);
+
+    const sessionId = session.session.id;
+    roomCodeRequestRef.current = sessionId;
+    SessionStore.inviteToBoard(sessionId)
+      .then(({ roomCode: persistentRoomCode }) => {
+        if (!persistentRoomCode) {
+          throw new Error("The server did not return a room code.");
+        }
+
+        // The room code is returned as session metadata, not board data.
+        // Copy it into the loaded session so every socket hook can join the
+        // same room and the existing host reconnect path can re-announce the
+        // board after a reload.
+        session.session.roomCode = persistentRoomCode;
+        persistence.touch();
+      })
+      .catch((err) => {
+        // Keep the board visible if the invite endpoint is temporarily
+        // unavailable; the next render/retry can attempt it again.
+        if (roomCodeRequestRef.current === sessionId) roomCodeRequestRef.current = null;
+        console.error("Unable to create or restore the persistent room code:", err);
+      });
+  }, [session.ready, session.session, persistence]);
 
   const { buzzerLive, queue: buzzerQueue, activeIndex: buzzerActiveIndex, winner: buzzerWinner, armBuzzer, resetBuzzer, nextBuzzer, prevBuzzer } = useBuzzer(roomCode, null);
 

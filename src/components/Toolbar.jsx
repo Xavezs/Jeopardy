@@ -74,7 +74,10 @@ export default function Toolbar({
     // throw inside the Discord Activity iframe (no clipboard-write
     // permission), so we can't rely on it alone.
     try {
-      if (navigator.clipboard?.writeText) {
+      const clipboardAllowed = navigator.permissions
+        ? await navigator.permissions.query({ name: "clipboard-write" }).then((permission) => permission.state !== "denied")
+        : false;
+      if (clipboardAllowed && navigator.clipboard?.writeText) {
         await navigator.clipboard.writeText(roomCode);
         success = true;
       }

@@ -346,7 +346,7 @@ export default function TeamRandomizer({
   return (
     <div className="randomizer-page">
       {!readOnly && (
-        <button className="btn randomizer-back" onClick={closeAndUnannounce}>
+        <button className="jp-role-back-btn randomizer-back" onClick={closeAndUnannounce}>
           ← Back to Board
         </button>
       )}

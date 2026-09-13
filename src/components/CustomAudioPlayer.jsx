@@ -74,6 +74,7 @@ export default function CustomAudioPlayer({
     let blobUrl = null;
     setResolvedSrc('');
     setPrefetchError('');
+    setPrefetching(false);
 
     if (!src) return;
 
