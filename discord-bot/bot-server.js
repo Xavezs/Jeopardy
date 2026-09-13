@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { router: authRouter } = require('./auth');
 
@@ -11,6 +12,9 @@ const { router: authRouter } = require('./auth');
 const PORT = process.env.PORT || 4001;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const allowedOrigins = FRONTEND_URL.split(',').map((origin) => origin.trim()).filter(Boolean);
+const isAllowedOrigin = (origin) => !origin || allowedOrigins.includes(origin);
 
 // How long a disconnected player's team membership is held before we treat
 // it as a real leave. Socket.IO fires 'disconnect' on tab-blur, brief
@@ -32,6 +36,10 @@ app.set('trust proxy', 1);
 
 // Middleware
 app.use(express.json());
+app.use(cors({
+  origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
+  credentials: true,
+}));
 app.use(cookieParser());
 
 const mediaRouter = require('./media');
@@ -111,8 +119,9 @@ app.get('/api/youtube-widgetapi.js', async (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
