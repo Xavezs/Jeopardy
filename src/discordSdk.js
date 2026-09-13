@@ -11,17 +11,67 @@ const clientId = import.meta.env.VITE_DISCORD_CLIENT_ID;
 // frame_id first, and wrap the construction itself in try/catch too.
 const hasFrameId = new URLSearchParams(window.location.search).has('frame_id');
 
-let sdkInstance = null;
-if (clientId && hasFrameId) {
+// DEV-ONLY TESTING AID: lets you open several plain browser tabs (no real
+// Discord accounts needed) and have each one act as a distinct player, to
+// load-test things like buzzer ordering or N-players-reveal-media-at-once
+// without wrangling multiple Discord accounts across PTB/Canary/Stable.
+//
+// Gated on BOTH `!hasFrameId` and an explicit `?fakePlayer=` param, so this
+// can never fire inside a real Activity (frame_id is always present there)
+// — it only ever applies to someone deliberately opening a plain browser
+// tab with this flag set.
+//
+// Usage: http://localhost:5173/?fakePlayer=1&name=Player1
+// The id is stored in sessionStorage (not localStorage) so it survives a
+// refresh within the SAME tab (useful for testing reconnect/grace-period
+// behavior) but a genuinely new tab/window gets its own fresh identity.
+function getFakePlayerIdentity() {
+  const params = new URLSearchParams(window.location.search);
+  if (hasFrameId || !params.has('fakePlayer')) return null;
+
+  const storageKey = 'jeopardy_fake_player_identity';
+  const cached = sessionStorage.getItem(storageKey);
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch {
+      // fall through and regenerate below
+    }
+  }
+
+  const name = params.get('name') || `Test Player ${Math.floor(Math.random() * 1000)}`;
+  const identity = {
+    id: `fake-${Math.random().toString(36).slice(2, 10)}`,
+    username: name,
+    avatarUrl: null,
+  };
+  sessionStorage.setItem(storageKey, JSON.stringify(identity));
+  console.warn('[discordSdk] Using FAKE player identity for testing:', identity);
+  return identity;
+}
+
+function createSdkInstance() {
+  if (!(clientId && hasFrameId)) return null;
   try {
-    sdkInstance = new DiscordSDK(clientId);
+    return new DiscordSDK(clientId);
   } catch (err) {
     console.warn("DiscordSDK construction failed, continuing without it:", err.message);
-    sdkInstance = null;
+    return null;
   }
 }
 
-export const discordSdk = sdkInstance;
+// NOTE: this is `let`, not `const`. Discord frequently suspends/hides the
+// Activity iframe instead of destroying it when the panel is closed — the
+// JS context (and this module's state) survives, but the underlying RPC
+// transport the SDK instance is bound to does NOT reconnect on its own.
+// After that happens, discordSdk.ready() on the OLD instance hangs forever
+// (never resolves, never rejects) — no amount of retrying .ready() on the
+// same dead instance will ever succeed. The only real fix is constructing
+// a brand-new DiscordSDK instance, which is what resetDiscordSdk() below
+// does. Because this is `let` and exported, ES module live-bindings mean
+// every file that does `import { discordSdk } from './discordSdk'` always
+// sees the current value automatically — no need to re-import after reset.
+export let discordSdk = createSdkInstance();
 
 // Discord launches the Activity with `channel_id` (and `instance_id`) in the
 // URL query string alongside `frame_id`. This is the same channel the
@@ -41,6 +91,69 @@ export const activityChannelId = hasFrameId
 // Callers that arrive while a call is in progress just await the same
 // promise instead of starting a new one.
 let setupPromise = null;
+const DISCORD_COMMAND_TIMEOUT_MS = 15000;
+
+function withDiscordTimeout(promise, label) {
+  let timeoutId;
+  const timeout = new Promise((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`Discord ${label} timeout`)), DISCORD_COMMAND_TIMEOUT_MS);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timeoutId));
+}
+
+// Separate, permanent cache for the ready() handshake itself. Promise.race
+// against a timeout only makes OUR code stop waiting — it does not cancel
+// discordSdk.ready(), which keeps resolving in the background regardless.
+// Without this cache, every retry (manual retry button, or closing and
+// reopening the whole Activity) called discordSdk.ready() again from
+// scratch, stacking up multiple concurrent handshakes and making later
+// attempts less likely to succeed, not more. Caching it means: if the
+// first attempt "times out" from our side but the handshake actually
+// completes a moment later, every subsequent retry immediately reuses
+// that already-resolved promise instead of starting a new one.
+let readyPromise = null;
+function getReadyPromise() {
+  if (!readyPromise) {
+    readyPromise = discordSdk.ready().catch((err) => {
+      // If the underlying handshake itself rejects, don't leave that
+      // rejection cached forever — clear it so the next call (e.g. the
+      // Retry button) issues a genuinely fresh ready() instead of
+      // re-awaiting a promise that's already dead.
+      readyPromise = null;
+      throw err;
+    });
+  }
+  return readyPromise;
+}
+
+// Forces a completely fresh start: new DiscordSDK instance + every cached
+// promise cleared. Use this (rather than just re-calling setupDiscordSdk())
+// whenever there's reason to believe the existing RPC connection is dead
+// rather than just slow — e.g. the user explicitly hit Retry after a
+// "Discord SDK ready timeout", or after closing and reopening the Activity
+// panel. Calling setupDiscordSdk()/getDiscordIdentity() again right after
+// this will go through the entire ready() -> authorize() -> authenticate()
+// flow from scratch on a live connection.
+export function resetDiscordSdk() {
+  // discordSdk.close() does two things a plain removeEventListener()
+  // doesn't: it also posts a CLOSE opcode to the Discord client
+  // (window.parent) telling it the old RPC session is being torn down.
+  // Without that, Discord's side still thinks the old session is live,
+  // so a fresh handshake() from the brand-new instance below can land in
+  // an inconsistent state on Discord's end — which is exactly why the
+  // Retry button used to appear to do nothing until the whole Activity
+  // panel was closed and reopened (that fully destroys the iframe and
+  // forces Discord to drop the old session regardless).
+  try {
+    discordSdk?.close(1000, "Client requested reconnect");
+  } catch (err) {
+    console.warn("discordSdk.close() failed, continuing with reset anyway:", err.message);
+  }
+  setupPromise = null;
+  readyPromise = null;
+  identityPromise = null;
+  discordSdk = createSdkInstance();
+}
 
 export async function setupDiscordSdk() {
   if (!discordSdk) {
@@ -52,14 +165,10 @@ export async function setupDiscordSdk() {
 
   setupPromise = (async () => {
     try {
-      const timeoutPromise = new Promise((_, reject) =>
-        setTimeout(() => reject(new Error('Discord SDK ready timeout')), 2000)
-      );
-
-      await Promise.race([discordSdk.ready(), timeoutPromise]);
+      await withDiscordTimeout(getReadyPromise(), "ready handshake");
       console.log("Discord SDK is ready!");
 
-      const { code } = await discordSdk.commands.authorize({
+      const { code } = await withDiscordTimeout(discordSdk.commands.authorize({
         client_id: clientId,
         response_type: 'code',
         state: '',
@@ -83,7 +192,7 @@ export async function setupDiscordSdk() {
         // failed" loop this scope caused before it was removed). Confirm
         // that approval is in place before relying on this in real testing.
         scope: ['identify', 'rpc.voice.read'],
-      });
+      }), "authorization");
 
       return code;
     } catch (err) {
@@ -151,14 +260,31 @@ let identityPromise = null;
 export function getDiscordIdentity() {
   if (identityPromise) return identityPromise;
 
+  const fakeIdentity = getFakePlayerIdentity();
+  if (fakeIdentity) {
+    identityPromise = Promise.resolve(fakeIdentity);
+    return identityPromise;
+  }
+
   identityPromise = (async () => {
     const code = await setupDiscordSdk();
-    console.log("[speaking-debug] setupDiscordSdk code:", code ? "(got code)" : code);
-    if (!code) return null;
+    if (!code) {
+      // Don't leave a failed attempt cached forever. Discord frequently
+      // suspends/hides the Activity iframe instead of destroying it when
+      // the panel is closed, so this module's state can outlive a single
+      // "session" from the user's perspective. Without this reset, one
+      // failed ready()/authorize() (e.g. a slow tunnel) permanently blocks
+      // every future retry with a cached `null` — closing and reopening
+      // the Activity panel would never work again without a hard reload.
+      identityPromise = null;
+      return null;
+    }
 
     const identity = await authenticateDiscordUser(code);
-    console.log("[speaking-debug] authenticateDiscordUser identity:", identity ? { ...identity, access_token: identity.access_token ? "(present)" : identity.access_token } : identity);
-    if (!identity) return null;
+    if (!identity) {
+      identityPromise = null;
+      return null;
+    }
 
     const { access_token, ...user } = identity;
 
@@ -174,12 +300,11 @@ export function getDiscordIdentity() {
     if (discordSdk && access_token) {
       try {
         await discordSdk.commands.authenticate({ access_token });
-        console.log("[speaking-debug] discordSdk.commands.authenticate() succeeded");
       } catch (err) {
-        console.warn("[speaking-debug] discordSdk.commands.authenticate() failed:", err.message, err);
+        console.warn("Discord SDK authentication failed:", err.message);
       }
     } else {
-      console.warn("[speaking-debug] authenticate() skipped: discordSdk =", !!discordSdk, "access_token =", !!access_token);
+      console.warn("Discord SDK authentication skipped: missing SDK or access token.");
     }
 
     return user; // { id, username, avatarUrl } — same shape as before

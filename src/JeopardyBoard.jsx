@@ -1,6 +1,8 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useRef } from "react";
 import "./styles/board.css";
+import "./styles/final-jeopardy.css";
 import { blankClue } from "./lib/storage";
+import ClueGrid from "./components/ClueGrid";
 import ClueModal from "./components/ClueModal";
 import EditClueModal from "./components/EditClueModal";
 import SessionsModal from "./components/SessionsModal";
@@ -10,6 +12,7 @@ import BackgroundMusicPlayer from "./components/BackgroundMusicPlayer";
 import Marquee from "./components/Marquee";
 import RoundTabs from "./components/RoundTabs";
 import Toolbar from "./components/Toolbar";
+import FinalJeopardyBoard from "./components/FinalJeopardyBoard";
 
 import { useConfirmDialog } from "./lib/hooks/useConfirmDialog";
 import { usePersistence } from "./lib/hooks/usePersistence";
@@ -22,8 +25,15 @@ import { useClueEditor } from "./lib/hooks/useClueEditor";
 import { useBgmSettings } from "./lib/hooks/useBgmSettings";
 import { useBuzzer } from "./lib/hooks/useBuzzer";
 import { useClueSync } from "./lib/hooks/useClueSync";
+import { useControlSync, OPEN_CONTROL } from "./lib/hooks/useControlSync";
+import { useWagerSync } from "./lib/hooks/useWagerSync";
+import { useFinalSync } from "./lib/hooks/useFinalSync";
+import { useFinalJeopardy } from "./lib/hooks/useFinalJeopardy";
 import { useBgmSync } from "./lib/hooks/useBgmSync";
-import { playClickSfx, playHoverTick, playCatRevealSfx, installGlobalBoardSfx } from "./lib/boardSfx";
+import { useRandomizerSync } from "./lib/hooks/useRandomizerSync";
+import { useStatsSync } from "./lib/hooks/useStatsSync";
+import { SessionStore } from "./lib/storage";
+import { playCatRevealSfx, subscribeSfxDucking, loadFinalStandingsVolume, setFinalStandingsVolume } from "./lib/boardSfx";
 
 export default function JeopardyBoard({ onBack }) {
   const [editMode, setEditMode] = useState(false);
@@ -32,10 +42,52 @@ export default function JeopardyBoard({ onBack }) {
   // this app always runs with buzzing live.
   const buzzerEnabled = true;
   const [questionFlipped, setQuestionFlipped] = useState(false);
+  // Lifted the same way as questionFlipped/revealed — lets the locked-in
+  // wager amount survive re-renders and (later, if you wire useClueSync
+  // to include it) get broadcast to PlayerView the same way revealed/
+  // flipped already are.
+  const [dailyDoubleWager, setDailyDoubleWager] = useState(null);
+
+  // Mirrors boardSfx.js's ducking bus — separate from clueEditor.duckMusic
+  // (which only tracks clue audio/video playback). Final Standings' 
+  // celebration sound fires from deep inside FinalJeopardyBoard with no
+  // path back to this component's props, so it signals through this bus
+  // instead. Either source ducking is enough to duck the BGM.
+  const [sfxDucking, setSfxDucking] = useState(false);
+  useEffect(() => subscribeSfxDucking(setSfxDucking), []);
+
+  // Final Standings celebration sound's volume — separate from BGM's own
+  // volume (bgmSettings.volume), see boardSfx.js. Hydrated once from
+  // storage on mount; 1 (full/unchanged) until that resolves.
+  const [finalStandingsVolume, setFinalStandingsVolumeState] = useState(1);
+  useEffect(() => {
+    let cancelled = false;
+    loadFinalStandingsVolume().then((v) => {
+      if (!cancelled) setFinalStandingsVolumeState(v);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  function handleFinalStandingsVolumeChange(v) {
+    setFinalStandingsVolumeState(v);
+    setFinalStandingsVolume(v);
+  }
 
   const { dialog, appConfirm, appAlert, resolveDialog } = useConfirmDialog();
 
-  const bgm = useBgmSettings({ appConfirm, appAlert });
+  // Bridge for useSessionManager's initBgm callback: useBgmSettings needs
+  // to know the active roundKey, which comes from session.data — but
+  // session.data doesn't exist until AFTER useSessionManager is called,
+  // and useSessionManager needs an initBgm function AT construction time.
+  // Assigning a ref synchronously during render (not inside an effect)
+  // means this is always up to date by the time anything actually calls
+  // it, without the two hooks needing to depend on each other's output.
+  const bgmApiRef = useRef({});
+  function initBgmBridge(loadedSessionData) {
+    return bgmApiRef.current.initBgm?.(loadedSessionData);
+  }
+
   const persistence = usePersistence();
 
   const board = useBoardGrid({
@@ -44,6 +96,13 @@ export default function JeopardyBoard({ onBack }) {
     persist: persistence.persist,
     appConfirm,
     appAlert,
+  });
+
+  const final = useFinalJeopardy({
+    sessionRef: persistence.sessionRef,
+    touch: persistence.touch,
+    persist: persistence.persist,
+    currentRoundOf: board.currentRoundOf,
   });
 
   const clueEditor = useClueEditor({
@@ -71,7 +130,7 @@ export default function JeopardyBoard({ onBack }) {
     persistence,
     ensureClueGrid: board.ensureClueGrid,
     performFlip: board.performFlip,
-    initBgm: bgm.initBgm,
+    initBgm: initBgmBridge,
     onSwitched: ({ editMode: nextEditMode }) => {
       setEditMode(nextEditMode);
       clueEditor.setActiveClue(null);
@@ -81,28 +140,129 @@ export default function JeopardyBoard({ onBack }) {
     appConfirm,
   });
 
-  const roomCode = session.session?.roomCode || null;
+  // Which round's track is "active" for BGM purposes right now — mirrors
+  // the rd.type === "final" check used everywhere else in this file.
+  // Computed straight from session.data (not the `data`/`rd` locals
+  // below, which don't exist yet until after the loading-guard return)
+  // so this stays a plain, always-called hook input.
+  const sessionData = session.data;
+  const activeRd = sessionData?.rounds?.[sessionData.currentRound] || sessionData?.rounds?.[0];
+  const roundKey = activeRd?.type === "final" ? "final" : String(sessionData?.currentRound ?? 0);
+  const roundLabel = activeRd?.type === "final" ? "Final Jeopardy" : `Round ${(sessionData?.currentRound ?? 0) + 1}`;
 
-  function ensureRoomCode() {
-    if (session.session.roomCode) return session.session.roomCode;
-    const code = Array.from({ length: 6 }, () => "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"[Math.floor(Math.random() * 32)]).join("");
-    session.session.roomCode = code;
-    persistence.persist();
-    return code;
-  }
+  const bgm = useBgmSettings({ appConfirm, appAlert, roundKey });
+  bgmApiRef.current.initBgm = bgm.initBgm;
+
+  const roomCode = session.session?.roomCode || null;
+  const roomCodeRequestRef = useRef(null);
 
   useEffect(() => {
-    if (session.ready && session.session && !session.session.roomCode) {
-      ensureRoomCode();
+    if (
+      !session.ready ||
+      !session.session ||
+      session.session.roomCode ||
+      roomCodeRequestRef.current === session.session.id
+    ) {
+      return;
     }
-  }, [session.ready, session.session]);
 
-  const { buzzerLive, queue: buzzerQueue, activeIndex: buzzerActiveIndex, winner: buzzerWinner, armBuzzer, resetBuzzer, nextBuzzer } = useBuzzer(roomCode, null);
+    const sessionId = session.session.id;
+    roomCodeRequestRef.current = sessionId;
+    SessionStore.inviteToBoard(sessionId)
+      .then(({ roomCode: persistentRoomCode }) => {
+        if (!persistentRoomCode) {
+          throw new Error("The server did not return a room code.");
+        }
+
+        // The room code is returned as session metadata, not board data.
+        // Copy it into the loaded session so every socket hook can join the
+        // same room and the existing host reconnect path can re-announce the
+        // board after a reload.
+        session.session.roomCode = persistentRoomCode;
+        persistence.touch();
+      })
+      .catch((err) => {
+        // Keep the board visible if the invite endpoint is temporarily
+        // unavailable; the next render/retry can attempt it again.
+        if (roomCodeRequestRef.current === sessionId) roomCodeRequestRef.current = null;
+        console.error("Unable to create or restore the persistent room code:", err);
+      });
+  }, [session.ready, session.session, persistence]);
+
+  const { buzzerLive, queue: buzzerQueue, activeIndex: buzzerActiveIndex, winner: buzzerWinner, armBuzzer, resetBuzzer, nextBuzzer, prevBuzzer } = useBuzzer(roomCode, null);
 
   const { publishActiveClue } = useClueSync(roomCode);
+
+  // Board control: who's allowed to pick the next clue. The host itself
+  // always has free pick (that's the inline board grid below, unchanged);
+  // this is what lets a PLAYER'S pick actually open something. When a
+  // player's selectClue is validated server-side, it comes back here as
+  // `clueSelected`, and the host responds by opening its own clueEditor
+  // modal exactly as if it had clicked the cell itself — the host's local
+  // state stays the single source of truth for reveal/timer/judging, a
+  // player pick is just a remote trigger for it. `judgeAnswer` is handed
+  // to ClueModal below so scoring a correct, buzzed-in answer transfers
+  // control to that player.
+  const { controlDiscordUserId, judgeAnswer, hostSetControl } = useControlSync(roomCode, null, {
+    onClueSelected: ({ catId, value }) => {
+      const data = session.data;
+      if (!data) return;
+      const currentRd = data.rounds?.[data.currentRound] || data.rounds?.[0];
+      const cat = currentRd?.categories.find((c) => c.id === catId);
+      if (cat) clueEditor.openClueModal(cat, value);
+    },
+  });
+  // Daily Double wager, submitted by whoever currently holds board control
+  // (the player who picked the clue) from their own device. The server
+  // already validated discordUserId === controlDiscordUserId before
+  // relaying this — the check here is just a defensive re-confirm against
+  // whatever this tab currently thinks controlDiscordUserId is, in case
+  // control moved on (e.g. host used the manual fallback, then a stale/
+  // duplicate event from the player arrives a moment later) between the
+  // clue opening and this event landing.
+  const { submitWager } = useWagerSync(roomCode, null, {
+    onWagerSubmitted: ({ discordUserId, amount }) => {
+      if (discordUserId !== controlDiscordUserId) return;
+      setDailyDoubleWager(amount);
+    },
+  });
+
+  // Final Jeopardy wager/answer submitted from a player's own device —
+  // parallel across all teams, no control-holder gate (see useFinalSync).
+  // Resolves discordUserId -> team the same way judgeAnswer's buzz race
+  // does (teams.resolveTeamForDiscordUser), then clamps the wager against
+  // that team's current score before writing it in, same clamp
+  // FinalJeopardyBoard's own manual input applies. A team already below
+  // $0 may wager up to the size of its debt (so a correct answer brings
+  // it exactly back to $0), rather than being floored to a $0 max.
+  useFinalSync(roomCode, null, {
+    onFinalWagerSubmitted: ({ discordUserId, amount }) => {
+      const team = teams.resolveTeamForDiscordUser(discordUserId);
+      if (!team) return;
+      const maxWager = team.score < 0 ? Math.abs(team.score) : team.score;
+      const clamped = Math.max(0, Math.min(maxWager, Number(amount) || 0));
+      final.setWager(team.id, clamped);
+    },
+    onFinalAnswerSubmitted: ({ discordUserId, answer }) => {
+      const team = teams.resolveTeamForDiscordUser(discordUserId);
+      if (!team) return;
+      final.setAnswer(team.id, answer);
+    },
+  });
+
   const { publishRevealedCats } = useCategoryRevealSync(roomCode);
   const { publishRoundBanner } = useRoundBannerSync(roomCode);
   const { publishBgm } = useBgmSync(roomCode);
+  const { publishRandomizer } = useRandomizerSync(roomCode);
+  const { playerStats } = useStatsSync(roomCode);
+
+  // Clear the synced randomizer state for players whenever the host leaves
+  // the randomizer screen (Back to Board, or applying an order — see
+  // applyRandomizerOrder below, which also clears it after broadcasting
+  // the final result).
+  useEffect(() => {
+    if (view !== "randomizer") publishRandomizer(null);
+  }, [view, publishRandomizer]);
 
   useEffect(() => {
     publishRevealedCats(Array.from(board.revealedCats));
@@ -124,6 +284,7 @@ export default function JeopardyBoard({ onBack }) {
   useEffect(() => {
     setPlaybackState({ isPlaying: false, currentTime: 0 });
     setQuestionFlipped(false);
+    setDailyDoubleWager(null);
   }, [clueEditor.activeClue?.catId, clueEditor.activeClue?.value]);
 
   useEffect(() => {
@@ -135,18 +296,20 @@ export default function JeopardyBoard({ onBack }) {
         flipped: questionFlipped,
         isPlaying: playbackState.isPlaying,
         currentTime: playbackState.currentTime,
+        dailyDoubleWager,
       });
     } else {
       publishActiveClue(null);
     }
-  }, [clueEditor.activeClue, clueEditor.revealed, questionFlipped, playbackState, publishActiveClue]);
+  }, [clueEditor.activeClue, clueEditor.revealed, questionFlipped, playbackState, publishActiveClue, dailyDoubleWager]);
 
   useEffect(() => {
     persistence.setRoomCode(roomCode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, persistence.setRoomCode]);
 
-  useEffect(() => installGlobalBoardSfx(), []);
+  // Click/hover sfx is installed once at the App root (covers every
+  // screen: RoleSelect, LoginGate, and this board) — see App.jsx, not here.
 
   async function resetRound() {
     if (!(await appConfirm("Reset all scores to 0 and mark all clues unused (both rounds)? Your questions/answers/media stay."))) return;
@@ -154,9 +317,91 @@ export default function JeopardyBoard({ onBack }) {
     teams.resetAllScores();
   }
 
+  // Snapshots this playthrough into saved_games (see boards.js's POST
+  // /:id/games) — teams' final scores, a derived ranking, and the
+  // correct/wrong counts useStatsSync has been collecting from the
+  // server all game. discordUserId -> username/teamId is resolved here
+  // against persistence.players (the live roster), since the server-side
+  // playerStats blob only carries correct/wrong counts, not identity —
+  // see useStatsSync's comment for why.
+  async function handleEndGame() {
+    if (!(await appConfirm("End the game and save final standings? This can't be undone."))) return;
+
+    const teamsList = data.teams;
+    const ranking = [...teamsList]
+      .sort((a, b) => (b.score ?? 0) - (a.score ?? 0))
+      .map((t, i) => ({ teamId: t.id, rank: i + 1, score: t.score ?? 0 }));
+
+    const playerStatsWithIdentity = Object.fromEntries(
+      Object.entries(playerStats).map(([discordUserId, counts]) => {
+        const p = (persistence.players || []).find((pl) => pl.discordUserId === discordUserId);
+        return [
+          discordUserId,
+          {
+            username: p?.discordUsername || null,
+            teamId: p?.teamId || null,
+            correct: counts.correct || 0,
+            wrong: counts.wrong || 0,
+          },
+        ];
+      })
+    );
+
+    try {
+      await SessionStore.saveGameResult(session.session.id, {
+        teams: teamsList.map((t) => ({ id: t.id, name: t.name, score: t.score ?? 0 })),
+        ranking,
+        playerStats: playerStatsWithIdentity,
+      });
+    } catch (e) {
+      console.error("Failed to save game result:", e);
+      appAlert("Couldn't save final standings — check your connection and try again.");
+    }
+  }
+
   function toggleTimerEnabled() {
     const d = session.data;
     d.settings.timerEnabled = !d.settings.timerEnabled;
+    session.touch();
+    persistence.persist();
+  }
+
+  // Off by default (undefined -> !undefined -> true on first toggle, same
+  // as toggleTimerEnabled) — that preserves the original Daily Double rule
+  // (only the wagering team may answer, no buzz race) for every board that
+  // hasn't explicitly opted into the house-rule variant.
+  function toggleDdBuzzerEnabled() {
+    const d = session.data;
+    d.settings.ddBuzzerEnabled = !d.settings.ddBuzzerEnabled;
+    session.touch();
+    persistence.persist();
+  }
+
+  // Off by default (undefined -> !undefined -> true on first toggle, same
+  // as toggleDdBuzzerEnabled) — preserves the original house rule (min
+  // wager = the clue's own value, so the range is value..2x) for every
+  // board that hasn't explicitly opted into allowing a $0 minimum. When
+  // on, teams can wager anywhere from $0 up to 2x the clue's value.
+  function toggleDdMinWagerZero() {
+    const d = session.data;
+    d.settings.ddMinWagerZero = !d.settings.ddMinWagerZero;
+    session.touch();
+    persistence.persist();
+  }
+
+  // Off by default (undefined -> !undefined -> true on first toggle, same
+  // pattern as the two toggles above) — preserves the original house rule
+  // (max wager = 2x the clue's own value) for every board that hasn't
+  // explicitly opted in. When on, the max wager is based on the wagering
+  // team's own current score instead of the clue's value — combined with
+  // ddMinWagerZero this gives 4 total wager-range combinations:
+  //   min 0        + max card value  (original default)
+  //   min face val + max card value  (ddMinWagerZero off, this off)
+  //   min 0        + max team score  (ddMinWagerZero on,  this on)
+  //   min face val + max team score  (ddMinWagerZero off, this on)
+  function toggleDdWagerBasisPlayerScore() {
+    const d = session.data;
+    d.settings.ddWagerBasisPlayerScore = !d.settings.ddWagerBasisPlayerScore;
     session.touch();
     persistence.persist();
   }
@@ -188,19 +433,40 @@ export default function JeopardyBoard({ onBack }) {
     );
   }
 
-  const nCats = rd.categories.length;
-  const nRows = rd.values.length;
-  const boardGridStyle = editMode
-    ? { gridTemplateColumns: `74px repeat(${nCats}, minmax(0, 1fr)) 67px`, gridTemplateRows: `74px repeat(${nRows}, minmax(0, 1fr)) 67px` }
-    : { gridTemplateColumns: `repeat(${nCats}, minmax(0, 1fr))`, gridTemplateRows: `auto repeat(${nRows}, minmax(0, 1fr))` };
+  // Final Jeopardy has no categories/values grid at all (see
+  // sessionStore.js's blankFinalRound) — these all fall back to safe
+  // defaults for that round rather than crashing on rd.categories.length.
+  const nCats = rd.type === "final" ? 0 : rd.categories.length;
+  const nRows = rd.type === "final" ? 0 : rd.values.length;
+  const boardGridStyle =
+    rd.type === "final"
+      ? {}
+      : editMode
+      ? { gridTemplateColumns: `74px repeat(${nCats}, minmax(0, 1fr)) 67px`, gridTemplateRows: `74px repeat(${nRows}, minmax(0, 1fr)) 67px` }
+      : { gridTemplateColumns: `repeat(${nCats}, minmax(0, 1fr))`, gridTemplateRows: `auto repeat(${nRows}, minmax(0, 1fr))` };
 
-  const activeCat = clueEditor.activeClue ? rd.categories.find((c) => c.id === clueEditor.activeClue.catId) : null;
+  const activeCat = rd.type !== "final" && clueEditor.activeClue ? rd.categories.find((c) => c.id === clueEditor.activeClue.catId) : null;
   const activeClueObj = activeCat && clueEditor.activeClue ? activeCat.clues[clueEditor.activeClue.value] : null;
-  const editingCat = clueEditor.editingTarget ? rd.categories.find((c) => c.id === clueEditor.editingTarget.catId) : null;
+  const editingCat = rd.type !== "final" && clueEditor.editingTarget ? rd.categories.find((c) => c.id === clueEditor.editingTarget.catId) : null;
+
+  // Applies the randomized order to the board (same as before), then hands
+  // board control to whichever discordUserId is attached to the 1st-place
+  // team, so that team can immediately pick the first clue without the
+  // host needing a separate manual "Board control" step. Falls back to
+  // OPEN_CONTROL (anyone may pick) if the winning team has nobody's
+  // Discord account linked yet, rather than leaving control locked to
+  // nobody. Also clears the synced randomizer state so players' screens
+  // drop back out of the randomizer view once the host is done with it.
+  function applyRandomizerOrder(order) {
+    teams.applyTeamOrder(order);
+    const firstDiscordId = order[0]?.discordUserIds?.[0] || null;
+    hostSetControl(firstDiscordId || OPEN_CONTROL);
+    publishRandomizer(null);
+  }
 
   return (
     <div className="jp-root" style={{ position: "relative" }}>
-      {onBack && (
+      {onBack && view !== "randomizer" && (
         <button
           type="button"
           onClick={onBack}
@@ -211,7 +477,12 @@ export default function JeopardyBoard({ onBack }) {
       )}
 
       {view === "randomizer" ? (
-        <TeamRandomizer teams={data.teams} onApplyOrder={teams.applyTeamOrder} onClose={() => setView("board")} />
+        <TeamRandomizer
+          teams={data.teams}
+          onApplyOrder={applyRandomizerOrder}
+          onClose={() => setView("board")}
+          onBroadcast={publishRandomizer}
+        />
       ) : (
         <>
           <Marquee
@@ -251,171 +522,64 @@ export default function JeopardyBoard({ onBack }) {
               onToggleTimerEnabled={toggleTimerEnabled}
               onSetTimerDuration={setGlobalTimerDuration}
               roomCode={roomCode}
+              players={persistence.players}
+              teams={data.teams}
+              controlDiscordUserId={controlDiscordUserId}
+              onHostSetControl={hostSetControl}
+              onRandomizeDailyDoubles={board.randomizeDailyDoubles}
+              ddBuzzerEnabled={data.settings.ddBuzzerEnabled}
+              onToggleDdBuzzerEnabled={toggleDdBuzzerEnabled}
+              ddMinWagerZero={data.settings.ddMinWagerZero}
+              onToggleDdMinWagerZero={toggleDdMinWagerZero}
+              ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
+              onToggleDdWagerBasisPlayerScore={toggleDdWagerBasisPlayerScore}
+              onEndGame={handleEndGame}
             />
           </div>
 
-          <div id="boardWrap">
-            <div id="board" style={boardGridStyle}>
-              {rd.categories.map((cat, catIndex) => {
-                const isRevealed = editMode || board.revealedCats.has(cat.id);
-                return (
-                  <div
-                    key={cat.id}
-                    className={
-                      "cat-cell" +
-                      (board.boardFlip === "out" ? " flip-out" : "") +
-                      (board.boardFlip === "in-start" ? " flip-in-start" : "") +
-                      (!isRevealed ? " cat-locked" : "")
-                    }
-                    style={{
-                      gridRow: "1",
-                      gridColumn: editMode ? catIndex + 2 : catIndex + 1,
-                      transitionDelay: board.flipDelay(catIndex),
-                    }}
-                  >
-                    {editMode ? (
-                      <>
-                        <input
-                          className="cat-name-input"
-                          maxLength={30}
-                          defaultValue={cat.name}
-                          key={cat.id + "-name"}
-                          onBlur={(e) => board.renameCategory(cat, e.target.value)}
-                        />
-                        <button className="cat-remove" title="Remove this category" onClick={() => board.removeCategory(cat)}>
-                          ✕
-                        </button>
-                      </>
-                    ) : isRevealed ? (
-                      <div className="cat-name cat-name-reveal">{cat.name}</div>
-                    ) : (
-                      <button
-                        className="cat-reveal-btn"
-                        title="Click to reveal this category"
-                        onClick={() => board.revealCategory(cat, playCatRevealSfx)}
-                      >
-                        <span className="cat-reveal-mark">?</span>
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
+          {rd.type === "final" ? (
+            <FinalJeopardyBoard
+              rd={rd}
+              editMode={editMode}
+              teams={data.teams}
+              final={final}
+              adjustTeamScore={teams.adjustTeamScore}
+              appConfirm={appConfirm}
+              appAlert={appAlert}
+              resolveDiscordMembersForTeam={teams.resolveDiscordMembersForTeam}
+              players={persistence.players}
+              playerStats={playerStats}
+            />
+          ) : (
+            <ClueGrid
+              rd={rd}
+              nCats={nCats}
+              nRows={nRows}
+              boardGridStyle={boardGridStyle}
+              editMode={editMode}
+              boardFlip={board.boardFlip}
+              flipDelay={board.flipDelay}
+              revealedCats={board.revealedCats}
+              revealCategory={(cat) => board.revealCategory(cat, playCatRevealSfx)}
+              renameCategory={board.renameCategory}
+              removeCategory={board.removeCategory}
+              addCategory={board.addCategory}
+              changeRowValue={board.changeRowValue}
+              removeRow={board.removeRow}
+              addRow={board.addRow}
+              dragSource={board.dragSource}
+              setDragSource={board.setDragSource}
+              dragOverKey={board.dragOverKey}
+              setDragOverKey={board.setDragOverKey}
+              swapClueCells={board.swapClueCells}
+              openEditModal={clueEditor.openEditModal}
+              openClueModal={clueEditor.openClueModal}
+              toggleDailyDouble={board.toggleDailyDouble}
+              blankClue={blankClue}
+            />
+          )}
 
-              {editMode && (
-                <div className="grid-add-column-cell" style={{ gridColumn: nCats + 2, gridRow: `1 / span ${nRows + 1}` }}>
-                  <button title="Add Category Column" onClick={board.addCategory}>
-                    +
-                  </button>
-                </div>
-              )}
-
-              {rd.values.map((v, rowIndex) => {
-                const gridRowPosition = rowIndex + 2;
-                return (
-                  <React.Fragment key={v}>
-                    {editMode && (
-                      <div className="row-control-cell" style={{ gridRow: gridRowPosition, gridColumn: 1 }}>
-                        <input
-                          className="row-value-input"
-                          type="number"
-                          min="1"
-                          defaultValue={v}
-                          key={v + "-value"}
-                          title="Point value for this row"
-                          onBlur={(e) => board.changeRowValue(v, e.target.value)}
-                          onWheel={(e) => e.target.blur()}
-                        />
-                        <button className="row-delete-btn" title="Delete this row value pattern" onClick={() => board.removeRow(v)}>
-                          <span className="icon">✕</span>
-                        </button>
-                      </div>
-                    )}
-
-                    {rd.categories.map((cat, catIndex) => {
-                      const clue = cat.clues[v] || blankClue();
-                      const cellKey = cat.id + "-" + v;
-                      return (
-                        <div
-                          key={cellKey}
-                          className={
-                            "clue-cell" +
-                            (clue.used ? " used" : "") +
-                            (editMode ? " edit-mode-cell" : "") +
-                            (board.boardFlip === "out" ? " flip-out" : "") +
-                            (board.boardFlip === "in-start" ? " flip-in-start" : "") +
-                            (editMode && board.dragSource && board.dragSource.catId === cat.id && board.dragSource.value === v ? " drag-source" : "") +
-                            (editMode &&
-                            board.dragOverKey === cellKey &&
-                            !(board.dragSource && board.dragSource.catId === cat.id && board.dragSource.value === v)
-                              ? " drag-over"
-                              : "")
-                          }
-                          style={{
-                            gridRow: gridRowPosition,
-                            gridColumn: editMode ? catIndex + 2 : catIndex + 1,
-                            transitionDelay: board.flipDelay(catIndex),
-                          }}
-                          draggable={editMode}
-                          onDragStart={(e) => {
-                            if (!editMode) return;
-                            board.setDragSource({ catId: cat.id, value: v });
-                            e.dataTransfer.effectAllowed = "move";
-                            e.dataTransfer.setData("text/plain", cellKey);
-                          }}
-                          onDragOver={(e) => {
-                            if (!editMode || !board.dragSource) return;
-                            e.preventDefault();
-                            e.dataTransfer.dropEffect = "move";
-                            if (board.dragOverKey !== cellKey) board.setDragOverKey(cellKey);
-                          }}
-                          onDragLeave={() => {
-                            board.setDragOverKey((k) => (k === cellKey ? null : k));
-                          }}
-                          onDrop={(e) => {
-                            e.preventDefault();
-                            if (!editMode || !board.dragSource) return;
-                            board.swapClueCells(board.dragSource, { catId: cat.id, value: v });
-                            board.setDragSource(null);
-                            board.setDragOverKey(null);
-                          }}
-                          onDragEnd={() => {
-                            board.setDragSource(null);
-                            board.setDragOverKey(null);
-                          }}
-                          onClick={() => {
-                            if (editMode) {
-                              playClickSfx();
-                              clueEditor.openEditModal(cat, v);
-                            } else if (!clue.used) {
-                              playClickSfx();
-                              clueEditor.openClueModal(cat, v);
-                            }
-                          }}
-                          onMouseEnter={() => {
-                            if (editMode || !clue.used) playHoverTick();
-                          }}
-                        >
-                          <div className="clue-value">${v}</div>
-                          {editMode && clue.question?.trim() && clue.answer?.trim() && (
-                            <div className={`media-dot ${clue.mediaUrl ? "has-media" : ""}`}>●</div>
-                          )}
-                        </div>
-                      );
-                    })}
-                  </React.Fragment>
-                );
-              })}
-
-              {editMode && (
-                <div className="grid-add-row-cell" style={{ gridColumn: `1 / span ${nCats + 1}`, gridRow: nRows + 2 }}>
-                  <button title="Add Value Row" onClick={board.addRow}>
-                    +
-                  </button>
-                </div>
-              )}
-            </div>
-          </div>
-
+          {!(rd.type === "final" && rd.phase === "done" && rd.standingsRevealed) && (
           <div id="scoreboardSection">
             <div id="teamsWrap">
             {[...data.teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).map((team, rankIdx) => {
@@ -534,6 +698,7 @@ export default function JeopardyBoard({ onBack }) {
             )}
             </div>
           </div>
+          )}
 
           <div className="save-indicator">{session.saveMsg || "\u00A0"}</div>
 
@@ -555,7 +720,7 @@ export default function JeopardyBoard({ onBack }) {
               onMediaStateChange={(state) => setPlaybackState((prev) => ({ ...prev, ...state }))}
               resolveDiscordMembersForTeam={teams.resolveDiscordMembersForTeam}
               scorePulse={teams.scorePulse}
-              buzzerEnabled={buzzerEnabled}
+              buzzerEnabled={buzzerEnabled && (!activeClueObj.isDailyDouble || !!data.settings.ddBuzzerEnabled)}
               buzzerLive={buzzerLive}
               buzzerWinner={buzzerWinner}
               buzzerQueue={buzzerQueue}
@@ -563,7 +728,14 @@ export default function JeopardyBoard({ onBack }) {
               onArmBuzzer={armBuzzer}
               onResetBuzzer={resetBuzzer}
               onNextBuzzer={nextBuzzer}
+              onPrevBuzzer={prevBuzzer}
               resolveTeamForDiscordUser={teams.resolveTeamForDiscordUser}
+              onJudgeAnswer={judgeAnswer}
+              dailyDoubleWager={dailyDoubleWager}
+              onSetWager={setDailyDoubleWager}
+              controlDiscordUserId={controlDiscordUserId}
+              ddMinWagerZero={data.settings.ddMinWagerZero}
+              ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
             />
           )}
 
@@ -578,6 +750,8 @@ export default function JeopardyBoard({ onBack }) {
               onSave={clueEditor.saveClue}
               onClose={clueEditor.closeEditModal}
               defaultTimerSeconds={data.settings.timerDuration}
+              categoryName={editingCat?.name}
+              clueValue={clueEditor.editingTarget.value}
             />
           )}
 
@@ -597,17 +771,22 @@ export default function JeopardyBoard({ onBack }) {
       )}
 
       <ConfirmDialog dialog={dialog} onResolve={resolveDialog} />
-      {bgm.bgmSettings && (
+      {bgm.bgmSettings && bgm.activeTrack && (
         <BackgroundMusicPlayer
-          settings={bgm.bgmSettings}
+          track={bgm.activeTrack}
+          volume={bgm.bgmSettings.volume}
+          mode={bgm.bgmSettings.mode}
+          onSetMode={bgm.setBgmMode}
+          roundLabel={roundLabel}
           onUploadFile={bgm.handleBgmUpload}
           onClear={bgm.clearBgm}
           onVolumeChange={bgm.setBgmVolume}
           onToggleLoop={bgm.toggleBgmLoop}
-          onSetSource={bgm.setBgmSource}
-          onSetSpotifyUrl={bgm.setBgmSpotifyUrl}
+          onSetDirectUrl={bgm.setBgmDirectUrl}
           onPlaybackChange={publishBgm}
-          ducking={clueEditor.duckMusic}
+          ducking={clueEditor.duckMusic || sfxDucking}
+          finalStandingsVolume={finalStandingsVolume}
+          onFinalStandingsVolumeChange={handleFinalStandingsVolumeChange}
         />
       )}
     </div>

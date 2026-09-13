@@ -7,10 +7,9 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "bot-server": "node discord-bot/server.js",
-    "bot-app": "node discord-bot/bot-server.js",
+    "test": "node --test tests/final-jeopardy.test.js",
     "tunnel": "npx cloudflared --url http://localhost:5173",
-    "start:all": "concurrently \"npm run bot-server\" \"npm run bot-app\" \"npm run dev\" \"npm run tunnel\""
+    "jeopardy": "concurrently \"cd discord-bot && npm run start\" \"npm run dev\" \"npm run tunnel\""
   },
   "dependencies": {
     "@discord/embedded-app-sdk": "^2.5.0",

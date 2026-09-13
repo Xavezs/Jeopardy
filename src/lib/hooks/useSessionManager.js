@@ -60,7 +60,7 @@ export function useSessionManager({ persistence, ensureClueGrid, performFlip, in
     const rd = sessionRef.current.data.rounds[sessionRef.current.data.currentRound];
 
     return performFlip(
-      () => rd.categories.length,
+      () => Math.max(1, rd?.categories?.length || 0),
       async () => {
         const loaded = await SessionStore.loadSession(id);
         if (!loaded) return null;
@@ -80,7 +80,7 @@ export function useSessionManager({ persistence, ensureClueGrid, performFlip, in
     const rd = sessionRef.current.data.rounds[sessionRef.current.data.currentRound];
 
     return performFlip(
-      () => rd.categories.length,
+      () => Math.max(1, rd?.categories?.length || 0),
       async () => {
         const created = await SessionStore.createSession(name);
         await SessionStore.setCurrentId(created.id);

@@ -1,6 +1,15 @@
 import React from "react";
 import { playHoverTick, playClickSfx } from "../lib/boardSfx";
 
+// Small icon for the hover-preview media badge — falls back to a generic
+// 📎 when there's a URL but no sniffable type (e.g. a Google Drive share
+// link; see detectMediaTypeFromUrl in mediaStore.js, which returns "" for
+// exactly that case). Presence of the badge is driven by the *Url field,
+// not the *Type field, so it still shows up even when type is unknown.
+function mediaBadgeIcon(type) {
+  return { image: "🖼", video: "🎬", audio: "🎵" }[type] || "📎";
+}
+
 /* =========================================================================
    CLUE GRID
    The category headers + clue-value cells for the currently active round.
@@ -37,6 +46,7 @@ export default function ClueGrid({
   swapClueCells,
   openEditModal,
   openClueModal,
+  toggleDailyDouble,
   blankClue,
 }) {
   return (
@@ -116,6 +126,17 @@ export default function ClueGrid({
               {rd.categories.map((cat, catIndex) => {
                 const clue = cat.clues[v] || blankClue();
                 const cellKey = cat.id + "-" + v;
+                // Host edit-mode hover preview: only cells with BOTH a question
+                // and an answer filled in get the flip-to-reveal treatment —
+                // flipping an empty/half-written clue would just show blank
+                // faces, which is confusing rather than useful.
+                // Every clue cell now gets the flip-to-reveal treatment in edit
+                // mode, even ones that aren't fully written yet — a half-written
+                // clue just shows a "not written yet" placeholder on whichever
+                // face is missing text, instead of being excluded from flipping.
+                const hasPreview = editMode;
+                const questionText = clue.question?.trim() || "No question yet";
+                const answerText = clue.answer?.trim() || "No answer yet";
                 return (
                   <div
                     key={cellKey}
@@ -123,6 +144,7 @@ export default function ClueGrid({
                       "clue-cell" +
                       (clue.used ? " used" : "") +
                       (editMode ? " edit-mode-cell" : "") +
+                      (hasPreview ? " has-clue-preview" : "") +
                       (boardFlip === "out" ? " flip-out" : "") +
                       (boardFlip === "in-start" ? " flip-in-start" : "") +
                       (editMode && dragSource && dragSource.catId === cat.id && dragSource.value === v ? " drag-source" : "") +
@@ -175,12 +197,81 @@ export default function ClueGrid({
                       if (editMode || !clue.used) playHoverTick();
                     }}
                   >
-                    <div className="clue-value">${v}</div>
-                    {editMode &&
-                      clue.question?.trim() &&
-                      clue.answer?.trim() && (
-                        <div className={`media-dot ${clue.mediaUrl ? "has-media" : ""}`}>●</div>
-                      )}
+                    {hasPreview ? (
+                      <div className="cell-flip-viewport">
+                        <div className="cell-flip-inner">
+                          <div className="cell-flip-face cell-flip-front">
+                            <div className="clue-value">${v}</div>
+                            <div className="cell-preview-text">{questionText}</div>
+                            {clue.mediaUrl && (
+                              <span
+                                className="clue-media-badge"
+                                title={`${clue.mediaType || "file"} attached to the question`}
+                              >
+                                {mediaBadgeIcon(clue.mediaType)}
+                              </span>
+                            )}
+                            <button
+                              type="button"
+                              className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                              title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleDailyDouble(cat, v);
+                              }}
+                            >
+                              DD
+                            </button>
+                          </div>
+                          <div className="cell-flip-face cell-flip-back">
+                            <div className="cell-preview-label">Answer</div>
+                            <div className="cell-preview-text">{answerText}</div>
+                            {clue.answerMediaUrl && (
+                              <span
+                                className="clue-media-badge"
+                                title={`${clue.answerMediaType || "file"} attached to the answer`}
+                              >
+                                {mediaBadgeIcon(clue.answerMediaType)}
+                              </span>
+                            )}
+                            {/* Same DD toggle, mirrored onto the back face — without
+                                this the badge only existed on the front face and
+                                effectively vanished once the card was flipped
+                                (hover), even though the clue's DD status hadn't
+                                changed. Same handler, so toggling from either face
+                                stays in sync. */}
+                            <button
+                              type="button"
+                              className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                              title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleDailyDouble(cat, v);
+                              }}
+                            >
+                              DD
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="clue-value">${v}</div>
+                        {editMode && (
+                          <button
+                            type="button"
+                            className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}
+                            title={clue.isDailyDouble ? "Unmark as Daily Double" : "Mark as Daily Double"}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              toggleDailyDouble(cat, v);
+                            }}
+                          >
+                            DD
+                          </button>
+                        )}
+                      </>
+                    )}
                   </div>
                 );
               })}

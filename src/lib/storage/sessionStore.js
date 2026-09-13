@@ -32,6 +32,7 @@ export function blankClue() {
     answerMediaType: "",
     used: false,
     timerSeconds: null,
+    isDailyDouble: false,
   };
 }
 export function blankCategory(name, valuesArray) {
@@ -45,6 +46,27 @@ export function blankCategory(name, valuesArray) {
     }, {}),
   };
 }
+
+// Final Jeopardy is shaped completely differently from a normal round: 1
+// clue instead of a category×value grid, plus per-team wager/answer state
+// that only exists live during play. `phase` drives the host UI through
+// category -> wager -> clue -> answer -> reveal -> done, and `revealOrder`
+// is locked in (score-ascending) the moment reveal starts so it can't
+// shift mid-reveal as scores change.
+export function blankFinalRound(name) {
+  return {
+    type: "final",
+    name: name || "Final Jeopardy",
+    category: "",
+    clue: blankClue(),
+    phase: "category", // "category" | "wager" | "clue" | "answer" | "reveal" | "done"
+    wagers: {}, // teamId -> number
+    answers: {}, // teamId -> string
+    revealOrder: [], // teamIds, locked in when reveal starts
+    revealedTeamIds: [], // teamIds already judged, in reveal order
+  };
+}
+
 export function defaultSessionData() {
   const initialValues = [100, 200, 300, 400, 500];
   const doubleValues = initialValues.map((v) => v * 2);
@@ -54,6 +76,7 @@ export function defaultSessionData() {
     rounds: [
       { name: "Normal Jeopardy", values: initialValues, categories: catNames.map((n) => blankCategory(n, initialValues)) },
       { name: "Double Jeopardy", values: doubleValues, categories: catNames.map((n) => blankCategory(n, doubleValues)) },
+      blankFinalRound("Final Jeopardy"),
     ],
     currentRound: 0,
     teams: [
@@ -145,6 +168,23 @@ export const SessionStore = {
       body: JSON.stringify({ discordChannelId }),
     });
   },
+
+  // POST /api/boards/:id/games — call once when the host ends the game.
+  // finalScores should be shaped like:
+  //   { teams: [{id,name,score}], ranking: [{teamId,rank,score}],
+  //     playerStats: { [discordUserId]: {username, correct, wrong, teamId} } }
+  async saveGameResult(boardId, finalScores) {
+    return await api("/api/boards/" + boardId + "/games", {
+      method: "POST",
+      body: JSON.stringify({ finalScores }),
+    });
+  },
+
+  // GET /api/boards/:id/games — past playthroughs for this board, most
+  // recent first. Powers a "game history" / leaderboard view.
+  async getGameHistory(boardId) {
+    return await api("/api/boards/" + boardId + "/games");
+  },
 };
 
 export function migrateClueSchemaIfNeeded(data) {
@@ -168,11 +208,30 @@ export function migrateClueSchemaIfNeeded(data) {
     delete data.categories;
     delete data.values;
   }
+
+  // Legacy boards (created before Final Jeopardy existed) won't have a
+  // round with type "final" yet — append one. Runs after the `!data.rounds`
+  // branch above, so a board with zero rounds at all also ends up with one.
+  if (!data.rounds.some((r) => r.type === "final")) {
+    data.rounds.push(blankFinalRound("Final Jeopardy"));
+  }
+
   if (data.currentRound === undefined || data.currentRound === null || !data.rounds[data.currentRound]) {
     data.currentRound = 0;
   }
 
   data.rounds.forEach((round) => {
+    if (round.type === "final") {
+      if (!round.clue) round.clue = blankClue();
+      if (round.category === undefined) round.category = "";
+      if (!round.phase) round.phase = "category";
+      if (!round.wagers) round.wagers = {};
+      if (!round.answers) round.answers = {};
+      if (!round.revealOrder) round.revealOrder = [];
+      if (!round.revealedTeamIds) round.revealedTeamIds = [];
+      return; // skip the grid-shape migration below — final has no grid
+    }
+
     if (!round.values) round.values = [100, 200, 300, 400, 500];
     if (!round.categories) round.categories = [];
     round.categories.forEach((cat) => {
@@ -198,6 +257,7 @@ export function migrateClueSchemaIfNeeded(data) {
         if (clue.answerMediaUrl === undefined) clue.answerMediaUrl = "";
         if (clue.answerMediaType === undefined) clue.answerMediaType = "";
         if (clue.timerSeconds === undefined) clue.timerSeconds = null;
+        if (clue.isDailyDouble === undefined) clue.isDailyDouble = false;
       });
     });
   });

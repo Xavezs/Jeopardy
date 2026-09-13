@@ -1,77 +1,73 @@
 // src/components/LoginGate.jsx
-import { useEffect, useState, createContext, useContext } from "react";
-import { discordSdk } from "../discordSdk";
+import { useEffect, useState } from "react";
+import { discordSdk, getDiscordIdentity, resetDiscordSdk } from "../discordSdk";
 import { API_BASE } from "../lib/api";
-
-const CLIENT_ID = import.meta.env.VITE_DISCORD_CLIENT_ID;
-export const DiscordContext = createContext(null);
+import { DiscordContext } from "./DiscordContext";
 
 export default function LoginGate({ children }) {
   const [status, setStatus] = useState("initializing");
   const [authData, setAuthData] = useState(null);
+  const [retryCount, setRetryCount] = useState(0);
 
   useEffect(() => {
-    async function setupDiscordActivity() {
-      const queryParams = new URLSearchParams(window.location.search);
-      const isDiscordIframe = queryParams.has("frame_id");
+    let cancelled = false;
+    const isDiscordIframe = new URLSearchParams(window.location.search).has("frame_id");
 
+    function setStatusIfActive(nextStatus) {
+      if (!cancelled) setStatus(nextStatus);
+    }
+
+    async function setupDiscordActivity() {
       if (isDiscordIframe) {
         // --- 1. RUNNING INSIDE DISCORD ACTIVITY IFRAME ---
-        // Reuses the single guarded DiscordSDK instance from discordSdk.js
-        // instead of constructing a second one here. Two separate SDK
-        // instances both try to complete the RPC handshake against the
-        // same frame_id, and Discord's RPC server only tracks one live
-        // handshake per frame — the loser gets a confusing "Unrecognized
-        // frame ID" RPCError. One instance, shared, avoids the race.
+        // Reuses the shared, page-lifetime-cached getDiscordIdentity()
+        // flow from discordSdk.js instead of calling
+        // discordSdk.ready()/commands.authorize() directly here.
+        //
+        // This used to be a separate, uncached implementation. In React
+        // StrictMode (and on any double-mount) that fired a second
+        // authorize() while the first was still in flight, which Discord's
+        // SDK rejects with "Already authing" — the failed call's promise
+        // never resolved status to "in" or "error" cleanly, leaving the
+        // screen stuck on "Loading Discord Activity..." forever. That
+        // failure mode only showed up here (Host) because the Join flow
+        // in App.jsx already went through getDiscordIdentity()'s shared
+        // setupPromise/identityPromise cache; this path didn't.
+        //
+        // getDiscordIdentity() internally calls discordSdk.ready(),
+        // commands.authorize() (scope: ['identify', 'rpc.voice.read'] —
+        // see discordSdk.js for why 'guilds' was dropped), exchanges the
+        // code via POST /api/auth/token, and calls
+        // discordSdk.commands.authenticate() with the resulting
+        // access_token. It returns { id, username, avatarUrl } or null.
         if (!discordSdk) {
           console.error("Discord SDK unavailable: missing VITE_DISCORD_CLIENT_ID or SDK construction failed.");
-          setStatus("error");
+          setStatusIfActive("error");
           return;
         }
         try {
-          await discordSdk.ready();
+          const user = await getDiscordIdentity();
+          if (!user) throw new Error("No identity returned from Discord");
 
-          const { code } = await discordSdk.commands.authorize({
-            client_id: CLIENT_ID,
-            response_type: "code",
-            state: "",
-            prompt: "none",
-            scope: ["identify", "guilds"],
-          });
-
-          const res = await fetch(`${API_BASE}/api/auth/token`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Discord-Activity": "1",
-            },
-            credentials: "include",
-            body: JSON.stringify({ code }),
-          });
-
-          const data = await res.json();
-          if (!res.ok) throw new Error(data.error || "Failed to exchange token");
-
-          await discordSdk.commands.authenticate({ access_token: data.access_token });
-
-          setAuthData({
-            sdk: discordSdk,
-            user: data.user,
-            guildId: discordSdk.guildId,
-            channelId: discordSdk.channelId,
-            instanceId: discordSdk.instanceId,
-          });
-          setStatus("in");
+          if (!cancelled) {
+            setAuthData({
+              sdk: discordSdk,
+              user,
+              guildId: discordSdk.guildId,
+              channelId: discordSdk.channelId,
+              instanceId: discordSdk.instanceId,
+            });
+            setStatus("in");
+          }
         } catch (err) {
           console.error("Discord SDK authorization failed:", err);
-          setStatus("error");
+          setStatusIfActive("error");
         }
       } else {
         // --- 2. RUNNING IN STANDALONE BROWSER MODE ---
         console.log("Running in local browser mode (Outside Discord iframe)");
 
         if (import.meta.env.DEV) {
-          // src/components/LoginGate.jsx (inside the fallback block)
           try {
             const res = await fetch(`${API_BASE}/api/auth/dev-login`, {
               method: "POST",
@@ -84,31 +80,37 @@ export default function LoginGate({ children }) {
 
             const data = await res.json();
 
-            setAuthData({
-              sdk: null,
-              user: data.user,
-              guildId: "mock_guild",
-              channelId: "mock_channel",
-              instanceId: "mock_instance",
-            });
-            setStatus("in");
+            if (!cancelled) {
+              setAuthData({
+                sdk: null,
+                user: data.user,
+                guildId: "mock_guild",
+                channelId: "mock_channel",
+                instanceId: "mock_instance",
+              });
+              setStatus("in");
+            }
           } catch (err) {
             console.error("Dev authentication failed:", err);
-            setStatus("error");
+            setStatusIfActive("error");
           }
           return;
         }
 
-        setStatus("error");
+        setStatusIfActive("error");
       }
     }
 
     setupDiscordActivity();
-  }, []);
+
+    return () => {
+      cancelled = true;
+    };
+  }, [retryCount]);
 
   if (status === "initializing") {
     return (
-      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff" }}>
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff", background: "#070a20" }}>
         <h3>Loading Discord Activity…</h3>
       </main>
     );
@@ -116,9 +118,19 @@ export default function LoginGate({ children }) {
 
   if (status === "error") {
     return (
-      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column" }}>
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column", gap: "12px", background: "#070a20" }}>
         <h3>Failed to connect to Discord</h3>
         <p>Make sure this app is running inside Discord as an Activity or backend server is active.</p>
+        <button
+          onClick={() => {
+            resetDiscordSdk();
+            setStatus("initializing");
+            setRetryCount((n) => n + 1);
+          }}
+          style={{ padding: "8px 20px", borderRadius: "6px", border: "none", background: "#5865F2", color: "#fff", cursor: "pointer", fontSize: "14px" }}
+        >
+          Retry
+        </button>
       </main>
     );
   }
@@ -129,5 +141,3 @@ export default function LoginGate({ children }) {
     </DiscordContext.Provider>
   );
 }
-
-export const useDiscordAuth = () => useContext(DiscordContext);

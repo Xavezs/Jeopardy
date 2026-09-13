@@ -14,6 +14,17 @@
 //   what they're allowed to do (editor can edit/save, viewer read-only).
 //   The owner is NOT duplicated into this table — ownership is still
 //   boards.owner_id, board_members is purely for *additional* people.
+//
+// CHANGES FOR END-GAME STATS:
+// - saved_games: one row per completed play session of a board. Distinct
+//   from `boards` itself (the editable template) — this is a snapshot of
+//   how one specific playthrough ended, written once when the host ends
+//   the game. final_scores is a JSON blob shaped like:
+//     { teams: [{id,name,score}], ranking: [{teamId,rank,score}],
+//       playerStats: { [discordUserId]: {username, correct, wrong, teamId} } }
+//   Kept as opaque JSON (like boards.data) rather than normalized columns
+//   since the shape is still evolving and nothing here needs to be
+//   queried/filtered at the SQL level yet — just listed per board.
 
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
@@ -44,6 +55,15 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_members_user ON board_members(user_id);
   CREATE INDEX IF NOT EXISTS idx_members_board ON board_members(board_id);
+
+  CREATE TABLE IF NOT EXISTS saved_games (
+    id TEXT PRIMARY KEY,
+    board_id TEXT NOT NULL,
+    host_id TEXT NOT NULL,
+    final_scores TEXT NOT NULL,
+    played_at INTEGER NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_saved_games_board ON saved_games(board_id);
 `);
 
 // --- lightweight migration for DBs created before this update ---

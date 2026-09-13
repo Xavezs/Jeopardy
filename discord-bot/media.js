@@ -306,15 +306,32 @@ const CACHE_TTL_MS = 15 * 60 * 1000; // 15 min — plenty for a single game sess
 // call at Google right away — during a cool-down window that just means
 // more requests hitting the wall, which is the opposite of what you want.
 // Caching failures for a short, separate (shorter than the success) TTL
-// means one bad patch of luck gets absorbed instead of cascading.
-const FAILURE_CACHE_TTL_MS = 30 * 1000; // 30s — short enough that a real fix (e.g. re-sharing a file) is picked up quickly
+// means one bad patch of luck gets absorbed instead of cascading. A
+// deliberate manual retry (force=1) skips this cache outright — see
+// freshCacheEntry — so a user-initiated retry always gets a real attempt
+// instead of reading back the same cached error.
+// Was 30s — shortened to 6s. With in-flight coalescing already absorbing
+// simultaneous first-time bursts (see block comment above), 30s meant a
+// client's own auto-retry (and often a following manual "Retry" click)
+// landed well inside the same window and just re-read the same stale
+// error without ever reaching Google again. 6s is still enough to stop a
+// tight retry loop from hammering the wall, but short enough that a
+// deliberate retry a few seconds later gets a real attempt.
+const FAILURE_CACHE_TTL_MS = 6 * 1000;
 
 const driveFileCache = new Map(); // fileId -> { buffer, contentType, ts } | { error, status, ts }
 const driveFileInFlight = new Map(); // fileId -> Promise
 const driveMetaCache = new Map(); // fileId -> { mimeType, name, ts } | { error, status, ts }
 const driveMetaInFlight = new Map(); // fileId -> Promise
 
-function freshCacheEntry(cache, fileId) {
+// `force=true` (from the client's manual Retry button, not the automatic
+// first retry) skips this cache read entirely, even if the entry is still
+// within its TTL — so a deliberate retry always reaches Google for a
+// fresh answer instead of being handed the same cached error (or, in the
+// success case, the same content — harmless, but force is meant to mean
+// "actually try again").
+function freshCacheEntry(cache, fileId, force) {
+  if (force) return null;
   const cached = cache.get(fileId);
   if (!cached) return null;
   const ttl = cached.error ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS;
@@ -322,25 +339,69 @@ function freshCacheEntry(cache, fileId) {
   return cached;
 }
 
-async function getDriveFile(fileId) {
-  const cached = freshCacheEntry(driveFileCache, fileId);
+// Files above this size still get fetched and served to the requester
+// (and still benefit from in-flight coalescing while that fetch is in
+// progress — see driveFileInFlight/proxyFileInFlight), but the result is
+// deliberately NOT written into the long-lived success cache. Jeopardy
+// clues are usually short clips/images, but Drive in particular has no
+// size limit of its own, so nothing stops a host from attaching a long
+// video — without this cap, every large file that's ever been loaded
+// would sit fully buffered in RAM for the next 15 minutes (see
+// CACHE_TTL_MS) regardless of how big it was. A late-arriving client
+// after the in-flight window closes just triggers one more real fetch
+// instead of reading a giant buffer back from memory — worse latency for
+// that one request, but bounded memory use overall.
+const CACHE_MAX_BYTES = 20 * 1024 * 1024; // 20 MB
+
+// Wraps cache.set() with the size cap above. Only applies to success
+// entries — error entries are tiny (just a message string) and always
+// worth caching regardless of how big the file that failed would have
+// been, so those always go through a plain cache.set() elsewhere.
+function setCappedCacheEntry(cache, key, entry) {
+  if (entry.buffer && entry.buffer.length > CACHE_MAX_BYTES) return;
+  cache.set(key, entry);
+}
+
+// Periodic sweep: freshCacheEntry() above only ever treats a stale entry
+// as absent, it never removes it — so without this, every fileId/url
+// this server has ever fetched stays in memory for the life of the
+// process, whether or not it's still relevant to any game in progress.
+// This actually deletes entries once they're past their TTL (using the
+// same error-vs-success TTL split as freshCacheEntry), so long-running
+// server uptime doesn't mean ever-growing memory from boards that
+// finished their game hours or days ago.
+const CACHE_SWEEP_INTERVAL_MS = 5 * 60 * 1000; // 5 min
+
+function sweepCache(cache) {
+  const now = Date.now();
+  for (const [key, entry] of cache) {
+    const ttl = entry.error ? FAILURE_CACHE_TTL_MS : CACHE_TTL_MS;
+    if (now - entry.ts >= ttl) cache.delete(key);
+  }
+}
+
+async function getDriveFile(fileId, force) {
+  const cached = freshCacheEntry(driveFileCache, fileId, force);
   if (cached) {
-    if (cached.error) throw Object.assign(new Error(cached.error), { status: cached.status });
+    if (cached.error) {
+      console.warn(`[media] serving cached failure for ${fileId} (age ${Math.round((Date.now() - cached.ts) / 1000)}s) — not retrying Google`);
+      throw Object.assign(new Error(cached.error), { status: cached.status });
+    }
     return cached;
   }
 
-  if (driveFileInFlight.has(fileId)) return driveFileInFlight.get(fileId);
+  if (!force && driveFileInFlight.has(fileId)) return driveFileInFlight.get(fileId);
 
   const promise = (async () => {
     // Reuses getDriveMeta (cached/coalesced same as this function) to get
     // the real Content-Type, since curl's stdout for the alt=media request
     // is just raw bytes with no headers attached to inspect.
     try {
-      const meta = await getDriveMeta(fileId);
+      const meta = await getDriveMeta(fileId, force);
       const { url, headers } = await buildDriveRequest(fileId, 'alt=media');
       const buffer = await curlGetBuffer(url, headers);
       const entry = { buffer, contentType: meta.mimeType || 'application/octet-stream', ts: Date.now() };
-      driveFileCache.set(fileId, entry);
+      setCappedCacheEntry(driveFileCache, fileId, entry);
       return entry;
     } catch (e) {
       console.error('[media] gdrive curl fetch failed:', e.message);
@@ -365,14 +426,14 @@ async function getDriveFile(fileId) {
   }
 }
 
-async function getDriveMeta(fileId) {
-  const cached = freshCacheEntry(driveMetaCache, fileId);
+async function getDriveMeta(fileId, force) {
+  const cached = freshCacheEntry(driveMetaCache, fileId, force);
   if (cached) {
     if (cached.error) throw Object.assign(new Error(cached.error), { status: cached.status });
     return cached;
   }
 
-  if (driveMetaInFlight.has(fileId)) return driveMetaInFlight.get(fileId);
+  if (!force && driveMetaInFlight.has(fileId)) return driveMetaInFlight.get(fileId);
 
   const promise = (async () => {
     try {
@@ -408,8 +469,91 @@ async function getDriveMeta(fileId) {
   }
 }
 
-// GET /api/media/gdrive/:fileId
-// Proxies a Google Drive file so it loads same-origin — Drive isn't in the
+// Pulls a Drive fileId out of the various share-link shapes Google hands
+// out (`/file/d/<id>/...`, `?id=<id>`, `/d/<id>/...`). Intentionally
+// permissive/best-effort — this is only used for the prewarm below, so a
+// missed match just means no prewarm happens (falling back to the normal
+// on-demand fetch when a client actually requests it), never a hard error.
+function extractDriveFileId(url) {
+  if (typeof url !== 'string') return null;
+  const patterns = [
+    /\/file\/d\/([a-zA-Z0-9_-]+)/,
+    /[?&]id=([a-zA-Z0-9_-]+)/,
+    /\/d\/([a-zA-Z0-9_-]+)/,
+  ];
+  for (const re of patterns) {
+    const m = url.match(re);
+    if (m) return m[1];
+  }
+  return null;
+}
+
+// Fire-and-forget: kicks off the same cached/coalesced/queued fetch the
+// gdrive proxy route uses, but BEFORE any client actually requests the
+// file — called from bot-server.js's selectClue handler the moment a clue
+// is picked, so the Drive round-trip happens while the host's ClueModal
+// is still opening instead of after every player's <video>/<audio> tag
+// requests it. By the time players actually hit /api/media/gdrive/:fileId,
+// getDriveFile's own cache (see driveFileCache above) serves them straight
+// from memory. Errors are swallowed here on purpose — the real
+// /api/media/gdrive/:fileId route still runs (and still surfaces a proper
+// error to the client) if this prewarm attempt fails or a fileId can't be
+// extracted at all; this is purely a latency optimization, never a
+// dependency.
+function prewarmDriveMedia(url) {
+  const fileId = extractDriveFileId(url);
+  if (!fileId) return;
+  getDriveFile(fileId).catch((e) => {
+    console.warn('[media] prewarm failed for', fileId, '-', e.message);
+  });
+}
+
+// Same fire-and-forget idea as prewarmDriveMedia, for a plain third-party
+// http(s) link (the /proxy route's cache — see getProxiedMedia below).
+function prewarmProxyMedia(url) {
+  getProxiedMedia(url).catch((e) => {
+    console.warn('[media] proxy prewarm failed for', url, '-', e.message);
+  });
+}
+
+// Walks EVERY clue in the board (both grid rounds — Final Jeopardy's
+// single clue/celebration sound is warmed by its own client-side
+// preloadStandingsCelebration flow instead, see boardSfx.js) and kicks
+// off a prewarm for each attached media URL, once, the moment this
+// room's board data first arrives from the host — not per clue reveal,
+// and never per-player. That's the key difference from client-side
+// preloading: a room with 6 players doesn't turn into 6x the network
+// cost, because no player's device ever fetches anything until the
+// server's own cache (driveFileCache / proxyFileCache above) already has
+// it. DRIVE_MAX_CONCURRENT + DRIVE_MIN_GAP_MS above already throttle the
+// actual Drive-bound requests this produces, so firing potentially dozens
+// of these at once here is safe — no separate queue needed on top.
+// `media:...` (Supabase-hosted upload) refs are skipped: those resolve to
+// a direct Supabase URL the browser fetches straight from Supabase's own
+// CDN, never through this server, so there's nothing here to warm.
+function prewarmAllBoardMedia(boardData) {
+  const rounds = boardData?.rounds || [];
+  for (const round of rounds) {
+    if (round.type === 'final') continue;
+    for (const cat of round.categories || []) {
+      for (const clue of Object.values(cat.clues || {})) {
+        for (const url of [clue.mediaUrl, clue.answerMediaUrl]) {
+          if (!url) continue;
+          if (/youtu\.?be/i.test(url)) continue; // iframe embed, never proxied/warmable
+          if (url.startsWith('media:')) continue; // Supabase-hosted — served directly, not through us
+          if (extractDriveFileId(url)) {
+            prewarmDriveMedia(url);
+          } else if (/^https?:\/\//i.test(url)) {
+            prewarmProxyMedia(url);
+          }
+        }
+      }
+    }
+  }
+}
+
+
+
 // CSP allowlist, and the actual file bytes get served from a
 // googleusercontent.com redirect target that isn't fixed per-file, so a
 // static URL Mapping can't just point at it directly.
@@ -442,6 +586,13 @@ async function getDriveMeta(fileId) {
 // in this file — anyone who can open the board can load its attachments.
 router.get('/gdrive/:fileId', async (req, res) => {
   const { fileId } = req.params;
+  // ?force=1 comes from the client's manual "Retry" button (see
+  // CustomVideoPlayer/CustomAudioPlayer/ClueMediaImage) — it means skip
+  // driveFileCache entirely, even a fresh negative-cache entry, and
+  // actually try Google again. The client's own automatic first retry
+  // does NOT set this, so a normal transient blip still benefits from
+  // in-flight coalescing instead of doubling up requests to Google.
+  const force = req.query.force === '1';
   if (!/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return res.status(400).send('Invalid file id');
   }
@@ -451,7 +602,7 @@ router.get('/gdrive/:fileId', async (req, res) => {
   }
 
   try {
-    const { buffer, contentType } = await getDriveFile(fileId);
+    const { buffer, contentType } = await getDriveFile(fileId, force);
     res.set('Content-Type', contentType);
     res.set('Content-Length', String(buffer.length));
     res.send(buffer);
@@ -472,6 +623,7 @@ router.get('/gdrive/:fileId', async (req, res) => {
 // actually trying the audio player).
 router.get('/gdrive/:fileId/meta', async (req, res) => {
   const { fileId } = req.params;
+  const force = req.query.force === '1';
   if (!/^[a-zA-Z0-9_-]+$/.test(fileId)) {
     return res.status(400).json({ error: 'Invalid file id' });
   }
@@ -480,13 +632,94 @@ router.get('/gdrive/:fileId/meta', async (req, res) => {
   }
 
   try {
-    const { mimeType, name } = await getDriveMeta(fileId);
+    const { mimeType, name } = await getDriveMeta(fileId, force);
     res.json({ mimeType, name });
   } catch (err) {
     console.error('[media] gdrive meta proxy failed:', err);
     res.status(err.status || 502).json({ error: err.message || 'Failed to load Google Drive file metadata' });
   }
 });
+
+/* -------------------------------------------------------------------------
+   GENERIC PROXY CACHE + IN-FLIGHT COALESCING
+   Same problem as the Drive fetch cache above, for arbitrary third-party
+   image/video/audio URLs (imgur, a news CDN, a personal image host, etc.)
+   pasted directly as a clue's media link: with N players in a room,
+   everyone's client hits /api/media/proxy?url=<same URL> within moments
+   of each other the instant a host opens a clue.
+
+   Unlike the gdrive route above, this one had ZERO caching or
+   coalescing until now — every client's request went straight upstream
+   with no dedup at all, so a burst of N simultaneous requests produced N
+   separate upstream fetches. If the source host is slow, rate-limits
+   bursts, or just blips on any one of those N attempts, that one
+   client's image comes back blank while everyone else's loads fine —
+   and since nothing here shared the result, closing and reopening the
+   clue is just a fresh, independent attempt that isn't racing N-1
+   siblings anymore, which is why it "works the second time" even though
+   nothing about the link itself changed.
+
+   Reuses freshCacheEntry/CACHE_TTL_MS/FAILURE_CACHE_TTL_MS from the
+   Drive cache above — same tradeoffs apply here.
+   ------------------------------------------------------------------------- */
+const proxyFileCache = new Map(); // url -> { buffer, contentType, ts } | { error, status, ts }
+const proxyFileInFlight = new Map(); // url -> Promise
+
+// 25s to match the Drive curl calls' --max-time above — a bare fetch()
+// has no timeout by default, so without this a hung upstream host could
+// leave a request (and everyone coalesced onto it) dangling far longer
+// than the client's own 45s giving up would suggest.
+const PROXY_FETCH_TIMEOUT_MS = 25 * 1000;
+
+async function getProxiedMedia(url, force) {
+  const cached = freshCacheEntry(proxyFileCache, url, force);
+  if (cached) {
+    if (cached.error) {
+      console.warn(`[media] serving cached failure for proxy url (age ${Math.round((Date.now() - cached.ts) / 1000)}s) — not retrying upstream: ${url}`);
+      throw Object.assign(new Error(cached.error), { status: cached.status });
+    }
+    return cached;
+  }
+
+  if (!force && proxyFileInFlight.has(url)) return proxyFileInFlight.get(url);
+
+  const promise = (async () => {
+    try {
+      const upstream = await fetch(url, { signal: AbortSignal.timeout(PROXY_FETCH_TIMEOUT_MS) });
+      if (!upstream.ok) {
+        const message = `Upstream error: ${upstream.status}`;
+        proxyFileCache.set(url, { error: message, status: upstream.status, ts: Date.now() });
+        const err = new Error(message);
+        err.status = upstream.status;
+        throw err;
+      }
+      const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
+      const buffer = Buffer.from(await upstream.arrayBuffer());
+      const entry = { buffer, contentType, ts: Date.now() };
+      setCappedCacheEntry(proxyFileCache, url, entry);
+      return entry;
+    } catch (e) {
+      // Already classified (upstream responded, just not with 2xx) and
+      // already cached above — just propagate as-is, don't re-log/re-cache.
+      if (e.status) throw e;
+      // A genuine network-level failure (DNS, connection refused, our
+      // own timeout above, etc.) — no upstream status to preserve.
+      console.error('[media] proxy fetch failed:', e.message, 'url=' + url);
+      const message = 'Failed to fetch media';
+      proxyFileCache.set(url, { error: message, status: 502, ts: Date.now() });
+      const err = new Error(message);
+      err.status = 502;
+      throw err;
+    }
+  })();
+
+  proxyFileInFlight.set(url, promise);
+  try {
+    return await promise;
+  } finally {
+    proxyFileInFlight.delete(url);
+  }
+}
 
 // GET /api/media/proxy?url=<encoded>
 // Proxies an arbitrary external image/video/audio URL through our own
@@ -499,24 +732,27 @@ router.get('/gdrive/:fileId/meta', async (req, res) => {
 // player: every attempt (img tag, video tag, audio tag, and the blob
 // prefetch fetch()) was being refused by the same CSP directives, not
 // actually failing to load.
+//
+// See getProxiedMedia above for the caching/coalescing this route relies
+// on to survive N players' clients all requesting the same clue's image
+// within the same moment.
 router.get('/proxy', async (req, res) => {
   const { url } = req.query;
+  // ?force=1 comes from the client's manual "Retry" button, same
+  // convention as /gdrive/:fileId above — skips the cache (even a fresh
+  // negative entry) and makes a real attempt.
+  const force = req.query.force === '1';
   if (!url || !/^https?:\/\//i.test(url)) {
     return res.status(400).send('Invalid url');
   }
   try {
-    const upstream = await fetch(url);
-    if (!upstream.ok) {
-      return res.status(upstream.status).send('Upstream error: ' + upstream.status);
-    }
-    const contentType = upstream.headers.get('content-type') || 'application/octet-stream';
-    const buffer = Buffer.from(await upstream.arrayBuffer());
+    const { buffer, contentType } = await getProxiedMedia(url, force);
     res.set('Content-Type', contentType);
     res.set('Content-Length', String(buffer.length));
     res.send(buffer);
   } catch (err) {
-    console.error('[media] proxy fetch failed:', err);
-    res.status(502).send('Failed to fetch media');
+    console.error('[media] proxy fetch failed:', err.message);
+    res.status(err.status || 502).send(err.message || 'Failed to fetch media');
   }
 });
 
@@ -551,8 +787,22 @@ async function deleteMediaForBoardData(data) {
   }
 }
 
+// Runs every 5 min for the life of the process, actually evicting stale
+// entries from every media cache instead of just letting them sit there
+// forever (see sweepCache above). driveMetaCache is included even though
+// its entries are tiny (no buffer, just a mimeType/name string) — no
+// harm in keeping it tidy too. .unref() so this interval alone doesn't
+// keep the Node process alive if everything else has already shut down.
+setInterval(() => {
+  sweepCache(driveFileCache);
+  sweepCache(driveMetaCache);
+  sweepCache(proxyFileCache);
+}, CACHE_SWEEP_INTERVAL_MS).unref();
+
 module.exports = router;
 module.exports.deleteMediaForBoardData = deleteMediaForBoardData;
+module.exports.prewarmDriveMedia = prewarmDriveMedia;
+module.exports.prewarmAllBoardMedia = prewarmAllBoardMedia;
 
 // Copies every Supabase Storage file attached to a board's clue data into
 // new keys namespaced under `newOwnerId`, and rewrites the clue refs to

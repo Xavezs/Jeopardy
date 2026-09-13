@@ -1,12 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=Quicksand:wght@300..700&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=Comfortaa:wght@700&display=swap');
-:root{
-    --bg: #0a0e27; --bg-deep: #060815; --cell: #12207a; --cell-light: #1c2f9e; --cell-dark: #0b1658;
-    --gold: #f0b942; --gold-dim: #a9822f; --teal: #2fd6b8; --red: #e8544a;
-    --text: #f4f1ea; --text-dim: #b9c0e8;
-    --font-display: 'Arial Black', Impact, 'Franklin Gothic Bold', sans-serif;
-    --font-body: 'Quicksand', sans-serif;
-  }
+@import url('./theme.css');
   .jp-root{
     background: radial-gradient(ellipse at top, #131c4d 0%, var(--bg) 45%, var(--bg-deep) 100%);
     color: var(--text); font-family: var(--font-body); min-height: 100vh; padding: 10px 14px 8px; box-sizing: border-box;
@@ -65,20 +57,23 @@
     text-align:center; margin: 4px auto 10px; position:relative;
     width: fit-content; max-width:100%;
     padding: 16px 20px 12px;
+    border-radius: 18px;
+    background: linear-gradient(160deg, #dcb35a 0%, #b5822a 55%, #83591a 100%);
+    box-shadow: 0 14px 34px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.2), inset 0 -2px 4px rgba(0,0,0,0.3);
   }
   .marquee::before{
-    content:""; position:absolute; inset:0; z-index:0; border-radius:16px;
-    background: linear-gradient(180deg, rgba(30,42,130,0.55), rgba(6,9,26,0.85));
-    border: 1px solid rgba(240,185,66,0.3);
-    box-shadow: inset 0 0 40px rgba(240,185,66,0.06), inset 0 1px 0 rgba(255,255,255,0.05), 0 14px 34px rgba(0,0,0,0.5);
+    content:""; position:absolute; inset:11px; z-index:0; border-radius:12px;
+    background: linear-gradient(180deg, #182658 0%, #0a0f2e 100%);
+    box-shadow: inset 0 0 28px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05);
   }
   .marquee-bulbs{
     position: absolute; inset: 9px; z-index: 1; pointer-events: none;
   }
   .marquee-bulb{
-    position: absolute; border-radius: 50%; background: var(--gold);
+    position: absolute; border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffffff 0%, #fff2b8 35%, var(--gold) 70%, #c99a3a 100%);
     transform: translate(-50%, -50%);
-    box-shadow: 0 0 6px 1px rgba(240,185,66,0.85), 0 0 2px rgba(255,255,255,0.6);
+    box-shadow: 0 0 12px 4px rgba(240,185,66,1), 0 0 5px rgba(255,255,255,0.95), inset 0 -1px 1px rgba(0,0,0,0.2);
     animation: bulbTwinkle 2.6s ease-in-out infinite;
   }
   @keyframes bulbTwinkle{ 0%, 45%{ opacity:1; } 50%{ opacity:.35; } 55%,100%{ opacity:1; } }
@@ -88,7 +83,7 @@
   }
   .marquee-title{
     position:relative; z-index:2;
-    display:inline-block; font-family: var(--font-display); font-size: clamp(24px, 6vw, 44px);
+    display:inline-block; font-family: var(--font-title); font-size: clamp(24px, 6vw, 44px);
     letter-spacing:7px; color: var(--gold);
     text-shadow: 0 0 14px rgba(240,185,66,0.55), 0 0 2px rgba(240,185,66,0.8), 0 2px 3px rgba(0,0,0,0.6);
     background: transparent;
@@ -197,6 +192,9 @@
   .jp-control-bar .toolbar > .room-code-container{
     order: 3; /* room code + copy last */
   }
+  .jp-control-bar .toolbar > .control-assign-container{
+    order: 4; /* board-control assign, after room code */
+  }
   .jp-control-bar .timer-settings-bar{
     flex-basis: 100%; /* always its own line below, never squeezed into the row */
     order: 5;
@@ -219,7 +217,7 @@
   button.btn:disabled{ opacity:.35; cursor:not-allowed; transform:none; box-shadow:none; }
 
   #boardWrap{ overflow-x:auto; padding:6px 20px 4px; }
-  #board{ display:grid; gap:6px; min-width: 520px; margin: 0 auto 8px auto; max-width:1200px; }
+  #board{ display:grid; gap:8px; min-width: 520px; margin: 0 auto 8px auto; max-width:1200px; }
   /* Round-switch transition — EACH category header + clue cell shrinks
      and fades out individually (not the board as one piece), then pops
      back in at the new round's content. Delay is staggered per-column
@@ -274,13 +272,13 @@
 
   .cat-cell{
     background: linear-gradient(180deg, var(--cell-light), var(--cell));
-    border: 1px solid rgba(240,185,66,0.25); border-radius:6px; padding:8px 6px; text-align:center;
+    border: 1px solid rgba(240,185,66,0.25); border-radius:8px; padding:8px 4px; text-align:center;
     display:flex; flex-direction:column; align-items:center; justify-content:center; gap:5px;
-    min-height:58px; position:relative;
+    min-height:44px; position:relative;
     transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease;
   }
   .cat-name{
-    font-family: var(--font-display); font-size: clamp(25px, 1.3vw, 15px); letter-spacing:1px;
+    font-family: var(--font-display); font-size: clamp(10px, 3vw, 13px); letter-spacing:1px;
     color:var(--text); text-shadow: 0 1px 2px rgba(0,0,0,0.5); word-break:break-word;
   }
   .cat-name-input{
@@ -337,7 +335,7 @@
 
   .clue-cell{
     background: linear-gradient(180deg, var(--cell), var(--cell-dark));
-    border: 1px solid rgba(240,185,66,0.18); border-radius:6px; min-height:50px;
+    border: 1px solid rgba(240,185,66,0.18); border-radius:8px; min-height:44px;
     display:flex; align-items:center; justify-content:center; position:relative; cursor:pointer;
     transition: transform 0.2s cubic-bezier(0.34, 1.56, 0.64, 1), opacity 0.2s ease, box-shadow 0.12s ease, border-color 0.12s ease, background 0.12s ease;
   }
@@ -345,13 +343,100 @@
     transform: translateY(-2px); box-shadow: 0 6px 15px rgba(0,0,0,0.4), 0 0 10px rgba(240,185,66,0.12);
     border-color: rgba(240,185,66,0.45);
   }
+  /* Cells that flip on hover must NOT also get the translateY lift above —
+     .clue-cell is the same element that establishes `perspective` for the
+     flip (see .has-clue-preview below), so giving it its own transform at
+     the same time it hosts a rotateY'd child causes some browsers to render
+     the two flip faces as unsynced layers (one appears stuck in place while
+     the other rotates — looks like "2 cards"). The flip itself is already
+     enough hover feedback, so the lift is dropped here instead. */
+  .clue-cell.has-clue-preview:not(.used):hover{
+    transform: none;
+    background: transparent
+  }
   .clue-cell:not(.used):active{ transform: translateY(1px) scale(0.98); }
   .clue-cell.used{ opacity:.28; cursor:default; background: linear-gradient(180deg, #0b1044, #070a2c); }
-  .clue-value{ font-family: var(--font-display); font-size: clamp(16px, 2.4vw, 30px); color: var(--gold); text-shadow: 0 0 10px rgba(240,185,66,0.25); }
-  .media-dot{ position:absolute; top:6px; right:8px; color:var(--teal); font-size:10px; text-shadow: 0 0 6px rgba(47,214,184,0.6); }
+  .clue-value{ font-family: var(--font-display); font-size: clamp(13px, 3.6vw, 16px); color: var(--gold); text-shadow: 0 0 10px rgba(240,185,66,0.25); }
   .edit-mode-cell{ cursor:grab; }
   .edit-mode-cell:hover{ border-color: rgba(240,185,66,0.5); }
   .edit-mode-cell:active{ cursor:grabbing; }
+
+  /* ── Host edit-mode hover preview ─────────────────────────────────
+     Cells that already have both a question and an answer filled in
+     (see `hasPreview` in ClueGrid.jsx) show the question by default and
+     flip to the answer on hover, using the same rotateY/backface-visibility
+     approach as the big clue-modal flip (.clue-flip-inner/.clue-flip-face),
+     just scaled down to fit inside a grid cell. Only .has-clue-preview
+     cells get `perspective` + the hover trigger, so half-written clues
+     keep the old plain "$value" look instead of flipping to a blank face. */
+  .clue-cell.has-clue-preview{
+    perspective: 900px;
+    background: transparent; border: none;
+  }
+  .cell-flip-viewport{
+    position: absolute;
+    inset: 0;
+  }
+  .cell-flip-inner{
+    position: relative;
+    width: 100%;
+    height: 100%;
+    display: grid;
+    transform-style: preserve-3d;
+    -webkit-transform-style: preserve-3d;
+    transition: transform 0.5s cubic-bezier(0.45, 0.05, 0.15, 1);
+  }
+  .clue-cell.has-clue-preview:hover .cell-flip-inner{
+    transform: rotateY(180deg);
+  }
+  .cell-flip-face{
+    grid-area: 1 / 1;
+    width: 100%;
+    height: 100%;
+    position: relative;
+    backface-visibility: hidden;
+    -webkit-backface-visibility: hidden;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 4px 6px;
+    box-sizing: border-box;
+    text-align: center;
+    overflow: hidden;
+  }
+  .cell-flip-front {
+    font-size: clamp(11px, 3vw, 15px);
+    background: linear-gradient(180deg, var(--cell), var(--cell-dark));
+    border: 1px solid rgba(240,185,66,0.18);
+    border-radius: 8px;
+    transition: border-color 0.12s ease, box-shadow 0.12s ease;
+  }
+  .cell-flip-back{
+    transform: rotateY(180deg);
+    background: linear-gradient(180deg, var(--cell), var(--cell-dark));
+    border: 1px solid rgba(240,185,66,0.18);
+    border-radius: 8px;
+  }
+  .cell-preview-label{
+    font-family: var(--font-display);
+    font-size: 8px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: var(--teal);
+    opacity: 0.85;
+  }
+  .cell-preview-text{
+    font-size: clamp(9px, 2.6vw, 11px);
+    color: var(--text);
+    line-height: 1.25;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    word-break: break-word;
+  }
   .clue-cell.drag-source{
     opacity: 0.35;
     border-style: dashed;
@@ -392,17 +477,20 @@
     background: linear-gradient(135deg, rgba(16, 24, 48, 0.95) 0%, rgba(10, 15, 36, 0.95) 100%);
     border: 1px solid rgba(240,185,66,0.35);
     border-radius: 12px;
-    padding: 8px 14px;
-    min-width: 110px;
+    padding: 10px 12px 8px;
+    min-width: 92px;
     flex: 1;
-    max-width: 200px;
+    max-width: 160px;
     box-shadow: 0 6px 20px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.05);
     transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
-    display: flex;
-    flex-direction: row;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    grid-template-areas:
+      "facepile score"
+      "name name";
     align-items: center;
-    justify-content: space-between;
-    gap: 10px;
+    row-gap: 4px;
+    column-gap: 8px;
   }
 
   .team-card:hover {
@@ -414,8 +502,11 @@
      cramming them side-by-side in the default row layout. That row layout
      is what squeezed the avatar picker into a near-zero-width sliver,
      forcing its chips to wrap into a tall column (or vanish once nowrap
-     was applied). Stacking gives each piece its own full-width row. */
+     was applied). Stacking gives each piece its own full-width row. Also
+     switches back to flex — the grid above is only meant for the
+     read-only facepile/score/name arrangement. */
   .team-card.is-editing{
+    display: flex;
     flex-direction: column;
     align-items: stretch;
     justify-content: flex-start;
@@ -431,13 +522,6 @@
     box-shadow: 0 0 0 2px rgba(240,185,66,0.35), 0 0 20px rgba(240,185,66,0.4), 0 8px 32px rgba(0,0,0,0.4), inset 0 1px 0 rgba(255,255,255,0.05);
     transform: translateY(-2px);
     animation: kb-selected-pulse 0.4s ease-out;
-  }
-  .team-name-display{
-    flex: 1; min-width: 0;
-    color:var(--gold); font-family:var(--font-display); text-align:left; font-size:14px;
-    letter-spacing:.3px; opacity:.9;  
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-    display: flex; align-items: center; gap: 6px;
   }
   .team-name-input{
     width:100%; background: transparent; border: 2px dashed var(--gold-dim) ; border-radius:4px; 
@@ -468,19 +552,35 @@
     position:absolute; top:-6px; left:-6px; width:22px; height:22px; border-radius:50%;
     display:flex; align-items:center; justify-content:center; font-size:12px; font-weight:800; line-height:1;
     font-family: var(--font-display);
-    background: linear-gradient(180deg, #ffd54a, #f0b942); color:#141a2e; border: 1px solid rgba(0,0,0,0.25);
-    box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 10px rgba(255,213,74,0.5);
+    background: var(--cell-light); color:#fff; border: 1px solid rgba(0,0,0,0.35);
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
     animation: buzzBadgePop 0.25s ease-out;
+    transition: background 0.15s ease, color 0.15s ease, box-shadow 0.15s ease;
+  }
+  /* Whoever currently holds the buzzer — same gold as everything else
+     "active" on the board (kb-selected, score pulses, etc). */
+  .team-buzz-badge.is-active{
+    background: linear-gradient(180deg, #ffd54a, var(--gold));
+    color:#141a2e;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4), 0 0 10px rgba(255,213,74,0.5);
+  }
+  /* Already had their turn and got passed over. */
+  .team-buzz-badge.is-struck{
+    background:#555; color:#ccc; text-decoration:line-through;
+    box-shadow: 0 2px 5px rgba(0,0,0,0.3);
   }
   @keyframes buzzBadgePop{
     0%{ transform: scale(0.4); opacity:0; }
     70%{ transform: scale(1.15); opacity:1; }
     100%{ transform: scale(1); }
   }
+
   .team-score-row{ 
+    grid-area: score;
+    justify-self: end;
     display: flex;
     align-items: center;
-    justify-content: flex-end;
+    justify-content: center;
     gap: 4px;
     flex-shrink: 0;
   }
@@ -490,11 +590,11 @@
   }
   .team-score-display{
     font-family: var(--font-display);
-    font-size: 20px;
+    font-size: 18px;
     font-weight: 900;
     color: var(--gold);
     text-shadow: 0 0 15px rgba(245, 158, 11, 0.4);
-    text-align: right;
+    text-align: center;
     min-width: 44px;
     transition: transform 0.18s ease, box-shadow 0.12s ease, outline-color 0.12s ease;
     cursor: pointer;
@@ -593,8 +693,9 @@
     background: var(--gold);
     background-clip: padding-box;
   }
-  .clue-modal-header{ text-align:center; color:var(--gold); font-family:var(--font-display); letter-spacing:1.5px; font-size:14px; margin-bottom:14px; opacity:.85; }
-  .clue-value-big{ text-align:center; font-family:var(--font-display); font-size:20px; color:var(--gold); margin-bottom:20px; text-shadow:0 0 20px rgba(240,185,66,0.3); }
+  .clue-cat-value{ display:flex; flex-direction:row; align-items:baseline; justify-content:center; gap:10px; margin-bottom:14px; }
+  .clue-modal-header{ text-align:right; color:var(--gold); font-family:var(--font-display); letter-spacing:1.5px; font-size:14px; margin-bottom:0; opacity:.85; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .clue-value-big{ text-align:left; font-family:var(--font-display); font-size:20px; color:var(--gold); margin-bottom:0; text-shadow:0 0 20px rgba(240,185,66,0.3); flex-shrink:0; }
 
   /* ---- Clue flip-card: front shows category+value, click flips to the real clue ---- */
   /* The outer .modal box normally carries the card chrome (bg/border/padding/shadow),
@@ -739,6 +840,7 @@
 }
 
 .host-sidebar-team-card {
+  position: relative;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -865,12 +967,95 @@
   transition: filter 0.15s ease, transform 0.15s ease;
 }
 
+.clue-flip-front.is-media-loading {
+  cursor: wait;
+}
+
+.clue-flip-front.is-media-loading:hover {
+  filter: none;
+}
+
+.clue-preload-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 7px 13px;
+  border: 1px solid rgba(240, 185, 66, 0.28);
+  border-radius: 999px;
+  background: rgba(5, 8, 30, 0.52);
+  color: var(--text-dim);
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.35px;
+}
+
+.clue-preload-status-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--gold-dim);
+  box-shadow: 0 0 8px rgba(240, 185, 66, 0.45);
+}
+
+.clue-preload-status.is-preparing .clue-preload-status-dot {
+  animation: cluePreloadPulse 1.2s ease-in-out infinite;
+}
+
+.clue-preload-status.is-ready {
+  border-color: rgba(91, 214, 151, 0.42);
+  color: #a8f0c7;
+}
+
+.clue-preload-status.is-ready .clue-preload-status-dot {
+  background: #5bd697;
+  box-shadow: 0 0 8px rgba(91, 214, 151, 0.65);
+}
+
+.clue-preload-status.is-error {
+  border-color: rgba(255, 112, 112, 0.55);
+  color: #ffb1b1;
+}
+
+.clue-preload-status.is-error .clue-preload-status-dot {
+  background: var(--red);
+  box-shadow: 0 0 8px rgba(255, 112, 112, 0.6);
+}
+
+.clue-preload-retry {
+  border: 1px solid currentColor;
+  border-radius: 999px;
+  padding: 3px 9px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font: inherit;
+  font-weight: 700;
+}
+
+.clue-preload-retry:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+@keyframes cluePreloadPulse {
+  0%, 100% { opacity: 0.45; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
 .clue-flip-front:hover {
   filter: brightness(1.1);
 }
 
 .clue-flip-front:active {
   transform: scale(0.985);
+}
+
+.host-reveal-clue-btn:disabled {
+  cursor: wait;
+  opacity: 0.68;
+  box-shadow: none;
 }
 
 .clue-flip-front-category {
@@ -906,6 +1091,42 @@
   .clue-media img{ max-width:100%; max-height:340px; border-radius:8px; margin:0 auto; }
   .clue-media iframe{ width:100%; max-width:640px; aspect-ratio:16/9; border:none; border-radius:8px; margin:0 auto; }
   .clue-media audio{ width:100%; }
+
+  /* ==== Media loading / failed states (image + inline audio label) ====
+     Shared by ClueMediaImage and the "Failed to load"/"Loading…" text in
+     CustomAudioPlayer. A separate, more specific rule below adapts this
+     for use inside CustomVideoPlayer's dark overlay, where it sits over
+     video rather than the clue's plain background. */
+  .clue-media-status{
+    display:flex; align-items:center; justify-content:center; gap:10px;
+    padding:14px 18px; border-radius:8px; font-size:13px; text-align:center;
+    background: rgba(0,0,0,0.25); border:1px dashed var(--gold-dim); color: var(--text-dim);
+  }
+  .clue-media-status.is-error{ border-color: var(--red); color: var(--red); }
+  /* Compact inline variant for the audio player's pill-shaped bar, where a
+     full-width block would look out of place next to the timeline. */
+  .clue-media-status.is-inline{
+    display:inline-flex; padding:0; background:none; border:none; gap:8px;
+    font-size:13px; color: var(--red); white-space:nowrap;
+  }
+  .clue-media-retry-btn{
+    font-family: var(--font-body); font-weight:700; font-size:11px; letter-spacing:.3px;
+    padding:4px 12px; border-radius:999px; border:1px solid var(--red);
+    background: transparent; color: var(--red); cursor:pointer; flex-shrink:0;
+    transition: transform .12s ease, background .12s ease, color .12s ease;
+  }
+  .clue-media-retry-btn:hover{ background: var(--red); color:#2a0b09; transform: translateY(-1px); }
+  .clue-media-retry-btn:active{ transform: translateY(0) scale(0.95); }
+  /* Inside CustomVideoPlayer's overlay: sits on a dark, semi-transparent
+     background over the video frame rather than the clue's own background,
+     so the dashed-border/backdrop treatment above would look wrong here —
+     just the text + button, laid out to match the existing "Tap to start
+     video" overlay style. */
+  .player-video-overlay.clue-media-status{
+    background: rgba(10,14,39,0.72); border:none; border-radius:0; color:#fff; font-size:13px;
+  }
+  .player-video-overlay.clue-media-status.is-error{ color: var(--red); }
+  .player-video-overlay.clue-media-status .clue-media-retry-btn{ font-size:12px; padding:5px 16px; }
   .clue-answer-box{
     background: linear-gradient(180deg, var(--gold), #c8932c); border-radius:8px; font-weight: bold;
     padding:24px; text-align:center; color: #0a0e33; font-size:19px; margin-bottom:20px; display:none;
@@ -1014,6 +1235,26 @@
 
   .form-row{ margin-bottom:14px; }
   .form-row label{ display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; letter-spacing:.5px;}
+
+  /* "Has a file?" status badge next to a MediaField's label — quick
+     at-a-glance answer to "is there already audio/image/video attached
+     here" without having to look at the input/chip below it. */
+  .media-field-label-row{
+    display:flex; align-items:center; justify-content:space-between; gap:8px; margin-bottom:5px;
+  }
+  .media-field-label-row label{ margin-bottom:0; }
+  .media-status-badge{
+    display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:bold;
+    padding:2px 8px; border-radius:20px; white-space:nowrap; letter-spacing:.3px;
+  }
+  .media-status-badge.has-media{
+    color:var(--teal); background:rgba(47,214,184,0.1); border:1px solid rgba(47,214,184,0.4);
+  }
+  .media-status-badge.no-media{
+    color:var(--text-dim); background:rgba(255,255,255,0.03); border:1px solid rgba(255,255,255,0.08);
+  }
+  .media-status-icon{ font-size:11px; line-height:1; }
+
   .form-row input[type=text], .form-row input[type=url], .form-row input[type=number], .form-row textarea{
     width:100%; padding:9px 10px; border-radius:6px; border:1px solid rgba(240,185,66,0.3);
     background:#0a0f40; color:var(--text); font-family:var(--font-body); font-size:14px;
@@ -1095,6 +1336,62 @@
   .modal-footer{ display:flex; gap:10px; justify-content:center; margin-top:8px; flex-wrap:wrap; }
   .hint{ font-size:11px; color:var(--text-dim); margin-top:4px; }
 
+  /* Edit Clue modal — compact 2-column layout: text fields left, media right */
+  .edit-clue-modal{ max-width: 900px; }
+  .edit-clue-body{
+    display: grid;
+    grid-template-columns: minmax(260px, 1fr) minmax(260px, 1fr);
+    gap: 4px 28px;
+    align-items: start;
+  }
+  .edit-clue-col-text .form-row textarea{ min-height: 52px; }
+  .edit-clue-col-media .form-row{ margin-bottom: 10px; }
+  .edit-clue-timer-row{ margin-top: 2px; }
+  .edit-clue-footnote{ text-align: center; margin: 10px 0 4px; opacity: .8; }
+  @media (max-width: 720px){
+    .edit-clue-body{ grid-template-columns: 1fr; gap: 0; }
+  }
+
+  /* Compact single-row media input: paste URL or click 📎 to upload,
+     drag-drop still works on the whole row. Replaces the old stacked
+     url-input + tall dropzone box. */
+  .media-input-row{
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-radius: 8px;
+    transition: box-shadow .15s ease;
+  }
+  .media-input-row.dragging{
+    box-shadow: 0 0 0 2px rgba(47,214,184,0.4);
+  }
+  .media-input-row input[type=url]{
+    flex: 1;
+    min-width: 0;
+  }
+  .media-upload-btn{
+    flex: 0 0 auto;
+    width: 38px;
+    height: 38px;
+    border-radius: 8px;
+    border: 1px solid rgba(240,185,66,0.3);
+    background: linear-gradient(180deg, #1a2570, #0e1550);
+    color: var(--text-dim);
+    font-size: 15px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform .12s ease, border-color .12s ease, color .12s ease;
+  }
+  .media-upload-btn:hover{
+    border-color: rgba(240,185,66,0.6);
+    color: var(--text);
+    transform: translateY(-1px);
+  }
+  .media-upload-btn:active{ transform: scale(0.94); }
+  .media-file-input-hidden{ display: none; }
+
   .session-list{ display:flex; flex-direction:column; gap:10px; margin-bottom:18px; max-height:50vh; overflow-y:auto; }
   .session-row{
     display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap;
@@ -1172,6 +1469,7 @@
   @media (prefers-reduced-motion: reduce){
     .modal-overlay, .modal, .modal-overlay.closing, .modal-overlay.closing .modal{ animation: none !important; }
     .clue-flip-inner{ transition: none !important; }
+    .cell-flip-inner{ transition: none !important; }
     .slot-reel.is-locked{ animation: none !important; }
     .cat-cell.flip-out, .clue-cell.flip-out{ transition: none !important; }
     .cat-cell, .clue-cell{ transition: box-shadow 0.12s ease, border-color 0.12s ease, background 0.12s ease !important; }
@@ -1335,6 +1633,7 @@
 .player-video-frame {
   position: relative;
   width: 100%;
+  min-height: 180px;
   border-radius: 10px;
   overflow: hidden;
   background: #000;
@@ -1371,6 +1670,7 @@
   max-height: min(55vh, 480px);
   display: block;
   object-fit: contain;
+  background: #000;
 }
 
 .player-video-overlay {
@@ -1379,13 +1679,13 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(10, 14, 39, 0.25);
+  background: #000;
   transition: background 0.2s ease;
   pointer-events: none;
 }
 
 .player-video-frame:hover .player-video-overlay {
-  background: rgba(10, 14, 39, 0.4);
+  background: #000;
 }
 
 .player-video-big-play {
@@ -1460,7 +1760,12 @@
   display: flex; flex-direction: column; align-items: center;
   min-height: calc(100vh - 28px);
 }
-.randomizer-back{ position: absolute; top: 10px; right: 14px; z-index: 2; }
+.jp-root .randomizer-back{
+  position: fixed;
+  top: 14px;
+  right: 14px;
+  left: auto;
+}
 .randomizer-title{
   font-family: var(--font-display); color: var(--gold); letter-spacing: 2px;
   font-size: clamp(20px, 3.4vw, 32px);
@@ -1477,17 +1782,21 @@
 
 .slot-machine{
   position: relative;
-  display: flex; flex-wrap: wrap; gap: 22px; justify-content: center;
+  display: flex; flex-wrap: nowrap; gap: clamp(8px, 1.6vw, 22px); justify-content: center;
   width: min(1100px, 92vw);
   padding: 44px 48px; border-radius: 18px;
   background: linear-gradient(180deg, #141d5e, #0a0e33);
   border: 1px solid rgba(240,185,66,0.35);
   box-shadow: inset 0 0 40px rgba(240,185,66,0.06), 0 20px 60px rgba(0,0,0,0.6);
 }
-.slot-reel-col{ display: flex; flex-direction: column; align-items: center; gap: 12px; width: 168px; flex: 0 1 168px; max-width: 200px; }
+/* flex:1 1 0 (not a fixed width) is what lets columns actually shrink to
+   fit many players in one row — max-width still caps how wide a single
+   column gets when there are only 2-3 players, min-width is the floor
+   before names start relying entirely on the .slot-cell ellipsis. */
+.slot-reel-col{ display: flex; flex-direction: column; align-items: center; gap: 12px; flex: 1 1 0; min-width: 64px; max-width: 168px; }
 .slot-position-label{
   font-family: var(--font-display); color: var(--gold-dim); letter-spacing: 2px;
-  font-size: 15px; text-transform: uppercase;
+  font-size: clamp(10px, 1.6vw, 15px); text-transform: uppercase;
 }
 .slot-reel{
   position: relative; width: 100%; height: calc(3 * 92px);
@@ -1525,7 +1834,7 @@
 .slot-cell{
   height: 92px; display: flex; align-items: center; justify-content: center;
   text-align: center; padding: 0 8px; font-family: var(--font-display);
-  color: var(--text); font-size: 17px; letter-spacing: .3px; line-height: 1.2;
+  color: var(--text); font-size: clamp(11px, 1.8vw, 17px); letter-spacing: .3px; line-height: 1.2;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;
 }
 .slot-reel-shine{
@@ -1550,7 +1859,8 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 .randomizer-result-team{ color: white; }
 
 @media (max-width: 620px){
-  .slot-reel-col{ width: 44%; }
+  .slot-machine{ padding: 22px 10px; gap: clamp(4px, 1.4vw, 10px); }
+  .slot-reel-col{ min-width: 42px; }
 }
 
 /* ---- Slot machine lever (drag-to-spin) ---- */
@@ -1763,8 +2073,8 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 }
 
 .team-discord-avatar{
-  width: 20px;
-  height: 20px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   display: block;
   object-fit: cover;
@@ -1791,25 +2101,32 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
    number of members, so this scales by wrapping rather than growing a
    single row indefinitely. */
 .team-name-display{
-  flex: 1; min-width: 0;
-  color:var(--gold); font-family:var(--font-display); text-align:left; font-size:14px;
-  letter-spacing:.3px; opacity:.9;
-  display: flex; flex-direction: row; align-items: center; gap: 6px;
+  display: contents;
+  /* display:contents keeps this element in the inheritance chain (no box
+     of its own, but still a parent for CSS purposes) — so setting these
+     here, instead of directly on .team-name-text, lets the compact
+     open-clue scoreboard's own .team-name-display override (player.css,
+     .pv-teams-compact .team-name-display) win there via normal
+     inheritance instead of colliding with an equal-specificity rule. */
+  color:var(--gold); font-family:var(--font-display); font-size:13px;
+  letter-spacing:.3px; opacity:.9; text-align:center;
 }
 .team-name-display .team-name-text{
+  grid-area: name;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; max-width: 100%;
 }
 .team-discord-facepile{
+  grid-area: facepile;
+  justify-self: start;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  justify-content: center;
   gap: 1px;
 }
 .team-discord-facepile .team-discord-avatar-wrap{
   position: relative;
-  width: 26px;
-  height: 26px;
+  width: 22px;
+  height: 22px;
   box-sizing: border-box;
   flex-shrink: 0;
 }
@@ -1972,7 +2289,7 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 }
 
 .room-code-input {
-  width: 78px;
+  width: 90px;
   padding: 7px 8px;
   letter-spacing: 0.08em;
   text-align: center;
@@ -1980,6 +2297,40 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   background: rgba(0, 0, 0, 0.32);
   border: 1px solid rgba(240,185,66,0.28);
   border-radius: 6px;
+  color: var(--text);
+}
+
+.control-assign-container {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.control-assign-label {
+  font-size: 12px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.control-assign-select {
+  max-width: 200px;
+  padding: 7px 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  background: rgba(0, 0, 0, 0.32);
+  border: 1px solid rgba(240,185,66,0.28);
+  border-radius: 6px;
+  color: var(--text);
+  cursor: pointer;
+}
+
+.control-assign-select:hover {
+  border-color: rgba(240,185,66,0.5);
+}
+
+.control-assign-select option {
+  background: #0e1550;
   color: var(--text);
 }
 
@@ -1993,38 +2344,34 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
     z-index: 1000;
     display: inline-flex;
     align-items: center;
-    gap: 8px;
-    padding: 8px 16px;
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 700;
-    letter-spacing: 0.05em;
-    text-transform: uppercase;
-    color: #ffffff;
-    background: linear-gradient(135deg, #1e293b 0%, #0f172a 100%);
-    border: 2px solid rgba(255, 215, 0, 0.4);
-    border-radius: 8px;
+    gap: 6px;
+    padding: 7px 13px;
+    font-family: var(--font-body);
+    font-weight: bold;
+    font-size: 12px;
+    letter-spacing: .4px;
+    color: var(--text);
+    background: linear-gradient(180deg, #1a2570, #0e1550);
+    border: 1px solid rgba(240,185,66,0.4);
+    border-radius: 6px;
     cursor: pointer;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.4), inset 0 1px 0 rgba(255, 255, 255, 0.1);
-    transition: all 0.15s ease-in-out;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
   }
 
   .jp-role-back-btn:hover {
-    background: linear-gradient(135deg, #334155 1px, #1e293b 100%);
-    border-color: rgba(255, 215, 0, 0.8);
-    box-shadow: 0 6px 14px rgba(0, 0, 0, 0.5), 0 0 10px rgba(255, 215, 0, 0.2);
     transform: translateY(-1px);
+    box-shadow: 0 4px 14px rgba(240,185,66,0.18);
+    background: linear-gradient(180deg, #212c86, #121a5c);
   }
 
   .jp-role-back-btn:active {
-    transform: translateY(1px) scale(0.97);
-    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+    transform: translateY(0) scale(0.96);
+    filter: brightness(0.92);
   }
 
   .jp-role-back-arrow {
     font-size: 15px;
     line-height: 1;
-    color: #ffd700;
   }
 
   .clue-youtube-external {
@@ -2040,4 +2387,349 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
 .clue-youtube-external-label {
   font-weight: 700;
   color: #fff;
+}
+
+/* =========================================================================
+   DAILY DOUBLE
+   Wager screen shown instead of the normal flip-front when a clue is
+   flagged as one, plus the small edit-mode toggle badge used to
+   mark/unmark a clue. Reuses the existing .modal / .btn chrome (the
+   component renders className="modal daily-double-modal") so it matches
+   the rest of the clue-modal instead of introducing a new visual
+   language — this file just adds the layout + accents on top.
+   ========================================================================= */
+.daily-double-modal{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 16px;
+  max-width: 460px;
+  position: relative;
+  overflow: visible;
+  animation: ddTremble 0.6s ease-out both, ddCardFlashGlow 1s ease-in-out infinite;
+}
+/* Continuous flash+glow pulse for the whole card — box-shadow blooms out
+   (glow) while a brightness bump (flash) hits at the same beat, so it
+   reads as a rhythmic strobe-glow rather than two separate effects. Runs
+   forever (unlike ddTremble, which is entrance-only) and is shared by
+   both the host card and the player card below. */
+@keyframes ddCardFlashGlow{
+  0%, 100%{
+    box-shadow: 0 10px 32px rgba(0,0,0,0.45), 0 0 16px 2px rgba(240,185,66,0.28);
+    filter: brightness(1);
+  }
+  50%{
+    box-shadow: 0 10px 32px rgba(0,0,0,0.45), 0 0 55px 18px rgba(240,185,66,0.95);
+    filter: brightness(1.15);
+  }
+}
+/* A quick, decaying side-to-side shake/rotation jitter — plays once on
+   entrance. Reused as-is on the player side (see .pv-clue-daily-double
+   below) so both host and player get the same "trembling with
+   anticipation" feel instead of two different intros. */
+@keyframes ddTremble{
+  0%{ transform: translate(0,0) rotate(0deg); opacity: 0; }
+  8%{ opacity: 1; transform: translate(-6px,0) rotate(-2deg); }
+  16%{ transform: translate(6px,0) rotate(2deg); }
+  24%{ transform: translate(-5px,0) rotate(-1.6deg); }
+  32%{ transform: translate(5px,0) rotate(1.6deg); }
+  40%{ transform: translate(-4px,0) rotate(-1.2deg); }
+  48%{ transform: translate(4px,0) rotate(1.2deg); }
+  56%{ transform: translate(-3px,0) rotate(-0.8deg); }
+  64%{ transform: translate(3px,0) rotate(0.8deg); }
+  72%{ transform: translate(-2px,0) rotate(-0.5deg); }
+  80%{ transform: translate(2px,0) rotate(0.5deg); }
+  88%{ transform: translate(-1px,0) rotate(-0.2deg); }
+  100%{ transform: translate(0,0) rotate(0deg); opacity: 1; }
+}
+
+/* Small floating sparkles scattered around the title, each on its own
+   drift/twinkle timing so they don't read as a single repeating loop. */
+.dd-sparkles{
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+.dd-sparkle{
+  position: absolute;
+  width: 5px;
+  height: 5px;
+  background: var(--gold);
+  border-radius: 50%;
+  box-shadow: 0 0 8px 2px rgba(240,185,66,0.9);
+  opacity: 0;
+  animation: ddSparkleFloat 2.4s ease-in-out infinite;
+}
+.dd-sparkle-0{ top: 12%; left: 18%; animation-delay: 0s; }
+.dd-sparkle-1{ top: 20%; left: 82%; animation-delay: 0.3s; }
+.dd-sparkle-2{ top: 78%; left: 12%; animation-delay: 0.6s; }
+.dd-sparkle-3{ top: 85%; left: 88%; animation-delay: 0.9s; }
+.dd-sparkle-4{ top: 8%; left: 50%; animation-delay: 1.2s; }
+.dd-sparkle-5{ top: 55%; left: 4%; animation-delay: 1.5s; }
+.dd-sparkle-6{ top: 60%; left: 96%; animation-delay: 1.8s; }
+.dd-sparkle-7{ top: 92%; left: 50%; animation-delay: 2.1s; }
+@keyframes ddSparkleFloat{
+  0%{ opacity: 0; transform: scale(0.6); }
+  15%{ opacity: 1; transform: scale(1); }
+  40%{ opacity: 1; }
+  60%{ opacity: 0; transform: scale(0.6); }
+  100%{ opacity: 0; }
+}
+
+.daily-double-modal > *:not(.dd-sparkles){
+  position: relative;
+  z-index: 2;
+}
+/* Same layering fix, scoped to the player-side card (PlayerView.jsx's
+   .pv-clue-daily-double) instead of the host's .daily-double-modal — the
+   .dd-sparkles rules above are already generic and get reused
+   here as-is, only the stacking-order fix needs a player-specific
+   selector since it targets a different container. */
+.pv-clue-daily-double{
+  animation: ddTremble 0.6s ease-out both, ddCardFlashGlow 1s ease-in-out infinite;
+}
+.pv-clue-daily-double > *:not(.dd-sparkles){
+  position: relative;
+  z-index: 2;
+}
+.dd-title{
+  font-family: var(--font-display);
+  font-size: clamp(32px, 6vw, 56px);
+  letter-spacing: 3px;
+  color: var(--gold);
+  text-transform: uppercase;
+  animation: ddTitleGlow 1.6s ease-in-out infinite;
+}
+@keyframes ddTitleGlow{
+  0%, 100%{ text-shadow: 0 0 16px rgba(240,185,66,0.5), 0 0 3px rgba(240,185,66,0.8), 0 2px 3px rgba(0,0,0,0.6); }
+  50%{ text-shadow: 0 0 34px rgba(240,185,66,0.9), 0 0 6px rgba(240,185,66,1), 0 2px 3px rgba(0,0,0,0.6); }
+}
+.dd-subtitle{
+  font-family: var(--font-display);
+  color: var(--gold-dim);
+  letter-spacing: 2px;
+  font-size: 15px;
+  text-transform: uppercase;
+  opacity: .85;
+  margin-top: -8px;
+}
+.dd-step-label{
+  font-size: 12px;
+  letter-spacing: .5px;
+  text-transform: uppercase;
+  color: var(--text-dim);
+}
+
+.dd-locked-team{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+}
+.dd-locked-team-name{
+  font-family: var(--font-display);
+  font-size: 24px;
+  color: var(--gold);
+  text-shadow: 0 0 16px rgba(240,185,66,0.4);
+}
+.dd-locked-team-hint{
+  font-size: 12px;
+  color: var(--text-dim);
+  max-width: 320px;
+}
+
+.dd-team-list{
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  justify-content: center;
+}
+.dd-team-btn{
+  font-family: var(--font-body);
+  font-weight: bold;
+  font-size: 13px;
+  letter-spacing: .3px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  border: 1px solid rgba(240,185,66,0.35);
+  background: linear-gradient(180deg, #1a2570, #0e1550);
+  color: var(--text);
+  cursor: pointer;
+  transition: transform .12s ease, box-shadow .12s ease, background .12s ease, border-color .12s ease;
+}
+.dd-team-btn:hover{
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(240,185,66,0.18);
+  border-color: rgba(240,185,66,0.6);
+}
+.dd-team-btn:active{ transform: translateY(0) scale(0.96); }
+.dd-team-btn.is-selected{
+  background: linear-gradient(180deg, var(--gold), #c8932c);
+  color: #1a1200;
+  border-color: transparent;
+  box-shadow: 0 4px 16px rgba(240,185,66,0.4);
+}
+
+
+.dd-wager-block{
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.pv-dd-wager-form {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  margin: 0 auto;
+}
+.dd-wager-input{
+  width: 160px;
+  background: rgba(0,0,0,0.3);
+  border: 2px dashed var(--gold-dim);
+  border-radius: 8px;
+  color: var(--gold);
+  font-family: var(--font-display);
+  font-size: 24px;
+  text-align: center;
+  padding: 8px 10px;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+.dd-wager-input:focus{
+  outline: none;
+  border-color: var(--gold);
+  border-style: solid;
+  box-shadow: 0 0 12px rgba(240,185,66,0.4);
+}
+.dd-wager-input::-webkit-outer-spin-button,
+.dd-wager-input::-webkit-inner-spin-button{
+  -webkit-appearance: none; margin: 0;
+}
+
+.dd-confirm-btn{ min-width: 200px; }
+
+.dd-cancel-btn{
+  font-family: var(--font-body);
+  font-size: 12px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  transition: color .12s ease;
+}
+.dd-cancel-btn:hover{ color: var(--text); }
+
+/* Edit-mode toggle badge on a clue cell — mirrors  */
+.dd-toggle{
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  font-family: var(--font-display);
+  font-size: 9px;
+  letter-spacing: .5px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(240,185,66,0.3);
+  background: rgba(0,0,0,0.35);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: transform .12s ease, background .12s ease, color .12s ease, border-color .12s ease;
+}
+.dd-toggle:hover{
+  transform: scale(1.08);
+  border-color: rgba(240,185,66,0.6);
+  color: var(--text);
+}
+.dd-toggle.is-dd{
+  background: linear-gradient(180deg, var(--gold), #c8932c);
+  color: #1a1200;
+  border-color: transparent;
+  box-shadow: 0 0 8px rgba(240,185,66,0.5);
+}
+
+/* Hover-preview media indicator (ClueGrid.jsx) — top-right corner so it
+   never collides with the DD toggle, which sits top-left. */
+.clue-media-badge{
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  font-size: 11px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: 4px;
+  border: 1px solid rgba(47,214,184,0.35);
+  background: rgba(0,0,0,0.35);
+}
+
+.bgm-mode-row {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+ 
+.bgm-mode-btn {
+  flex: 1;
+  padding: 4px 8px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: bold;
+  border-radius: 6px;
+  border: 1px solid rgba(240,185,66,0.25);
+  background: rgba(0,0,0,0.2);
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: border-color 0.15s ease, background 0.15s ease, color 0.15s ease;
+}
+.bgm-mode-btn:hover {
+  border-color: var(--gold);
+  color: var(--text);
+  background: rgba(240,185,66,0.08);
+}
+ 
+.bgm-mode-btn.is-active {
+  background: linear-gradient(180deg, var(--gold), #c8932c);
+  color: #1a1200;
+  border-color: var(--gold);
+}
+ 
+.bgm-round-label {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 6px;
+}
+
+.bgm-fs-volume-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid rgba(240,185,66,0.15);
+}
+ 
+.bgm-fs-volume-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--text-dim);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+ 
+.bgm-fs-volume-slider {
+  flex: 1;
+  min-width: 0;
+  accent-color: var(--gold);
+  cursor: pointer;
 }

@@ -1,4 +1,5 @@
 import React, { useRef, useState, useEffect } from 'react';
+import { toPerceptualVolume } from '../lib/utils';
 
 export default function CustomVideoPlayer({ 
   src, 
@@ -32,11 +33,55 @@ export default function CustomVideoPlayer({
   // to mishandle.
   const [resolvedSrc, setResolvedSrc] = useState('');
   const [prefetching, setPrefetching] = useState(false);
+  // Surfaced in the UI so a stuck load reads as "still waiting" vs
+  // "actually failed" instead of an indefinite loading spinner.
+  const [prefetchError, setPrefetchError] = useState('');
+  // Bumped by the manual "Retry" button. >0 means this run should bypass
+  // the browser's HTTP cache — the automatic retry above only helps with
+  // a transient network blip, but if the clue's media file was replaced
+  // at the same URL, the browser may have a stale cached response that a
+  // plain re-fetch would just hand back again.
+  const [manualRetryCount, setManualRetryCount] = useState(0);
+
+  // How long to wait for the proxy before giving up. The backend media
+  // proxy queues/throttles Google Drive requests (see media.js), so under
+  // load this can legitimately take a few seconds — 20s gives it room
+  // without leaving the player stuck forever if something's actually wrong.
+  const FETCH_TIMEOUT_MS = 45000;
+
+  async function fetchAsBlob(url, signal, bypassCache) {
+    const res = await fetch(url, { signal, cache: bypassCache ? 'no-store' : 'default' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    return res.blob();
+  }
+
+  // A manual Retry click bypasses the browser's HTTP cache (bypassCache
+  // above) but the server also holds its own short-lived negative cache
+  // for failed Google Drive fetches (see media.js) — without this, a
+  // retry within that window just gets served the same cached error back
+  // instantly, without the server ever trying Google again. Appending
+  // force=1 tells the server to skip that cache and make a real attempt.
+  // Only used for the manual retry, never the automatic first retry below,
+  // so a normal transient blip still benefits from the server's in-flight
+  // request coalescing instead of doubling up load on Google.
+  function withForceParam(url) {
+    try {
+      const u = new URL(url, window.location.origin);
+      u.searchParams.set('force', '1');
+      return u.toString();
+    } catch {
+      // Relative/malformed URL edge case — fall back to a plain string
+      // append rather than letting the retry silently lose the param.
+      return url + (url.includes('?') ? '&' : '?') + 'force=1';
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
     let blobUrl = null;
     setResolvedSrc('');
+    setPrefetchError('');
+    setPrefetching(false);
 
     if (!src) return;
 
@@ -46,35 +91,77 @@ export default function CustomVideoPlayer({
       return;
     }
 
+    const bypassCache = manualRetryCount > 0;
+    const fetchUrl = bypassCache ? withForceParam(src) : src;
+
+    // Aborts the in-flight fetch (and its timeout) whenever src changes or
+    // this effect is torn down, instead of letting an abandoned request run
+    // to completion and occupy a slot in the backend's proxy queue for no
+    // reason.
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+
     setPrefetching(true);
     (async () => {
       try {
-        const res = await fetch(src);
-        if (!res.ok) throw new Error('HTTP ' + res.status);
-        const blob = await res.blob();
+        let blob;
+        try {
+          blob = await fetchAsBlob(fetchUrl, controller.signal, bypassCache);
+        } catch (firstErr) {
+          // One retry for a plain network hiccup — but not if we were
+          // aborted (deliberate cancel/timeout) or the component unmounted,
+          // since retrying either of those would be pointless.
+          if (cancelled || controller.signal.aborted) throw firstErr;
+          // Brief pause before retrying: firing again instantly tends to
+          // land on the exact same failure (server-side negative cache,
+          // or a Google rate-limit wall that hasn't cleared yet) — a short
+          // wait gives that window a chance to pass. Cancelled early if
+          // the component unmounts or the fetch times out while waiting.
+          await new Promise((resolve) => {
+            const t = setTimeout(resolve, 1500);
+            controller.signal.addEventListener('abort', () => {
+              clearTimeout(t);
+              resolve();
+            });
+          });
+          if (cancelled || controller.signal.aborted) throw firstErr;
+          blob = await fetchAsBlob(fetchUrl, controller.signal, bypassCache);
+        }
         if (cancelled) return;
         blobUrl = URL.createObjectURL(blob);
         setResolvedSrc(blobUrl);
       } catch (err) {
-        console.error('[CustomVideoPlayer] blob prefetch failed, falling back to direct src:', err, src);
-        if (!cancelled) setResolvedSrc(src); // last resort: let the browser try streaming it directly
+        if (cancelled) return;
+        const timedOut = controller.signal.aborted;
+        const message = timedOut
+          ? 'Video failed to load: timed out waiting for the server.'
+          : 'Video failed to load: ' + (err?.message || 'unknown error');
+        console.error('[CustomVideoPlayer] blob prefetch failed:', err, 'src=' + src);
+        setPrefetchError(message);
+        // Only fall back to the raw src if we weren't the ones who aborted
+        // it — a timed-out/aborted request has nothing useful to fall back
+        // to, and a CSP-blocked URL will just fail again the same way.
+        if (!timedOut) setResolvedSrc(src); // last resort: let the browser try streaming it directly
       } finally {
         if (!cancelled) setPrefetching(false);
+        clearTimeout(timeoutId);
       }
     })();
 
     return () => {
       cancelled = true;
+      controller.abort();
+      clearTimeout(timeoutId);
       if (blobUrl) URL.revokeObjectURL(blobUrl);
     };
-  }, [src]);
+  }, [src, manualRetryCount]);
 
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
 
   // Keep video volume in sync with React state
   useEffect(() => {
     if (videoRef.current) {
-      videoRef.current.volume = isMuted ? 0 : volume;
+      videoRef.current.volume = isMuted ? 0 : toPerceptualVolume(volume);
     }
   }, [volume, isMuted]);
 
@@ -92,6 +179,13 @@ export default function CustomVideoPlayer({
       videoRef.current.pause();
       setAutoplayBlocked(false);
     }
+    // Keep the internal toggle-button state lined up with whatever the
+    // parent just forced (e.g. auto-pausing on a buzz-in). Without this,
+    // internalIsPlaying goes stale after an external override, and the
+    // play/pause button's own click handler (which only reads
+    // internalIsPlaying, not the external prop) ends up doing nothing —
+    // or the opposite of what the icon shows — on the next click.
+    setInternalIsPlaying(externalIsPlaying);
   }, [externalIsPlaying, resolvedSrc]);
 
   // Sync external currentTime from host (corrects drift > 0.5s)
@@ -246,11 +340,27 @@ export default function CustomVideoPlayer({
           className="player-video-el"
         />
         {prefetching && (
-          <div className="player-video-overlay" style={{ flexDirection: 'column', gap: 8 }}>
-            <span style={{ fontSize: 13, color: '#fff' }}>Loading video…</span>
+          <div className="player-video-overlay clue-media-status" style={{ flexDirection: 'column', gap: 8 }}>
+            <span>Loading video…</span>
           </div>
         )}
-        {!prefetching && !isPlaying && !(autoplayBlocked && disablePlayPause) && (
+        {!prefetching && prefetchError && (
+          <div
+            className="player-video-overlay clue-media-status is-error"
+            style={{ flexDirection: 'column', gap: 8, pointerEvents: 'auto' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <span>Failed to load video</span>
+            <button
+              type="button"
+              className="clue-media-retry-btn"
+              onClick={() => setManualRetryCount((n) => n + 1)}
+            >
+              Retry
+            </button>
+          </div>
+        )}
+        {!prefetching && !prefetchError && !isPlaying && !(autoplayBlocked && disablePlayPause) && (
           <div className="player-video-overlay">
             <svg viewBox="0 0 24 24" className="player-icon play-arrow player-video-big-play">
               <path d="M8 5v14l11-7z" />

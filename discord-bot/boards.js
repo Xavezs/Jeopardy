@@ -16,6 +16,10 @@
 // - PUT  /api/boards/:id/channel -> { discordChannelId } (owner only;
 //   binds this board's buzzer to a Discord voice channel so /buzz from
 //   that channel feeds the same room as the web Buzz button)
+// - POST /api/boards/:id/games   -> { finalScores } (editor+; snapshot of
+//   one completed playthrough — see saved_games in db.js)
+// - GET  /api/boards/:id/games   -> list of past playthroughs for this
+//   board, most recent first (viewer+)
 
 const express = require('express');
 const db = require('./db');
@@ -27,6 +31,10 @@ router.use(requireAuth); // every route below needs a logged-in user
 
 function newId() {
   return 'sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
+}
+
+function newGameId() {
+  return 'game_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);
 }
 
 // Short, easy-to-read-aloud room codes: no ambiguous chars (0/O, 1/I).
@@ -44,7 +52,11 @@ function metaFromRow(row, viewerId) {
     name: row.name,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-    categoryCount: data.rounds.reduce((sum, r) => sum + r.categories.length, 0),
+    // Final Jeopardy rounds (type: "final") have no .categories grid at
+    // all — guard against that instead of assuming every round is a
+    // normal category×value grid, or this crashes (500) the moment any
+    // board has been migrated to include one.
+    categoryCount: data.rounds.reduce((sum, r) => sum + (r.categories ? r.categories.length : 0), 0),
     roundCount: data.rounds.length,
     teamCount: data.teams.length,
     isOwner: row.owner_id === viewerId,
@@ -63,6 +75,16 @@ function fullFromRow(row, viewerId) {
     isOwner: row.owner_id === viewerId,
     // Only the owner needs to see/share the code from inside the board itself.
     roomCode: row.owner_id === viewerId ? row.room_code || null : undefined,
+  };
+}
+
+function gameFromRow(row) {
+  return {
+    id: row.id,
+    boardId: row.board_id,
+    hostId: row.host_id,
+    playedAt: row.played_at,
+    finalScores: JSON.parse(row.final_scores),
   };
 }
 
@@ -144,6 +166,7 @@ router.delete('/:id', requireRole('owner'), async (req, res) => {
   }
   db.prepare('DELETE FROM boards WHERE id = ?').run(req.params.id);
   db.prepare('DELETE FROM board_members WHERE board_id = ?').run(req.params.id);
+  db.prepare('DELETE FROM saved_games WHERE board_id = ?').run(req.params.id);
   res.json({ ok: true });
 });
 
@@ -209,6 +232,35 @@ router.put('/:id/channel', requireRole('owner'), (req, res) => {
   const { discordChannelId } = req.body;
   db.prepare('UPDATE boards SET discord_channel_id = ? WHERE id = ?').run(discordChannelId || null, req.params.id);
   res.json({ ok: true, discordChannelId: discordChannelId || null });
+});
+
+// POST /api/boards/:id/games — editor or owner. Called once, when the
+// host ends the game — writes a snapshot of that playthrough (final team
+// scores + ranking + per-player correct/wrong stats). Distinct from PUT
+// /:id above, which saves the editable board template, not a play result.
+// req.user.id is trusted as host_id (whoever is authenticated and has
+// edit access is the one who ran the session, not necessarily the
+// board's original owner — a friend with editor access can host too).
+router.post('/:id/games', requireRole('editor'), (req, res) => {
+  const { finalScores } = req.body;
+  if (!finalScores || typeof finalScores !== 'object') {
+    return res.status(400).json({ error: 'finalScores required' });
+  }
+  const id = newGameId();
+  const now = Date.now();
+  db.prepare(
+    'INSERT INTO saved_games (id, board_id, host_id, final_scores, played_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, req.params.id, req.user.id, JSON.stringify(finalScores), now);
+  res.json({ id, boardId: req.params.id, hostId: req.user.id, playedAt: now, finalScores });
+});
+
+// GET /api/boards/:id/games — viewer+. Most recent playthrough first, so
+// a leaderboard/history UI doesn't have to re-sort client-side.
+router.get('/:id/games', requireRole('viewer'), (req, res) => {
+  const rows = db
+    .prepare('SELECT * FROM saved_games WHERE board_id = ? ORDER BY played_at DESC')
+    .all(req.params.id);
+  res.json(rows.map(gameFromRow));
 });
 
 module.exports = router;

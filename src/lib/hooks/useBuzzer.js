@@ -22,6 +22,9 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    `resetBuzzer()` closes it again and clears the queue.
    `nextBuzzer()` advances to whoever buzzed in next without losing the
    rest of the queue or reopening the buzzer to everyone.
+   `prevBuzzer()` steps back to whoever had the floor before, for
+   correcting an accidental advance. Clamped at -1 (no one active) — it
+   won't wrap past the start of the queue.
    `buzz()` — the web player's own buzz-in action.
 
    `queue` is the ordered list of everyone who's buzzed this round.
@@ -33,7 +36,7 @@ export function useBuzzer(roomCode, me) {
   const [activeIndex, setActiveIndex] = useState(-1);
   const [connected, setConnected] = useState(false);
   const socketRef = useRef(null);
-  const prevActiveIdRef = useRef(null);
+  const prevQueueLenRef = useRef(0);
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
@@ -51,11 +54,14 @@ export function useBuzzer(roomCode, me) {
       setQueue(q || []);
       setActiveIndex(idx);
 
-      const active = q && idx >= 0 && idx < q.length ? q[idx] : null;
-      if (active && prevActiveIdRef.current !== active.id) {
-        playBuzzSfx();
-      }
-      prevActiveIdRef.current = active ? active.id : null;
+      // Only a real buzz-in ever appends to the queue — armBuzzer/
+      // resetBuzzer clear it, nextBuzzer/prevBuzzer just move the pointer
+      // across entries that are already there. Gating on queue length
+      // (instead of "did the active id change") means manually stepping
+      // through people who already buzzed never replays the sound.
+      const len = q ? q.length : 0;
+      if (len > prevQueueLenRef.current) playBuzzSfx();
+      prevQueueLenRef.current = len;
     });
 
     return () => socket.disconnect();
@@ -81,6 +87,10 @@ export function useBuzzer(roomCode, me) {
     if (roomCodeRef.current) socketRef.current?.emit("nextBuzzer", roomCodeRef.current);
   }, []);
 
+  const prevBuzzer = useCallback(() => {
+    if (roomCodeRef.current) socketRef.current?.emit("prevBuzzer", roomCodeRef.current);
+  }, []);
+
   // The web Buzz button. No-ops if there's no room code or no logged-in player.
   const buzz = useCallback(() => {
     if (!roomCodeRef.current || !me?.id) return;
@@ -101,6 +111,7 @@ export function useBuzzer(roomCode, me) {
     armBuzzer,
     resetBuzzer,
     nextBuzzer,
+    prevBuzzer,
     buzz,
   };
 }

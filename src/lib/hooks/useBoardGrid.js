@@ -11,6 +11,14 @@ import { blankClue, blankCategory } from "../storage";
 
    Does NOT own: teams, clue-modal state, session state. Those come in as
    `sessionRef` / `touch` / `persist`, supplied by the orchestrator.
+
+   NOTE ON FINAL JEOPARDY: a round with `type: "final"` has no
+   categories/values grid at all (see sessionStore.js's blankFinalRound) —
+   it's a single clue plus live wager/answer state, owned by
+   useFinalJeopardy.js instead. Every function below that assumes a grid
+   either early-returns on a final round or is simply never called for one
+   (ClueGrid/EditClueModal, the only callers of most of these, don't render
+   for a final round — see JeopardyBoard.jsx).
    ========================================================================= */
 export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert }) {
   /* ---------------- FLIP TRANSITION ----------------
@@ -98,10 +106,12 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     return d.rounds[d.currentRound];
   }
 
-  // Fills in any missing category×row combos, for every round. Only called
-  // after a structural change (add/remove/load) — never during render.
+  // Fills in any missing category×row combos, for every GRID round. Final
+  // Jeopardy has no grid, so it's skipped entirely. Only called after a
+  // structural change (add/remove/load) — never during render.
   function ensureClueGrid(d) {
     d.rounds.forEach((round) => {
+      if (round.type === "final") return;
       round.categories.forEach((cat) => {
         round.values.forEach((v) => {
           if (!cat.clues[v]) cat.clues[v] = blankClue();
@@ -125,6 +135,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     if (source.catId === target.catId && source.value === target.value) return;
     const d = sessionRef.current.data;
     const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
     const srcCat = rd.categories.find((c) => c.id === source.catId);
     const tgtCat = rd.categories.find((c) => c.id === target.catId);
     if (!srcCat || !tgtCat) return;
@@ -152,7 +163,10 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     const tBanner = setTimeout(() => {
       setRoundBanner((b) => (b ? { ...b, phase: "out" } : b));
       performFlip(
-        () => rd.categories.length,
+        // The OUTGOING round (`rd`) may be Final Jeopardy, which has no
+        // `.categories` — fall back to a single "column" so the flip
+        // animation still has a valid duration instead of crashing.
+        () => (rd.type === "final" ? 1 : rd.categories.length),
         () => {
           // Re-fetch here instead of reusing `d` from the top of this
           // function — up to ~1s has passed (banner hold + fade), and if
@@ -173,6 +187,52 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     boardFlipTimeouts.current.push(tBanner);
   }
 
+  /* ---------------- DAILY DOUBLE ----------------
+     1 DD in the first round, 2 DDs in the second round (tweak via
+     DD_COUNT_BY_ROUND). randomizeDailyDoubles always reshuffles from
+     scratch (clears every flag first, then picks new cells at random) so
+     repeated calls never stack up leftover DDs. toggleDailyDouble is the
+     manual override used from Edit Board mode — the host can add/remove
+     a DD outside of what the randomizer picked. */
+  const DD_COUNT_BY_ROUND = [1, 2]; // round index -> how many DDs to assign
+
+  function randomizeDailyDoubles(roundIndex = null) {
+    const d = sessionRef.current.data;
+    d.rounds.forEach((round, i) => {
+      if (round.type === "final") return;
+      if (roundIndex !== null && i !== roundIndex) return;
+      const count = DD_COUNT_BY_ROUND[i] ?? 1;
+
+      const pool = [];
+      round.categories.forEach((cat) => {
+        round.values.forEach((v) => {
+          if (cat.clues[v]) {
+            cat.clues[v].isDailyDouble = false; // reset first
+            pool.push(cat.clues[v]);
+          }
+        });
+      });
+      for (let picked = 0; picked < count && pool.length > 0; picked++) {
+        const idx = Math.floor(Math.random() * pool.length);
+        pool[idx].isDailyDouble = true;
+        pool.splice(idx, 1);
+      }
+    });
+    touch();
+    persist();
+  }
+
+  function toggleDailyDouble(cat, v) {
+    const d = sessionRef.current.data;
+    const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
+    const c = rd.categories.find((c) => c.id === cat.id);
+    if (!c || !c.clues[v]) return;
+    c.clues[v].isDailyDouble = !c.clues[v].isDailyDouble;
+    touch();
+    persist();
+  }
+
   function renameCategory(cat, name) {
     cat.name = name || "Category";
     persist();
@@ -180,6 +240,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
   async function removeCategory(cat) {
     const d = sessionRef.current.data;
     const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
     if (rd.categories.length <= 1) {
       appAlert("You must keep at least one column category!");
       return;
@@ -193,6 +254,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
   function addCategory() {
     const d = sessionRef.current.data;
     const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
     rd.categories.push(blankCategory("New Category", rd.values));
     ensureClueGrid(d);
     touch();
@@ -202,6 +264,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
   function changeRowValue(oldVal, input) {
     const d = sessionRef.current.data;
     const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
     const newVal = parseInt(input, 10);
     if (isNaN(newVal) || newVal <= 0 || rd.values.includes(newVal)) {
       touch(); // revert silently, no popup needed for a simple field edit
@@ -222,6 +285,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
   async function removeRow(v) {
     const d = sessionRef.current.data;
     const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
     if (rd.values.length <= 1) {
       appAlert("You must keep at least one row!");
       return;
@@ -238,6 +302,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
   function addRow() {
     const d = sessionRef.current.data;
     const rd = currentRoundOf(d);
+    if (rd.type === "final") return;
     let nextVal = 100;
     if (rd.values && rd.values.length > 0) nextVal = Math.max(...rd.values) + 100;
     while (rd.values.includes(nextVal)) nextVal += 100;
@@ -251,10 +316,20 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     persist();
   }
 
-  // Reset all clues to unused (both rounds) — scores are reset by useTeams.
+  // Reset all clues to unused (both grid rounds) AND reset Final Jeopardy's
+  // live phase/wager/answer state back to its starting point — scores are
+  // reset by useTeams.
   function resetRoundClues() {
     const d = sessionRef.current.data;
     d.rounds.forEach((round) => {
+      if (round.type === "final") {
+        round.phase = "category";
+        round.wagers = {};
+        round.answers = {};
+        round.revealOrder = [];
+        round.revealedTeamIds = [];
+        return;
+      }
       round.categories.forEach((cat) => {
         round.values.forEach((v) => {
           if (cat.clues[v]) cat.clues[v].used = false;
@@ -286,6 +361,9 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     dragOverKey,
     setDragOverKey,
     swapClueCells,
+    // daily double
+    randomizeDailyDoubles,
+    toggleDailyDouble,
     // grid data helpers
     currentRoundOf,
     ensureClueGrid,

@@ -1,0 +1,49 @@
+/* =========================================================================
+   THEME
+   Single source of truth for colors and fonts shared by the host board
+   (board.css) and the player view (player.css). Both files @import this
+   first and then use these same variable names directly — previously
+   each file defined its own identical set of values under different
+   names (--bg vs --pv-bg, etc.), which meant a color change had to be
+   made twice or the two views could silently drift apart.
+
+   Anything that's genuinely specific to only one view (e.g. player.css's
+   --pv-buzzbar-height, a layout measurement with no host equivalent)
+   stays local to that file instead of living here.
+
+   Quicksand and Comfortaa are NOT loaded here via Google Fonts — they're
+   already self-hosted through @fontsource in App.jsx (which is always
+   mounted, regardless of host/player route), so importing them again
+   from the Google CDN here was pure duplication. Worse, this app runs
+   inside a Discord Activity iframe with a restrictive CSP — the same
+   reason SoundCloud embedding had to be abandoned (see lib/soundcloud.js)
+   — so an external fonts.googleapis.com request here may simply be
+   blocked in production, silently falling back to the stack's next font.
+   @fontsource ships as part of the bundle, so it always loads. If you
+   add a new Quicksand weight to either board.css or player.css, add the
+   matching '@fontsource/quicksand/<weight>.css' import in App.jsx too —
+   @fontsource only loads the exact static weights you import.
+   ========================================================================= */
+@font-face {
+  font-family: 'Geoparody';
+  src: url('../assets/fonts/Geoparody.otf') format('truetype');
+  font-weight: normal;
+  font-style: normal;
+}
+
+:root {
+  --bg: #0a0e27;
+  --bg-deep: #060815;
+  --cell: #12207a;
+  --cell-light: #1c2f9e;
+  --cell-dark: #0b1658;
+  --gold: #f0b942;
+  --gold-dim: #a9822f;
+  --teal: #2fd6b8;
+  --red: #e8544a;
+  --text: #f4f1ea;
+  --text-dim: #b9c0e8;
+  --font-display: 'Arial Black', Impact, 'Franklin Gothic Bold', sans-serif;
+  --font-body: 'Quicksand', sans-serif;
+  --font-title: 'Geoparody', 'Arial Black', Impact, 'Franklin Gothic Bold', sans-serif;
+}

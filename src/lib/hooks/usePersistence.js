@@ -4,6 +4,34 @@ import { SessionStore } from "../storage";
 
 const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
 
+// A board can disappear out from under an open session — deleted by its
+// owner from another device/tab, a delete that succeeded server-side even
+// though the client never got a clean response, etc. Saving against a
+// board id the server no longer has returns 404 "Not found" (boards.js's
+// requireRole finds no matching row, so role is null, which maps to 404 —
+// see requireRole in boards.js). Left unhandled, that 404 propagates
+// straight out of flushPersist/persist and aborts whatever called them —
+// most visibly createAndSwitchToNewSession, whose very first step is
+// flushPersist()'ing the CURRENTLY open (now-deleted) board before it can
+// even attempt to create the new one. Treat "board no longer exists" as
+// nothing left to save, not a failure worth propagating.
+function isBoardGoneError(err) {
+  const msg = String(err?.message || "");
+  return err?.status === 404 || /not found/i.test(msg);
+}
+async function saveSessionTolerant(s) {
+  try {
+    await SessionStore.saveSession(s);
+    return true;
+  } catch (err) {
+    if (isBoardGoneError(err)) {
+      console.warn('Skipped saving "' + s.name + '" — this board no longer exists on the server.');
+      return false;
+    }
+    throw err;
+  }
+}
+
 /* =========================================================================
    usePersistence
    Owns session STATE and its autosave plumbing. Role-aware via `isHost`:
@@ -71,7 +99,7 @@ export function usePersistence(isHost = true) {
     socket.on("connect", () => {
       const roomCode = roomCodeRef.current;
       if (!roomCode) return;
-      socket.emit("joinRoom", roomCode);
+      socket.emit("joinRoom", { roomCode, role: "host" });
       const s = sessionRef.current;
       if (s && isHostRef.current) {
         socket.emit("boardUpdate", {
@@ -177,7 +205,7 @@ export function usePersistence(isHost = true) {
   const setRoomCode = useCallback((code) => {
     roomCodeRef.current = code || null;
     if (code && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", code);
+      socketRef.current.emit("joinRoom", { roomCode: code, role: "host" });
       const s = sessionRef.current;
       if (s && isHostRef.current) {
         socketRef.current.emit("boardUpdate", {
@@ -200,7 +228,29 @@ export function usePersistence(isHost = true) {
       const s = sessionRef.current;
       if (!s) return;
 
-      await SessionStore.saveSession(s);
+      let saved;
+      try {
+        saved = await saveSessionTolerant(s);
+      } catch (err) {
+        // Network was down (or the API call otherwise failed) when this
+        // fired. Previously this rejection had no catch anywhere in the
+        // chain — it became a silent unhandled promise rejection, and the
+        // edit that triggered this persist() was just lost: never saved,
+        // never broadcast, with no retry once connectivity came back.
+        // Schedule one retry attempt shortly after reconnect instead of
+        // dropping it. If `s` has since changed again, that later edit's
+        // own persist() call will already cover this save, so re-running
+        // saveSessionTolerant here is harmless (same tolerant path).
+        console.warn("Autosave failed, will retry once reconnected:", err.message);
+        const retry = () => {
+          socketRef.current?.off("connect", retry);
+          persist();
+        };
+        socketRef.current?.once ? socketRef.current.once("connect", retry) : socketRef.current?.on("connect", retry);
+        return;
+      }
+      if (!saved) return; // board's gone — nothing to broadcast either
+
       setSaveMsg('Saved to "' + s.name + '"');
       clearTimeout(saveMsgTimeout.current);
       saveMsgTimeout.current = setTimeout(() => setSaveMsg(""), 1800);
@@ -221,14 +271,14 @@ export function usePersistence(isHost = true) {
       persistTimeout.current = null;
     }
     const s = sessionRef.current;
-    if (s) await SessionStore.saveSession(s);
+    if (s) await saveSessionTolerant(s);
   }, []);
 
   useEffect(() => {
     const handleBeforeUnload = () => {
       if (persistTimeout.current) {
         const s = sessionRef.current;
-        if (s) SessionStore.saveSession(s);
+        if (s) SessionStore.saveSession(s).catch(() => {});
       }
     };
     window.addEventListener("beforeunload", handleBeforeUnload);

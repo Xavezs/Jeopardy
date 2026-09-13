@@ -6,6 +6,11 @@
 export function getYoutubeVideoId(url) {
   if (!url || typeof url !== "string") return null;
 
+  // Match 11-char YouTube video ID from standard watch/embed/shorts links,
+  // even if wrapped inside a proxy query parameter like `/api/media/proxy?url=...`
+  const m = url.match(/(?:youtu\.be\/|youtube\.com\/(?:watch\?v=|embed\/|shorts\/|live\/))([a-zA-Z0-9_-]{11})/);
+  if (m) return m[1];
+
   try {
     const u = new URL(url.trim());
     const host = u.hostname.replace(/^www\./, "");
@@ -41,6 +46,17 @@ export function isYoutubeUrl(url) {
   return getYoutubeVideoId(url) !== null;
 }
 
+// Returns a same-origin embed URL that goes through Discord's URL Mapping.
+// The Activity must have a mapping: /youtube-embed -> https://www.youtube.com
+// in the Discord Developer Portal. This makes the iframe same-origin from
+// the CSP's perspective, bypassing the frame-src 'self' restriction.
+// In local dev, Vite's proxy handles the rewrite instead.
+export function getYoutubeEmbedUrl(url) {
+  const id = getYoutubeVideoId(url);
+  if (!id) return null;
+  return `/youtube-embed/embed/${id}`;
+}
+
 // Loads the YouTube IFrame Player API script once and resolves with the
 // window.YT global once it's ready. Safe to call from multiple components
 // mounting at once (question media + answer media, or host + late-joining
@@ -67,11 +83,13 @@ export function loadYoutubeIframeApi() {
       resolve(window.YT);
     };
 
-    const scriptSrc = "/api/youtube-iframe-api.js"; // same-origin proxy, see bot-server.js — mounted under /api/ like your other working routes
-    const existing = document.querySelector(`script[src="${scriptSrc}"]`);
+    // Use a cache-buster so that browser or Discord clients don't aggressively
+    // cache old versions of this script, ensuring backend changes take effect immediately.
+    const baseScriptSrc = "/api/youtube-iframe-api.js";
+    const existing = document.querySelector(`script[src^="${baseScriptSrc}"]`);
     if (!existing) {
       const tag = document.createElement("script");
-      tag.src = scriptSrc;
+      tag.src = `${baseScriptSrc}?v=${Date.now()}`;
       tag.onerror = () => reject(new Error("Failed to load YouTube IFrame API script (proxy route)"));
       document.head.appendChild(tag);
     }

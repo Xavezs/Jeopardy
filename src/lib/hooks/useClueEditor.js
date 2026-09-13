@@ -165,7 +165,13 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
       touch();
       persist();
     }
-    setEditingTarget(null);
+    // NOTE: deliberately does NOT clear editingTarget here anymore.
+    // saveClue() is now called from two places: EditClueModal's autosave
+    // debounce (on every settled keystroke) AND requestClose's flush
+    // right before closing. If this closed the modal, the very first
+    // autosave after a keystroke would close it out from under the host
+    // mid-edit. Closing is closeEditModal's job alone (wired to the
+    // "Done" button / Esc / backdrop click).
   }
 
   return {
