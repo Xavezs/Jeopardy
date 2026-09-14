@@ -151,6 +151,10 @@ export const SessionStore = {
     return await api("/api/boards/" + id + "/invite", { method: "POST" });
   },
 
+  async rotateInviteCode(id) {
+    return await api("/api/boards/" + id + "/rotate-invite", { method: "POST" });
+  },
+
   // POST /api/boards/join — a friend enters a room code and gets editor
   // access. Returns the full board (same shape as loadSession()).
   async joinBoard(roomCode) {

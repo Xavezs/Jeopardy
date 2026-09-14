@@ -21,7 +21,7 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    `joinRoom` used elsewhere. Falls back to `joinRoom` if `me` isn't
    available yet, so boardData/activeClue still populate.
    ========================================================================= */
-export function usePlayerSync(roomCode, me) {
+export function usePlayerSync(roomCode, me, onRoomCodeChanged) {
   const [boardData, setBoardData] = useState(null);
   const [connected, setConnected] = useState(false);
   // { catId, value, revealed } while a clue is open on the host, else null
@@ -70,6 +70,8 @@ export function usePlayerSync(roomCode, me) {
   roomCodeRef.current = roomCode;
   const meRef = useRef(me);
   meRef.current = me;
+  const onRoomCodeChangedRef = useRef(onRoomCodeChanged);
+  onRoomCodeChangedRef.current = onRoomCodeChanged;
   // Set once leaveGame() is called. Every join path (the 'connect' handler
   // and the roomCode/me effect below) checks this first — without it, a
   // stray reconnect or a re-render after leaving would immediately
@@ -111,6 +113,11 @@ export function usePlayerSync(roomCode, me) {
     socket.on("bgmUpdate", (payload) => setBgm(payload || null));
     socket.on("randomizerUpdate", (payload) => setRandomizer(payload || null));
     socket.on("statsUpdate", (stats) => setPlayerStats(stats || {}));
+    socket.on("roomCodeChanged", ({ roomCode: nextRoomCode }) => {
+      if (typeof nextRoomCode === "string" && nextRoomCode.trim()) {
+        onRoomCodeChangedRef.current?.(nextRoomCode.trim().toUpperCase());
+      }
+    });
 
     return () => socket.disconnect();
   }, []);

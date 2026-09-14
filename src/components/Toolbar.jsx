@@ -62,8 +62,25 @@ export default function Toolbar({
   ddWagerBasisPlayerScore,
   onToggleDdWagerBasisPlayerScore,
   onEndGame,
+  onRotateRoomCode,
+  appConfirm,
+  appAlert,
 }) {
   const [copyState, setCopyState] = useState("idle"); // "idle" | "copied" | "error"
+  const [rotatingRoomCode, setRotatingRoomCode] = useState(false);
+
+  async function rotateRoomCode() {
+    if (!onRotateRoomCode || rotatingRoomCode) return;
+    if (!(await appConfirm("Generate a new room code? Everyone must rejoin with the new code."))) return;
+    setRotatingRoomCode(true);
+    try {
+      await onRotateRoomCode();
+    } catch (error) {
+      await appAlert(error?.message || "Could not generate a new room code.");
+    } finally {
+      setRotatingRoomCode(false);
+    }
+  }
 
   async function copyRoomCode() {
     if (!roomCode) return;
@@ -81,6 +98,7 @@ export default function Toolbar({
         await navigator.clipboard.writeText(roomCode);
         success = true;
       }
+
     } catch {
       success = false;
     }
@@ -143,6 +161,9 @@ export default function Toolbar({
           />
           <button className="btn" onClick={copyRoomCode} disabled={!roomCode}>
             {copyState === "copied" ? "Copied!" : copyState === "error" ? "Couldn't copy" : "Copy"}
+          </button>
+          <button className="btn" onClick={rotateRoomCode} disabled={!roomCode || rotatingRoomCode}>
+            {rotatingRoomCode ? "Changing..." : "New Code"}
           </button>
         </div>
 

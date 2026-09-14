@@ -1041,6 +1041,19 @@ export default function PlayerView() {
     <PlayerBoard
       roomCode={roomCode}
       me={me}
+      onRoomCodeChanged={(nextRoomCode) => {
+        const oldRoomCode = roomCode;
+        for (const suffix of ["id", "name", "discordUser"]) {
+          const value = localStorage.getItem(`jeopardy:player:${oldRoomCode}:${suffix}`);
+          if (value !== null) localStorage.setItem(`jeopardy:player:${nextRoomCode}:${suffix}`, value);
+        }
+        sessionStorage.setItem("jeopardy:active-player-room", nextRoomCode);
+        sessionStorage.setItem("jeopardy:active-player-room-saved-at", String(Date.now()));
+        const params = new URLSearchParams(window.location.search);
+        params.set("room", nextRoomCode);
+        window.history.replaceState({}, "", `/play?${params.toString()}`);
+        setRoomCode(nextRoomCode);
+      }}
       onLeave={() => {
         sessionStorage.removeItem("jeopardy:active-player-room");
         sessionStorage.removeItem("jeopardy:active-player-room-saved-at");
@@ -1051,8 +1064,8 @@ export default function PlayerView() {
   );
 }
 
-function PlayerBoard({ roomCode, me, onLeave }) {
-  const { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, randomizer, playerStats, leaveGame } = usePlayerSync(roomCode, me);
+function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
+  const { boardData, connected, activeClue, joinedTeam, revealedCats, roundBanner, players, bgm, randomizer, playerStats, leaveGame } = usePlayerSync(roomCode, me, onRoomCodeChanged);
 
   // The actual "I'm leaving" action. Tells the server immediately (skips
   // the disconnect grace period entirely, since this is deliberate),

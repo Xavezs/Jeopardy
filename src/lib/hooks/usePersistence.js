@@ -217,6 +217,18 @@ export function usePersistence(isHost = true) {
     }
   }, []);
 
+  const rotateRoomCode = useCallback((oldCode, newCode) => {
+    if (!oldCode || !newCode || !socketRef.current?.connected) {
+      return Promise.reject(new Error("The host is not connected to the game server."));
+    }
+    return new Promise((resolve, reject) => {
+      socketRef.current.emit("rotateRoomCode", { oldRoomCode: oldCode, newRoomCode: newCode }, (response) => {
+        if (response?.ok) resolve();
+        else reject(new Error(response?.error || "The server could not change the room code."));
+      });
+    });
+  }, []);
+
   function touch() {
     setSession((s) => (s ? { ...s } : s));
   }
@@ -294,6 +306,7 @@ export function usePersistence(isHost = true) {
     flushPersist,
     saveMsg,
     setRoomCode,
+    rotateRoomCode,
     markTeamDeleted,
     markTeamAdded,
     players,

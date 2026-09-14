@@ -127,6 +127,7 @@ const io = new Server(server, {
 
 // Shared in-memory state for the browser host and player views.
 const gameRooms = new Map();
+const invalidatedRoomCodes = new Set();
 
 /* =========================================================================
    VOICE PRESENCE (roster + mute/deaf only — no bot audio connection)
@@ -267,6 +268,25 @@ function detachFromTeamIfAbandoned(roomCode, leaving) {
   io.to(roomCode).emit('boardUpdate', room.board);
 }
 
+// The host re-announces its saved board after reconnecting. That snapshot can
+// be older than the live player roster, so preserve the Discord memberships
+// already known by the room instead of allowing the host snapshot to erase
+// them. Board content remains host-owned; only live team membership is merged.
+function mergeLivePlayerMemberships(boardData, players) {
+  if (!Array.isArray(boardData?.teams) || !Array.isArray(players)) return;
+
+  const teamsById = new Map(boardData.teams.map((team) => [team.id, team]));
+  for (const player of players) {
+    if (!player?.teamId || !player.discordUserId) continue;
+    const team = teamsById.get(player.teamId);
+    if (!team) continue;
+    if (!Array.isArray(team.discordUserIds)) team.discordUserIds = [];
+    if (!team.discordUserIds.includes(player.discordUserId)) {
+      team.discordUserIds.push(player.discordUserId);
+    }
+  }
+}
+
 // Sentinel stored in room.controlDiscordUserId to mean "control is open —
 // any connected player may pick", as opposed to null ("locked, host only")
 // or an actual discordUserId ("assigned to that one player"). Deliberately
@@ -319,6 +339,10 @@ io.on('connection', (socket) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
+    if (invalidatedRoomCodes.has(roomCode)) {
+      socket.emit('errorMsg', 'This room code has been replaced.');
+      return;
+    }
 
     socket.isHost = payload && typeof payload === 'object' && payload.role === 'host';
     socket.join(roomCode);
@@ -331,8 +355,39 @@ io.on('connection', (socket) => {
     if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room?.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
     if (room?.randomizer) socket.emit('randomizerUpdate', room.randomizer);
+    if (room?.players) socket.emit('playersUpdate', room.players);
     if (room) socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
     if (room?.playerStats) socket.emit('statsUpdate', room.playerStats);
+  });
+
+  socket.on('rotateRoomCode', ({ oldRoomCode, newRoomCode }, ack) => {
+    const reject = (message) => {
+      if (typeof ack === 'function') ack({ ok: false, error: message });
+    };
+    if (!socket.isHost || typeof oldRoomCode !== 'string' || typeof newRoomCode !== 'string') {
+      reject('Only the host can change the room code.');
+      return;
+    }
+    const oldCode = oldRoomCode.trim().toUpperCase();
+    const newCode = newRoomCode.trim().toUpperCase();
+    if (!oldCode || !newCode || socket.gameRoomCode !== oldCode || gameRooms.has(newCode)) {
+      reject('The live room is no longer available.');
+      return;
+    }
+
+    const room = gameRooms.get(oldCode);
+    if (!room) {
+      reject('The live room is no longer available.');
+      return;
+    }
+    invalidatedRoomCodes.add(oldCode);
+    gameRooms.set(newCode, room);
+    gameRooms.delete(oldCode);
+    socket.leave(oldCode);
+    socket.join(newCode);
+    socket.gameRoomCode = newCode;
+    io.to(oldCode).emit('roomCodeChanged', { roomCode: newCode });
+    if (typeof ack === 'function') ack({ ok: true });
   });
 
   socket.on('activeClueUpdate', ({ roomCode: rawRoomCode, activeClue }) => {
@@ -651,11 +706,16 @@ io.on('connection', (socket) => {
     }
 
     const room = gameRooms.get(roomCode) || {};
+    mergeLivePlayerMemberships(data, room.players);
+    if (Object.prototype.hasOwnProperty.call(data, 'controlDiscordUserId')) {
+      room.controlDiscordUserId = data.controlDiscordUserId || null;
+    }
     room.board = { data, updatedAt: updatedAt || Date.now() };
     gameRooms.set(roomCode, room);
 
     // socket.to(...) ensures the host doesn't receive its own echo back
     socket.to(roomCode).emit('boardUpdate', room.board);
+    emitControlState(roomCode, room);
   });
 
   socket.on('watchVoiceChannel', (rawChannelId) => {
@@ -682,6 +742,10 @@ io.on('connection', (socket) => {
     const roomCode = rawRoomCode.trim().toUpperCase();
     const trimmedName = teamName.trim();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH || !trimmedName || trimmedName.length > MAX_TEAM_NAME_LENGTH) return;
+    if (invalidatedRoomCodes.has(roomCode)) {
+      socket.emit('errorMsg', 'This room code has been replaced.');
+      return;
+    }
 
     socket.join(roomCode);
     socket.gameRoomCode = roomCode;

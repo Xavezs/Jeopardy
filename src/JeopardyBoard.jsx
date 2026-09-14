@@ -211,6 +211,13 @@ export default function JeopardyBoard({ onBack }) {
       const cat = currentRd?.categories.find((c) => c.id === catId);
       if (cat) clueEditor.openClueModal(cat, value);
     },
+    onLocalControlChanged: (nextControlDiscordUserId) => {
+      const currentSession = persistence.sessionRef.current;
+      if (!currentSession?.data) return;
+      if (currentSession.data.controlDiscordUserId === nextControlDiscordUserId) return;
+      currentSession.data.controlDiscordUserId = nextControlDiscordUserId;
+      persistence.persist();
+    },
   });
   // Daily Double wager, submitted by whoever currently holds board control
   // (the player who picked the clue) from their own device. The server
@@ -307,6 +314,16 @@ export default function JeopardyBoard({ onBack }) {
     persistence.setRoomCode(roomCode);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [roomCode, persistence.setRoomCode]);
+
+  async function rotateRoomCode() {
+    const oldRoomCode = roomCode;
+    const { roomCode: newRoomCode } = await SessionStore.rotateInviteCode(session.session.id);
+    if (!newRoomCode || newRoomCode === oldRoomCode) throw new Error("The server did not return a new room code.");
+    await persistence.rotateRoomCode(oldRoomCode, newRoomCode);
+    persistence.setSession((currentSession) =>
+      currentSession ? { ...currentSession, roomCode: newRoomCode } : currentSession
+    );
+  }
 
   // Click/hover sfx is installed once at the App root (covers every
   // screen: RoleSelect, LoginGate, and this board) — see App.jsx, not here.
@@ -534,6 +551,9 @@ export default function JeopardyBoard({ onBack }) {
               ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
               onToggleDdWagerBasisPlayerScore={toggleDdWagerBasisPlayerScore}
               onEndGame={handleEndGame}
+              onRotateRoomCode={rotateRoomCode}
+              appConfirm={appConfirm}
+              appAlert={appAlert}
             />
           </div>
 

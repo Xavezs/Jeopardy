@@ -45,7 +45,7 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
 // reference this one constant instead of hardcoding the string again.
 export const OPEN_CONTROL = "__OPEN__";
 
-export function useControlSync(roomCode, me, { onClueSelected } = {}) {
+export function useControlSync(roomCode, me, { onClueSelected, onLocalControlChanged } = {}) {
   const [controlDiscordUserId, setControlDiscordUserId] = useState(null);
   const [connected, setConnected] = useState(false);
   const socketRef = useRef(null);
@@ -57,6 +57,8 @@ export function useControlSync(roomCode, me, { onClueSelected } = {}) {
   // the socket — only the latest callback is ever invoked.
   const onClueSelectedRef = useRef(onClueSelected);
   onClueSelectedRef.current = onClueSelected;
+  const onLocalControlChangedRef = useRef(onLocalControlChanged);
+  onLocalControlChangedRef.current = onLocalControlChanged;
 
   // Same reasoning as onClueSelectedRef: selectClue below is memoized with
   // an empty dep array, so it needs a ref (not a closed-over `me`) to see
@@ -74,7 +76,8 @@ export function useControlSync(roomCode, me, { onClueSelected } = {}) {
     });
     socket.on("disconnect", () => setConnected(false));
     socket.on("controlChanged", ({ controlDiscordUserId: id }) => {
-      setControlDiscordUserId(id ?? null);
+      const nextId = id ?? null;
+      setControlDiscordUserId(nextId);
     });
     socket.on("clueSelected", (payload) => {
       onClueSelectedRef.current?.(payload);
@@ -104,12 +107,14 @@ export function useControlSync(roomCode, me, { onClueSelected } = {}) {
     const roomCode = roomCodeRef.current;
     if (!roomCode) return;
     socketRef.current?.emit("judgeAnswer", { roomCode, discordUserId, correct });
+    if (correct) onLocalControlChangedRef.current?.(discordUserId || null);
   }, []);
 
   const hostSetControl = useCallback((discordUserId) => {
     const roomCode = roomCodeRef.current;
     if (!roomCode) return;
     socketRef.current?.emit("hostSetControl", { roomCode, discordUserId });
+    onLocalControlChangedRef.current?.(discordUserId || null);
   }, []);
 
   // Flipped from "null = anyone's turn" to "null = nobody's turn (locked,
