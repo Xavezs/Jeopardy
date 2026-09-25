@@ -1969,7 +1969,7 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
                           selectClue({ catId: cat.id, value: v });
                         }}
                       >
-                        {clue?.used ? "" : `$${v}`}
+                        ${v}
                       </div>
                     );
                   })}

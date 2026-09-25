@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from "react";
 import { isYoutubeUrl } from "../lib/youtube";
+import React, { useState, useEffect } from "react";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
 import CustomAudioPlayer from './CustomAudioPlayer';
 import CustomVideoPlayer from './CustomVideoPlayer';
@@ -198,11 +198,17 @@ export default function ClueModal({
   const [renderAs, setRenderAs] = useState("");
   const [questionPlaying, setQuestionPlaying] = useState(false);
   const questionTimeRef = React.useRef(0);
+  const [questionClipSeconds, setQuestionClipSeconds] = useState(
+    clue?.mediaClipSeconds != null ? String(clue.mediaClipSeconds) : ""
+  );
 
   const [answerMediaUrl, setAnswerMediaUrl] = useState("");
   const [answerRenderAs, setAnswerRenderAs] = useState("");
   const [answerPlaying, setAnswerPlaying] = useState(false);
   const answerTimeRef = React.useRef(0);
+  const [answerClipSeconds, setAnswerClipSeconds] = useState(
+    clue?.answerMediaClipSeconds != null ? String(clue.answerMediaClipSeconds) : ""
+  );
 
   // True when renderAs/answerRenderAs came from a confirmed source (a
   // stored clue.mediaType, or the Drive /meta mimeType lookup) rather than
@@ -337,6 +343,8 @@ export default function ClueModal({
     setSelectedTeamId(null);
     setQuestionPlaying(false);
     setAnswerPlaying(false);
+    setQuestionClipSeconds(clue?.mediaClipSeconds != null ? String(clue.mediaClipSeconds) : "");
+    setAnswerClipSeconds(clue?.answerMediaClipSeconds != null ? String(clue.answerMediaClipSeconds) : "");
     setMediaResolved(false);
     setMediaStatus(clue?.mediaUrl ? "preparing" : "ready");
     setMediaStatusMessage("");
@@ -346,6 +354,29 @@ export default function ClueModal({
     setWagerInput("");
     setManualWagerOverride(false);
   }, [clueId, effectiveDuration]);
+
+  function parseClipSeconds(value) {
+    const parsed = parseFloat(value);
+    return value.trim() === "" || !Number.isFinite(parsed) || parsed <= 0 ? null : parsed;
+  }
+
+  function renderClipControl(value, onChange, label) {
+    return (
+      <label className="clue-media-clip-control">
+        <span>{label}</span>
+        <input
+          type="number"
+          min="0.1"
+          step="0.1"
+          placeholder="Full media"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onWheel={(event) => event.currentTarget.blur()}
+        />
+        <span className="clue-media-clip-unit">sec</span>
+      </label>
+    );
+  }
 
   // Download the question media before the host can reveal the clue. The
   // media players use the same URL afterwards, so the browser/server cache
@@ -424,6 +455,19 @@ export default function ClueModal({
     }, 1000);
     return () => clearInterval(id);
   }, [running]);
+
+  // Once time's up, snap back to the host's starting duration after a
+  // brief "time's up" flash (color/sound), so the ring is armed and
+  // ready to go again without a manual reset click.
+  useEffect(() => {
+    if (!timeUp) return;
+    const id = setTimeout(() => {
+      setRemaining(effectiveDuration);
+      setTimeUp(false);
+      alertPlayedRef.current = false;
+    }, 1200);
+    return () => clearTimeout(id);
+  }, [timeUp, effectiveDuration]);
 
   // Reveal-time timer start — waits for BOTH the card to be flipped AND
   // media-type resolution to finish for this clue, so it can't fire on
@@ -882,24 +926,49 @@ export default function ClueModal({
             </div>
             {flipped && questionMediaSrc && renderAs && (
               <div className="clue-media">
-                {renderAs === "image" && (
-                  <ClueMediaImage
-                    src={questionMediaSrc}
-                    alt=""
-                    onLoadError={() => {
-                      // Only fall through to "maybe it's actually a video"
-                      // when "image" was itself just a guess — a confirmed
-                      // image that failed to load stays a failed image,
-                      // not a reason to try mounting a video player against
-                      // the same broken URL.
-                      if (!renderTypeConfident) setRenderAs("video");
-                    }}
-                  />
-                )}
-                {renderAs === "video" &&
-                  (isYoutubeUrl(questionMediaSrc) ? (
-                    <YoutubePlayer
+                <div className="clue-media-player-row">
+                  {renderAs === "image" && (
+                    <ClueMediaImage
                       src={questionMediaSrc}
+                      alt=""
+                      onLoadError={() => {
+                        if (!renderTypeConfident) setRenderAs("video");
+                      }}
+                    />
+                  )}
+                  {renderAs === "video" &&
+                    (isYoutubeUrl(questionMediaSrc) ? (
+                      <YoutubePlayer
+                        src={questionMediaSrc}
+                        clipSeconds={parseClipSeconds(questionClipSeconds)}
+                        isPlaying={questionPlaying}
+                        onPlayStateChange={(playing, time) => {
+                          questionTimeRef.current = time ?? questionTimeRef.current;
+                          setQuestionPlaying(playing);
+                          if (onDuckMusic) onDuckMusic(playing);
+                          if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                        }}
+                      />
+                    ) : (
+                      <CustomVideoPlayer
+                        src={questionMediaSrc}
+                        clipSeconds={parseClipSeconds(questionClipSeconds)}
+                        onError={() => {
+                          if (!renderTypeConfident) setRenderAs("audio");
+                        }}
+                        isPlaying={questionPlaying}
+                        onPlayStateChange={(playing, time) => {
+                          questionTimeRef.current = time ?? questionTimeRef.current;
+                          setQuestionPlaying(playing);
+                          if (onDuckMusic) onDuckMusic(playing);
+                          if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                        }}
+                      />
+                    ))}
+                  {renderAs === "audio" && (
+                    <CustomAudioPlayer
+                      src={questionMediaSrc}
+                      clipSeconds={parseClipSeconds(questionClipSeconds)}
                       isPlaying={questionPlaying}
                       onPlayStateChange={(playing, time) => {
                         questionTimeRef.current = time ?? questionTimeRef.current;
@@ -908,52 +977,59 @@ export default function ClueModal({
                         if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
                       }}
                     />
-                  ) : (
-                    <CustomVideoPlayer
-                      src={questionMediaSrc}
-                      onError={() => {
-                        if (!renderTypeConfident) setRenderAs("audio");
-                      }}
-                      isPlaying={questionPlaying}
-                      onPlayStateChange={(playing, time) => {
-                        questionTimeRef.current = time ?? questionTimeRef.current;
-                        setQuestionPlaying(playing);
-                        if (onDuckMusic) onDuckMusic(playing);
-                        if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
-                      }} 
-                    />
-                  ))}
-                {renderAs === "audio" && (
-                  <CustomAudioPlayer 
-                    src={questionMediaSrc}
-                    isPlaying={questionPlaying}
-                    onPlayStateChange={(playing, time) => {
-                      questionTimeRef.current = time ?? questionTimeRef.current;
-                      setQuestionPlaying(playing);
-                      if (onDuckMusic) onDuckMusic(playing);
-                      if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
-                    }} 
-                  />
-                )}
+                  )}
+                  {(renderAs === "video" || renderAs === "audio") &&
+                    renderClipControl(questionClipSeconds, setQuestionClipSeconds, "Play for")}
+                </div>
               </div>
             )}
 
             <div className={"clue-answer-box" + (revealed ? " show" : "")} style={{ whiteSpace: "pre-line" }}>{clue.answer || "(no answer set)"}</div>
             {revealed && answerMediaUrl && answerRenderAs && (
               <div className="clue-media clue-answer-media">
-                {answerRenderAs === "image" && (
-                  <ClueMediaImage
-                    src={answerMediaUrl}
-                    alt=""
-                    onLoadError={() => {
-                      if (!answerRenderTypeConfident) setAnswerRenderAs("video");
-                    }}
-                  />
-                )}
-                {answerRenderAs === "video" &&
-                  (isYoutubeUrl(answerMediaUrl) ? (
-                    <YoutubePlayer
+                <div className="clue-media-player-row">
+                  {answerRenderAs === "image" && (
+                    <ClueMediaImage
                       src={answerMediaUrl}
+                      alt=""
+                      onLoadError={() => {
+                        if (!answerRenderTypeConfident) setAnswerRenderAs("video");
+                      }}
+                    />
+                  )}
+                  {answerRenderAs === "video" &&
+                    (isYoutubeUrl(answerMediaUrl) ? (
+                      <YoutubePlayer
+                        src={answerMediaUrl}
+                        clipSeconds={parseClipSeconds(answerClipSeconds)}
+                        isPlaying={answerPlaying}
+                        onPlayStateChange={(playing, time) => {
+                          answerTimeRef.current = time ?? answerTimeRef.current;
+                          setAnswerPlaying(playing);
+                          if (onDuckMusic) onDuckMusic(playing);
+                          if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                        }}
+                      />
+                    ) : (
+                      <CustomVideoPlayer
+                        src={answerMediaUrl}
+                        clipSeconds={parseClipSeconds(answerClipSeconds)}
+                        onError={() => {
+                          if (!answerRenderTypeConfident) setAnswerRenderAs("audio");
+                        }}
+                        isPlaying={answerPlaying}
+                        onPlayStateChange={(playing, time) => {
+                          answerTimeRef.current = time ?? answerTimeRef.current;
+                          setAnswerPlaying(playing);
+                          if (onDuckMusic) onDuckMusic(playing);
+                          if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
+                        }}
+                      />
+                    ))}
+                  {answerRenderAs === "audio" && (
+                    <CustomAudioPlayer
+                      src={answerMediaUrl}
+                      clipSeconds={parseClipSeconds(answerClipSeconds)}
                       isPlaying={answerPlaying}
                       onPlayStateChange={(playing, time) => {
                         answerTimeRef.current = time ?? answerTimeRef.current;
@@ -962,33 +1038,10 @@ export default function ClueModal({
                         if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
                       }}
                     />
-                  ) : (
-                    <CustomVideoPlayer 
-                      src={answerMediaUrl} 
-                      onError={() => {
-                        if (!answerRenderTypeConfident) setAnswerRenderAs("audio");
-                      }} 
-                      isPlaying={answerPlaying}
-                      onPlayStateChange={(playing, time) => {
-                        answerTimeRef.current = time ?? answerTimeRef.current;
-                        setAnswerPlaying(playing);
-                        if (onDuckMusic) onDuckMusic(playing);
-                        if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
-                      }} 
-                    />
-                  ))}
-                {answerRenderAs === "audio" && (
-                  <CustomAudioPlayer 
-                    src={answerMediaUrl} 
-                    isPlaying={answerPlaying}
-                    onPlayStateChange={(playing, time) => {
-                      answerTimeRef.current = time ?? answerTimeRef.current;
-                      setAnswerPlaying(playing);
-                      if (onDuckMusic) onDuckMusic(playing);
-                      if (onMediaStateChange) onMediaStateChange({ isPlaying: playing, currentTime: time });
-                    }} 
-                  />
-                )}
+                  )}
+                  {(answerRenderAs === "video" || answerRenderAs === "audio") &&
+                    renderClipControl(answerClipSeconds, setAnswerClipSeconds, "Play for")}
+                </div>
               </div>
             )}
           </div>

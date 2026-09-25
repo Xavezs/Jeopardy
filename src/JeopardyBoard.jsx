@@ -383,10 +383,9 @@ export default function JeopardyBoard({ onBack }) {
     persistence.persist();
   }
 
-  // Off by default (undefined -> !undefined -> true on first toggle, same
-  // as toggleTimerEnabled) — that preserves the original Daily Double rule
-  // (only the wagering team may answer, no buzz race) for every board that
-  // hasn't explicitly opted into the house-rule variant.
+  // On by default — the buzzer opens for everyone on Daily Doubles.
+  // Boards that existed before this setting was added are migrated to true
+  // by migrateClueSchemaIfNeeded in sessionStore.js.
   function toggleDdBuzzerEnabled() {
     const d = session.data;
     d.settings.ddBuzzerEnabled = !d.settings.ddBuzzerEnabled;
@@ -533,23 +532,11 @@ export default function JeopardyBoard({ onBack }) {
               onOpenSessions={session.openSessionsModal}
               onOpenRandomizer={() => setView("randomizer")}
               onResetRound={resetRound}
-              timerEnabled={data.settings.timerEnabled}
-              timerDuration={data.settings.timerDuration}
-              sessionId={session.session.id}
-              onToggleTimerEnabled={toggleTimerEnabled}
-              onSetTimerDuration={setGlobalTimerDuration}
               roomCode={roomCode}
               players={persistence.players}
               teams={data.teams}
               controlDiscordUserId={controlDiscordUserId}
               onHostSetControl={hostSetControl}
-              onRandomizeDailyDoubles={board.randomizeDailyDoubles}
-              ddBuzzerEnabled={data.settings.ddBuzzerEnabled}
-              onToggleDdBuzzerEnabled={toggleDdBuzzerEnabled}
-              ddMinWagerZero={data.settings.ddMinWagerZero}
-              onToggleDdMinWagerZero={toggleDdMinWagerZero}
-              ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
-              onToggleDdWagerBasisPlayerScore={toggleDdWagerBasisPlayerScore}
               onEndGame={handleEndGame}
               onRotateRoomCode={rotateRoomCode}
               appConfirm={appConfirm}
@@ -596,6 +583,18 @@ export default function JeopardyBoard({ onBack }) {
               openClueModal={clueEditor.openClueModal}
               toggleDailyDouble={board.toggleDailyDouble}
               blankClue={blankClue}
+              timerEnabled={data.settings.timerEnabled}
+              timerDuration={data.settings.timerDuration}
+              sessionId={session.session.id}
+              onToggleTimerEnabled={toggleTimerEnabled}
+              onSetTimerDuration={setGlobalTimerDuration}
+              ddBuzzerEnabled={data.settings.ddBuzzerEnabled}
+              onToggleDdBuzzerEnabled={toggleDdBuzzerEnabled}
+              ddMinWagerZero={data.settings.ddMinWagerZero}
+              onToggleDdMinWagerZero={toggleDdMinWagerZero}
+              ddWagerBasisPlayerScore={data.settings.ddWagerBasisPlayerScore}
+              onToggleDdWagerBasisPlayerScore={toggleDdWagerBasisPlayerScore}
+              onRandomizeDailyDoubles={board.randomizeDailyDoubles}
             />
           )}
 
@@ -709,6 +708,12 @@ export default function JeopardyBoard({ onBack }) {
                 </div>
               );
             })}
+            {editMode && data.teams.length === 0 && (
+              <div className="teams-empty-placeholder">
+                <span className="teams-empty-placeholder-text">No teams yet</span>
+                <span className="teams-empty-placeholder-hint">Hit + to add one</span>
+              </div>
+            )}
             {editMode && (
               <div className="team-add-card">
                 <button title="Add Team" onClick={teams.addTeam}>

@@ -1,5 +1,6 @@
 import React from "react";
 import { playHoverTick, playClickSfx } from "../lib/boardSfx";
+import BoardSettingsPopover from "./BoardSettingsPopover";
 
 // Small icon for the hover-preview media badge — falls back to a generic
 // 📎 when there's a URL but no sniffable type (e.g. a Google Drive share
@@ -48,10 +49,49 @@ export default function ClueGrid({
   openClueModal,
   toggleDailyDouble,
   blankClue,
+  // Board settings — only needed in edit mode, passed through to the gear popover
+  timerEnabled,
+  timerDuration,
+  sessionId,
+  onToggleTimerEnabled,
+  onSetTimerDuration,
+  ddBuzzerEnabled,
+  onToggleDdBuzzerEnabled,
+  ddMinWagerZero,
+  onToggleDdMinWagerZero,
+  ddWagerBasisPlayerScore,
+  onToggleDdWagerBasisPlayerScore,
+  onRandomizeDailyDoubles,
 }) {
   return (
     <div id="boardWrap">
       <div id="board" style={boardGridStyle}>
+        {/* Gear settings cell — top-left corner, only in edit mode.
+            Sits at row 1 / col 1 (the row-control gutter column) and
+            opens a popover with all board settings so the toolbar
+            row stays clean. */}
+        {editMode && (
+          <div
+            className="board-settings-gear-cell"
+            style={{ gridRow: 1, gridColumn: 1 }}
+          >
+            <BoardSettingsPopover
+              timerEnabled={timerEnabled}
+              timerDuration={timerDuration}
+              sessionId={sessionId}
+              onToggleTimerEnabled={onToggleTimerEnabled}
+              onSetTimerDuration={onSetTimerDuration}
+              ddBuzzerEnabled={ddBuzzerEnabled}
+              onToggleDdBuzzerEnabled={onToggleDdBuzzerEnabled}
+              ddMinWagerZero={ddMinWagerZero}
+              onToggleDdMinWagerZero={onToggleDdMinWagerZero}
+              ddWagerBasisPlayerScore={ddWagerBasisPlayerScore}
+              onToggleDdWagerBasisPlayerScore={onToggleDdWagerBasisPlayerScore}
+              onRandomizeDailyDoubles={onRandomizeDailyDoubles}
+            />
+          </div>
+        )}
+
         {rd.categories.map((cat, catIndex) => {
           const isRevealed = editMode || revealedCats.has(cat.id);
           return (
@@ -188,7 +228,7 @@ export default function ClueGrid({
                       if (editMode) {
                         playClickSfx();
                         openEditModal(cat, v);
-                      } else if (!clue.used) {
+                      } else {
                         playClickSfx();
                         openClueModal(cat, v);
                       }

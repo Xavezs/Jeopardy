@@ -21,6 +21,7 @@ export default function YoutubePlayer({
   currentTime: externalCurrentTime,
   disablePlayPause = false,
   disableSeeking = false,
+  clipSeconds = null,
 }) {
   const elementIdRef = useRef(`yt-player-${++instanceCounter}`);
   const playerRef = useRef(null);
@@ -30,9 +31,15 @@ export default function YoutubePlayer({
   const [duration, setDuration] = useState(0);
   const [volume, setVolume] = useState(80); // YT API volume is 0-100
   const [isMuted, setIsMuted] = useState(false);
+  const clipEndTimeRef = useRef(null);
 
   const videoId = getYoutubeVideoId(src);
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
+  useEffect(() => {
+    clipEndTimeRef.current = clipSeconds && isPlaying && playerRef.current
+      ? playerRef.current.getCurrentTime() + Number(clipSeconds)
+      : null;
+  }, [clipSeconds]);
 
   // Create the player once per videoId.
   useEffect(() => {
@@ -76,6 +83,7 @@ export default function YoutubePlayer({
                 onPlayStateChange && onPlayStateChange(false, e.target.getCurrentTime());
               } else if (e.data === 0) {
                 setInternalIsPlaying(false);
+                e.target.seekTo(0, true);
                 setCurrentTime(0);
                 onPlayStateChange && onPlayStateChange(false, 0);
               }
@@ -132,6 +140,7 @@ export default function YoutubePlayer({
   useEffect(() => {
     if (!ready || !playerRef.current || externalIsPlaying === undefined) return;
     if (externalIsPlaying) {
+      clipEndTimeRef.current = clipSeconds ? (playerRef.current.getCurrentTime?.() || 0) + Number(clipSeconds) : null;
       playerRef.current.playVideo();
     } else {
       playerRef.current.pauseVideo();
@@ -149,6 +158,18 @@ export default function YoutubePlayer({
     }
   }, [externalCurrentTime, ready]);
 
+  useEffect(() => {
+    if (!ready || !isPlaying || !clipSeconds || !playerRef.current) return;
+    const id = setInterval(() => {
+      const time = playerRef.current.getCurrentTime();
+      if (clipEndTimeRef.current != null && time >= clipEndTimeRef.current) {
+        playerRef.current.pauseVideo();
+        onPlayStateChange && onPlayStateChange(false, time);
+      }
+    }, 100);
+    return () => clearInterval(id);
+  }, [ready, isPlaying, clipSeconds, onPlayStateChange]);
+
   const togglePlay = () => {
     if (disablePlayPause || !playerRef.current) return;
     if (internalIsPlaying) {
@@ -162,6 +183,7 @@ export default function YoutubePlayer({
     if (disableSeeking || !playerRef.current) return;
     const time = parseFloat(e.target.value);
     playerRef.current.seekTo(time, true);
+    clipEndTimeRef.current = clipSeconds && isPlaying ? time + Number(clipSeconds) : null;
     setCurrentTime(time);
     onPlayStateChange && onPlayStateChange(isPlaying, time);
   };

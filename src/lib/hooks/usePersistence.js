@@ -1,8 +1,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
-import { io } from "socket.io-client";
+import { useSocket } from "../SocketContext";
 import { SessionStore } from "../storage";
-
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
 
 // A board can disappear out from under an open session — deleted by its
 // owner from another device/tab, a delete that succeeded server-side even
@@ -37,6 +35,12 @@ async function saveSessionTolerant(s) {
    Owns session STATE and its autosave plumbing. Role-aware via `isHost`:
    only the host emits 'boardUpdate' on connect or save, preventing non-host
    clients or secondary test windows from clobbering active room state.
+
+   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
+   instead of opening its own connection. `socketRef` still exists and is
+   kept in sync with the shared socket — everything below (persist,
+   setRoomCode, rotateRoomCode) reads through the ref exactly like before,
+   so none of that logic needed to change.
    ========================================================================= */
 export function usePersistence(isHost = true) {
   const [session, setSession] = useState(null);
@@ -55,7 +59,11 @@ export function usePersistence(isHost = true) {
   const persistTimeout = useRef(null);
 
   // --- live sync ---
+  const { socket } = useSocket();
   const socketRef = useRef(null);
+  useEffect(() => {
+    socketRef.current = socket;
+  }, [socket]);
   const roomCodeRef = useRef(null);
 
   // Recently-deleted team names (lowercased) -> deletion timestamp. Lets the
@@ -93,10 +101,9 @@ export function usePersistence(isHost = true) {
   const [players, setPlayers] = useState([]);
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
+    const handleConnect = () => {
       const roomCode = roomCodeRef.current;
       if (!roomCode) return;
       socket.emit("joinRoom", { roomCode, role: "host" });
@@ -108,16 +115,16 @@ export function usePersistence(isHost = true) {
           updatedAt: s.updatedAt,
         });
       }
-    });
+    };
+
+    const handlePlayersUpdate = (list) => {
+      setPlayers(Array.isArray(list) ? list : []);
+    };
 
     // Applying a remote update goes straight into setSession, deliberately
     // NOT through persist()/touch() — so receiving one never triggers a
     // save or a rebroadcast.
-    socket.on("playersUpdate", (list) => {
-      setPlayers(Array.isArray(list) ? list : []);
-    });
-
-    socket.on("boardUpdate", ({ data, updatedAt }) => {
+    const handleBoardUpdate = ({ data, updatedAt }) => {
       const s = sessionRef.current;
       if (!s) return;
 
@@ -197,10 +204,23 @@ export function usePersistence(isHost = true) {
       // Last-write-wins: ignore a remote update older than what we already have.
       if (updatedAt && s.updatedAt && updatedAt < s.updatedAt) return;
       setSession((prev) => (prev ? { ...prev, data, updatedAt } : prev));
-    });
+    };
 
-    return () => socket.disconnect();
-  }, []);
+    socket.on("connect", handleConnect);
+    socket.on("playersUpdate", handlePlayersUpdate);
+    socket.on("boardUpdate", handleBoardUpdate);
+
+    // Socket may already be connected (shared across hooks that mount at
+    // slightly different times) — join immediately rather than waiting
+    // for a 'connect' event that already fired.
+    if (socket.connected) handleConnect();
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("playersUpdate", handlePlayersUpdate);
+      socket.off("boardUpdate", handleBoardUpdate);
+    };
+  }, [socket]);
 
   const setRoomCode = useCallback((code) => {
     roomCodeRef.current = code || null;

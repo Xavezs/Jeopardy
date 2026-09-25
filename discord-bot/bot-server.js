@@ -129,6 +129,36 @@ const io = new Server(server, {
 const gameRooms = new Map();
 const invalidatedRoomCodes = new Set();
 
+// How often the empty-room sweep below runs. Doesn't need to be frequent —
+// this is just memory hygiene, not anything time-sensitive to a live game.
+const ROOM_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+// Rooms are never deleted anywhere else: a disconnect only ever removes
+// the *player* from room.players (see the 'disconnect' handler and its
+// DISCONNECT_GRACE_MS timeout below), never the room itself. Without this,
+// every room anyone ever hosts stays in `gameRooms` for the lifetime of
+// the process, even long after everyone's left. This sweep reclaims a
+// room once it's genuinely abandoned.
+//
+// Checked against Socket.IO's own room membership (io.sockets.adapter.rooms),
+// not room.players — room.players only ever gets entries from joinAsPlayer,
+// so a host who's alone building/editing a board (no one's called
+// joinAsPlayer yet) has no roster entry at all. Checking room.players here
+// would treat that as "empty" and delete the room, board and all, out from
+// under an actively-connected host. Checking actual socket presence instead
+// covers the host (and any spectator) the same way it covers players.
+function sweepEmptyRooms() {
+  for (const [roomCode, room] of gameRooms) {
+    const socketsInRoom = io.sockets.adapter.rooms.get(roomCode);
+    if (socketsInRoom && socketsInRoom.size > 0) continue; // someone's still actually connected
+    const hasPendingReconnect = room?.pendingRemovals && room.pendingRemovals.size > 0;
+    if (hasPendingReconnect) continue;
+    gameRooms.delete(roomCode);
+  }
+}
+
+setInterval(sweepEmptyRooms, ROOM_SWEEP_INTERVAL_MS).unref();
+
 /* =========================================================================
    VOICE PRESENCE (roster + mute/deaf only — no bot audio connection)
    Discord's regular Gateway (GuildVoiceStates intent) tells us who's in a
@@ -784,6 +814,15 @@ io.on('connection', (socket) => {
       const team = room.board.data.teams.find((t) => t.id === existing.teamId);
       socket.emit('joinedTeam', { teamId: existing.teamId, teamName: team?.name || trimmedName });
       io.to(roomCode).emit('playersUpdate', room.players);
+
+      // Reconnect path was previously missing this — the fresh-join branch
+      // below sends boardUpdate, but a returning player (tab refresh, brief
+      // drop) landed here instead and never got the board at all, since
+      // usePlayerSync's boardData starts at null on every fresh mount and
+      // nothing else would resend it until the host's next edit. Without
+      // this, a mid-game refresh could leave a player staring at a blank
+      // board indefinitely.
+      if (room.board) socket.emit('boardUpdate', room.board);
 
       if (room.buzzer) socket.emit('buzzerState', room.buzzer);
       if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);

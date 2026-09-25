@@ -1,5 +1,7 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { toPerceptualVolume } from '../lib/utils';
+import { useMediaSource } from '../lib/hooks/useMediaSource';
+import { useClipCutoff } from '../lib/hooks/useClipCutoff';
 
 export default function CustomAudioPlayer({ 
   src, 
@@ -8,7 +10,11 @@ export default function CustomAudioPlayer({
   isPlaying: externalIsPlaying, 
   currentTime: externalCurrentTime, 
   disablePlayPause = false, 
-  disableSeeking = false 
+  disableSeeking = false,
+  // Per-clue "stop after N seconds" cutoff (see useClueEditor.js's
+  // mediaClipSeconds/answerMediaClipSeconds) — undefined/null/0 means play
+  // in full. Built for "1-second music round"-style clues.
+  clipSeconds = null,
 }) {
   const audioRef = useRef(null);
   const timelineRef = useRef(null);
@@ -26,129 +32,13 @@ export default function CustomAudioPlayer({
   // reliably forward Range-request streaming for larger files, so we fetch
   // once as a whole blob and play from a local blob URL instead of letting
   // the <audio> element stream the proxied URL directly.
-  const [resolvedSrc, setResolvedSrc] = useState('');
-  const [prefetching, setPrefetching] = useState(false);
-  // Surfaced in the UI so a stuck load reads as "still waiting" vs
-  // "actually failed" instead of an indefinite "Loading…".
-  const [prefetchError, setPrefetchError] = useState('');
-  // Bumped by the manual "Retry" button. >0 means this run should bypass
-  // the browser's HTTP cache — the automatic retry above only helps with
-  // a transient network blip, but if the clue's media file was replaced
-  // at the same URL, the browser may have a stale cached response that a
-  // plain re-fetch would just hand back again.
-  const [manualRetryCount, setManualRetryCount] = useState(0);
-
-  // How long to wait for the proxy before giving up. The backend media
-  // proxy queues/throttles Google Drive requests (see media.js), so under
-  // load this can legitimately take a few seconds — 20s gives it room
-  // without leaving the player stuck forever if something's actually wrong.
-  const FETCH_TIMEOUT_MS = 45000;
-
-  async function fetchAsBlob(url, signal, bypassCache) {
-    const res = await fetch(url, { signal, cache: bypassCache ? 'no-store' : 'default' });
-    if (!res.ok) throw new Error('HTTP ' + res.status);
-    return res.blob();
-  }
-
-  // A manual Retry click bypasses the browser's HTTP cache (bypassCache
-  // above) but the server also holds its own short-lived negative cache
-  // for failed Google Drive fetches (see media.js) — without this, a
-  // retry within that window just gets served the same cached error back
-  // instantly, without the server ever trying Google again. Appending
-  // force=1 tells the server to skip that cache and make a real attempt.
-  // Only used for the manual retry, never the automatic first retry below,
-  // so a normal transient blip still benefits from the server's in-flight
-  // request coalescing instead of doubling up load on Google.
-  function withForceParam(url) {
-    try {
-      const u = new URL(url, window.location.origin);
-      u.searchParams.set('force', '1');
-      return u.toString();
-    } catch {
-      return url + (url.includes('?') ? '&' : '?') + 'force=1';
-    }
-  }
-
-  useEffect(() => {
-    let cancelled = false;
-    let blobUrl = null;
-    setResolvedSrc('');
-    setPrefetchError('');
-    setPrefetching(false);
-
-    if (!src) return;
-
-    if (src.startsWith('blob:') || src.startsWith('data:')) {
-      setResolvedSrc(src);
-      return;
-    }
-
-    const bypassCache = manualRetryCount > 0;
-    const fetchUrl = bypassCache ? withForceParam(src) : src;
-
-    // Aborts the in-flight fetch (and its timeout) whenever src changes or
-    // this effect is torn down, instead of letting an abandoned request run
-    // to completion and occupy a slot in the backend's proxy queue for no
-    // reason.
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-
-    setPrefetching(true);
-    (async () => {
-      try {
-        let blob;
-        try {
-          blob = await fetchAsBlob(fetchUrl, controller.signal, bypassCache);
-        } catch (firstErr) {
-          // One retry for a plain network hiccup — but not if we were
-          // aborted (deliberate cancel/timeout) or the component unmounted,
-          // since retrying either of those would be pointless.
-          if (cancelled || controller.signal.aborted) throw firstErr;
-          // Brief pause before retrying: firing again instantly tends to
-          // land on the exact same failure (server-side negative cache,
-          // or a Google rate-limit wall that hasn't cleared yet) — a short
-          // wait gives that window a chance to pass. Cancelled early if
-          // the component unmounts or the fetch times out while waiting.
-          await new Promise((resolve) => {
-            const t = setTimeout(resolve, 1500);
-            controller.signal.addEventListener('abort', () => {
-              clearTimeout(t);
-              resolve();
-            });
-          });
-          if (cancelled || controller.signal.aborted) throw firstErr;
-          blob = await fetchAsBlob(fetchUrl, controller.signal, bypassCache);
-        }
-        if (cancelled) return;
-        blobUrl = URL.createObjectURL(blob);
-        setResolvedSrc(blobUrl);
-      } catch (err) {
-        if (cancelled) return;
-        const timedOut = controller.signal.aborted;
-        const message = timedOut
-          ? 'Audio failed to load: timed out waiting for the server.'
-          : 'Audio failed to load: ' + (err?.message || 'unknown error');
-        console.error('[CustomAudioPlayer] blob prefetch failed:', err, 'src=' + src);
-        setPrefetchError(message);
-        // Only fall back to the raw src if we weren't the ones who aborted
-        // it — a timed-out/aborted request has nothing useful to fall back
-        // to, and a CSP-blocked URL will just fail again the same way.
-        if (!timedOut) setResolvedSrc(src);
-      } finally {
-        if (!cancelled) setPrefetching(false);
-        clearTimeout(timeoutId);
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-      controller.abort();
-      clearTimeout(timeoutId);
-      if (blobUrl) URL.revokeObjectURL(blobUrl);
-    };
-  }, [src, manualRetryCount]);
+  const { resolvedSrc, prefetching, prefetchError, retry } = useMediaSource(src, {
+    label: 'Audio',
+    logPrefix: '[CustomAudioPlayer]',
+  });
 
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
+  const clipCutoff = useClipCutoff(clipSeconds, isPlaying, audioRef);
 
   // Keep audio volume in sync with React state
   useEffect(() => {
@@ -266,6 +156,7 @@ export default function CustomAudioPlayer({
       onPlayStateChange && onPlayStateChange(false, audioRef.current.currentTime);
       setInternalIsPlaying(false);
     } else {
+      clipCutoff.arm(audioRef.current.currentTime);
       audioRef.current.play();
       onPlayStateChange && onPlayStateChange(true, audioRef.current.currentTime);
       setInternalIsPlaying(true);
@@ -286,10 +177,37 @@ export default function CustomAudioPlayer({
   }, [isPlaying, onPlayStateChange]);
 
   const handleTimeUpdate = () => {
-    if (audioRef.current) {
-      setCurrentTime(audioRef.current.currentTime);
-      paintTimeline(audioRef.current.currentTime);
+    if (!audioRef.current) return;
+    // Clip cutoff — checked before the normal state update below so a
+    // cut clip never briefly shows a currentTime past the limit. Unlike
+    // the browser's own `ended` event, hitting this doesn't pause the
+    // element automatically, so handleClipEnd does that explicitly.
+    if (clipCutoff.hasReachedCutoff(audioRef.current.currentTime)) {
+      handleClipEnd();
+      return;
     }
+    setCurrentTime(audioRef.current.currentTime);
+    paintTimeline(audioRef.current.currentTime);
+  };
+
+  // Same externally-visible effect as handleEnded below (pause, notify
+  // parent) but for a clip hitting its configured limit rather than the
+  // media's own natural end — the native `ended` event never fires here,
+  // so this has to pause the element itself. Unlike handleEnded, this
+  // rewinds to where the clip *started* (clipCutoff.clipStartTime())
+  // rather than to 0, so replaying the clue replays the same clip instead
+  // of the start of the whole file.
+  const handleClipEnd = () => {
+    const startTime = clipCutoff.clipStartTime();
+    audioRef.current.pause();
+    audioRef.current.currentTime = startTime;
+    if (externalIsPlaying === undefined) {
+      setInternalIsPlaying(false);
+    }
+    setCurrentTime(startTime);
+    paintTimeline(startTime);
+    onPlayStateChange && onPlayStateChange(false, startTime);
+    clipCutoff.disarm();
   };
 
   const handleLoadedMetadata = () => {
@@ -304,6 +222,7 @@ export default function CustomAudioPlayer({
     const time = parseFloat(e.target.value);
     if (audioRef.current) {
       audioRef.current.currentTime = time;
+      if (isPlaying) clipCutoff.arm(time); else clipCutoff.disarm();
       setCurrentTime(time);
       paintTimeline(time);
       onPlayStateChange && onPlayStateChange(isPlaying, time);
@@ -339,9 +258,10 @@ export default function CustomAudioPlayer({
     if (externalIsPlaying === undefined) {
       setInternalIsPlaying(false);
     }
+    if (audioRef.current) audioRef.current.currentTime = 0;
     setCurrentTime(0);
     paintTimeline(0);
-    onPlayStateChange && onPlayStateChange(false);
+    onPlayStateChange && onPlayStateChange(false, 0);
   };
 
   return (
@@ -372,7 +292,7 @@ export default function CustomAudioPlayer({
           <button
             type="button"
             className="clue-media-retry-btn"
-            onClick={() => setManualRetryCount((n) => n + 1)}
+            onClick={retry}
           >
             Retry
           </button>
@@ -423,6 +343,7 @@ export default function CustomAudioPlayer({
           max={duration || 100}
           defaultValue={0}
           ref={timelineRef}
+          onInput={handleSeek}
           onChange={handleSeek}
           disabled={disableSeeking}
           className="player-slider timeline-slider"

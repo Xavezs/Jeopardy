@@ -1,8 +1,6 @@
 // lib/hooks/useControlSync.js
 import { useEffect, useState, useRef, useCallback } from "react";
-import { io } from "socket.io-client";
-
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
+import { useSocket } from "../SocketContext";
 
 /* =========================================================================
    useControlSync
@@ -10,6 +8,11 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    allowed to pick the next category/clue. Keyed by discordUserId (stable
    across reconnects), never socket.id, same reasoning as usePlayerSync's
    team-identity handling — see bot-server.js's controlDiscordUserId notes.
+
+   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
+   instead of opening its own connection — listeners are added/removed
+   with socket.on/off, and `connected` now reflects the shared socket's
+   state rather than a connection this hook owned itself.
 
    `roomCode` — required to receive/send anything.
    `me` — { discordUserId } for the current logged-in player. Needed to
@@ -47,75 +50,82 @@ export const OPEN_CONTROL = "__OPEN__";
 
 export function useControlSync(roomCode, me, { onClueSelected, onLocalControlChanged } = {}) {
   const [controlDiscordUserId, setControlDiscordUserId] = useState(null);
-  const [connected, setConnected] = useState(false);
-  const socketRef = useRef(null);
+  const { socket, connected } = useSocket();
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
   // Kept in a ref (not the effect's dependency array) so a new function
-  // reference from the host re-rendering doesn't tear down and reconnect
-  // the socket — only the latest callback is ever invoked.
+  // reference from the host re-rendering doesn't tear down and re-attach
+  // listeners — only the latest callback is ever invoked.
   const onClueSelectedRef = useRef(onClueSelected);
   onClueSelectedRef.current = onClueSelected;
   const onLocalControlChangedRef = useRef(onLocalControlChanged);
   onLocalControlChangedRef.current = onLocalControlChanged;
 
   // Same reasoning as onClueSelectedRef: selectClue below is memoized with
-  // an empty dep array, so it needs a ref (not a closed-over `me`) to see
+  // a stable dep array, so it needs a ref (not a closed-over `me`) to see
   // the latest discordUserId without being recreated every render.
   const meRef = useRef(me);
   meRef.current = me;
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
-      setConnected(true);
+    const handleConnect = () => {
       if (roomCodeRef.current) socket.emit("joinRoom", roomCodeRef.current);
-    });
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("controlChanged", ({ controlDiscordUserId: id }) => {
-      const nextId = id ?? null;
-      setControlDiscordUserId(nextId);
-    });
-    socket.on("clueSelected", (payload) => {
+    };
+    const handleControlChanged = ({ controlDiscordUserId: id }) => {
+      setControlDiscordUserId(id ?? null);
+    };
+    const handleClueSelected = (payload) => {
       onClueSelectedRef.current?.(payload);
-    });
+    };
 
-    return () => socket.disconnect();
-  }, []);
+    socket.on("connect", handleConnect);
+    socket.on("controlChanged", handleControlChanged);
+    socket.on("clueSelected", handleClueSelected);
+
+    if (socket.connected && roomCodeRef.current) {
+      socket.emit("joinRoom", roomCodeRef.current);
+    }
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("controlChanged", handleControlChanged);
+      socket.off("clueSelected", handleClueSelected);
+    };
+  }, [socket]);
 
   useEffect(() => {
-    if (roomCode && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", roomCode);
+    if (roomCode && socket?.connected) {
+      socket.emit("joinRoom", roomCode);
     }
-  }, [roomCode]);
+  }, [roomCode, socket]);
 
   const selectClue = useCallback(({ catId, value }) => {
     const roomCode = roomCodeRef.current;
-    if (!roomCode) return;
-    socketRef.current?.emit("selectClue", {
+    if (!roomCode || !socket) return;
+    socket.emit("selectClue", {
       roomCode,
       catId,
       value,
       discordUserId: meRef.current?.discordUserId ?? null,
     });
-  }, []);
+  }, [socket]);
 
   const judgeAnswer = useCallback((discordUserId, correct) => {
     const roomCode = roomCodeRef.current;
-    if (!roomCode) return;
-    socketRef.current?.emit("judgeAnswer", { roomCode, discordUserId, correct });
+    if (!roomCode || !socket) return;
+    socket.emit("judgeAnswer", { roomCode, discordUserId, correct });
     if (correct) onLocalControlChangedRef.current?.(discordUserId || null);
-  }, []);
+  }, [socket]);
 
   const hostSetControl = useCallback((discordUserId) => {
     const roomCode = roomCodeRef.current;
-    if (!roomCode) return;
-    socketRef.current?.emit("hostSetControl", { roomCode, discordUserId });
+    if (!roomCode || !socket) return;
+    socket.emit("hostSetControl", { roomCode, discordUserId });
     onLocalControlChangedRef.current?.(discordUserId || null);
-  }, []);
+  }, [socket]);
 
   // Flipped from "null = anyone's turn" to "null = nobody's turn (locked,
   // host hasn't assigned anyone yet)". A third state, OPEN_CONTROL, is what

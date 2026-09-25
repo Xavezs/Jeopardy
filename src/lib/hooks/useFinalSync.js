@@ -1,8 +1,6 @@
 // lib/hooks/useFinalSync.js
 import { useEffect, useRef, useCallback } from "react";
-import { io } from "socket.io-client";
-
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
+import { useSocket } from "../SocketContext";
 
 /* =========================================================================
    useFinalSync
@@ -12,6 +10,9 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    any time during the corresponding phase, and the server
    (submitFinalWager / submitFinalAnswer) only checks that they're a
    registered player, not who's "next".
+
+   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
+   instead of opening its own connection.
 
    `roomCode` — required to receive/send anything.
    `me` — { discordUserId } for the current logged-in player. Only needed
@@ -25,7 +26,7 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    like useWagerSync does for Daily Double.
    ========================================================================= */
 export function useFinalSync(roomCode, me, { onFinalWagerSubmitted, onFinalAnswerSubmitted } = {}) {
-  const socketRef = useRef(null);
+  const { socket } = useSocket();
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
@@ -38,43 +39,54 @@ export function useFinalSync(roomCode, me, { onFinalWagerSubmitted, onFinalAnswe
   meRef.current = me;
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
+    const handleConnect = () => {
       if (roomCodeRef.current) socket.emit("joinRoom", roomCodeRef.current);
-    });
-    socket.on("finalWagerSubmitted", (payload) => onWagerRef.current?.(payload));
-    socket.on("finalAnswerSubmitted", (payload) => onAnswerRef.current?.(payload));
+    };
+    const handleFinalWager = (payload) => onWagerRef.current?.(payload);
+    const handleFinalAnswer = (payload) => onAnswerRef.current?.(payload);
 
-    return () => socket.disconnect();
-  }, []);
+    socket.on("connect", handleConnect);
+    socket.on("finalWagerSubmitted", handleFinalWager);
+    socket.on("finalAnswerSubmitted", handleFinalAnswer);
+
+    if (socket.connected && roomCodeRef.current) {
+      socket.emit("joinRoom", roomCodeRef.current);
+    }
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("finalWagerSubmitted", handleFinalWager);
+      socket.off("finalAnswerSubmitted", handleFinalAnswer);
+    };
+  }, [socket]);
 
   useEffect(() => {
-    if (roomCode && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", roomCode);
+    if (roomCode && socket?.connected) {
+      socket.emit("joinRoom", roomCode);
     }
-  }, [roomCode]);
+  }, [roomCode, socket]);
 
   const submitFinalWager = useCallback((amount) => {
     const roomCode = roomCodeRef.current;
-    if (!roomCode) return;
-    socketRef.current?.emit("submitFinalWager", {
+    if (!roomCode || !socket) return;
+    socket.emit("submitFinalWager", {
       roomCode,
       amount,
       discordUserId: meRef.current?.discordUserId ?? null,
     });
-  }, []);
+  }, [socket]);
 
   const submitFinalAnswer = useCallback((answer) => {
     const roomCode = roomCodeRef.current;
-    if (!roomCode) return;
-    socketRef.current?.emit("submitFinalAnswer", {
+    if (!roomCode || !socket) return;
+    socket.emit("submitFinalAnswer", {
       roomCode,
       answer,
       discordUserId: meRef.current?.discordUserId ?? null,
     });
-  }, []);
+  }, [socket]);
 
   return { submitFinalWager, submitFinalAnswer };
 }

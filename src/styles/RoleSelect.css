@@ -13,7 +13,7 @@
 /* Marquee-style title, matching the board's lit-sign header */
 .role-select-title-wrap {
   text-align: center;
-  margin-bottom: 32px;
+  margin-bottom: 12px;
 }
 .role-select-title {
   font-family: var(--font-title, 'Arial Black', Impact, sans-serif);
@@ -86,6 +86,7 @@
   color: #1a1200;
   box-shadow: 0 4px 14px rgba(240, 185, 66, 0.25);
   transition: transform 0.12s ease, box-shadow 0.12s ease;
+  font-family: var(--font-body);
 }
 .role-select-host-btn:hover {
   transform: translateY(-1px);
@@ -200,6 +201,7 @@
   color: #f4f1ea;
   border: 1px solid rgba(47, 214, 184, 0.4);
   transition: transform 0.12s ease, opacity 0.12s ease;
+  font-family: var(--font-body);
 }
 .role-select-join-btn:hover:not(:disabled) {
   transform: translateY(-1px);
