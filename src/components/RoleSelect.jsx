@@ -1,11 +1,10 @@
 import React, { useState } from "react";
 import "../styles/RoleSelect.css";
+import ShopWidget from "./ShopWidget";
 
 export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamName = "", isJoining = false }) {
   const [inputCode, setInputCode] = useState("");
-  const [teamName, setTeamName] = useState(defaultTeamName);
-
-  return (
+  const [teamName, setTeamName] = useState(defaultTeamName);  return (
     <div className="role-select-root">
       {/* Marquee-style title, matching the board's lit-sign header */}
       <div className="role-select-title-wrap">
@@ -14,8 +13,7 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
       </div>
 
       {/* Horizontal split card: Host on the left, Join on the right */}
-      <div className="role-select-card">
-        {/* Host panel */}
+      <div className="role-select-card">        {/* Host panel */}
         <div className="role-select-panel host">
           <div>
             <h2 className="role-select-panel-title">Host / Manage Board</h2>
@@ -85,6 +83,9 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
           </form>
         </div>
       </div>
+
+      {/* Shop widget — bottom-left, same corner pattern as the BGM widget */}
+      <ShopWidget discordUserId={null} />
     </div>
   );
 }

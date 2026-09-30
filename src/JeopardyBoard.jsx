@@ -1,14 +1,21 @@
-import React, { useEffect, useState, useMemo, useRef } from "react";
+import React, { useEffect, useState, useMemo, useRef, useContext } from "react";
 import "./styles/board.css";
 import "./styles/final-jeopardy.css";
 import { blankClue } from "./lib/storage";
 import ClueGrid from "./components/ClueGrid";
+import TeamCard from "./components/TeamCard";
 import ClueModal from "./components/ClueModal";
 import EditClueModal from "./components/EditClueModal";
 import SessionsModal from "./components/SessionsModal";
 import ConfirmDialog from "./components/ConfirmDialog";
 import TeamRandomizer from "./components/TeamRandomizer";
 import BackgroundMusicPlayer from "./components/BackgroundMusicPlayer";
+import ShopWidget from "./components/ShopWidget";
+import SkillOverlay from "./components/SkillOverlay";
+import PowerDrawOverlay from "./components/PowerDrawOverlay";
+import { PowerupNotice } from "./components/PowerupUI";
+import { useSkillSync } from "./lib/hooks/useSkillSync";
+import { DiscordContext } from "./components/DiscordContext";
 import Marquee from "./components/Marquee";
 import RoundTabs from "./components/RoundTabs";
 import Toolbar from "./components/Toolbar";
@@ -36,6 +43,10 @@ import { SessionStore } from "./lib/storage";
 import { playCatRevealSfx, subscribeSfxDucking, loadFinalStandingsVolume, setFinalStandingsVolume } from "./lib/boardSfx";
 
 export default function JeopardyBoard({ onBack }) {
+  // Host's own Discord identity — available via DiscordContext (set by
+  // LoginGate after OAuth). Used to scope the shop wallet to this user.
+  const discordAuth = useContext(DiscordContext);
+  const hostDiscordUserId = discordAuth?.user?.id ?? null;
   const [editMode, setEditMode] = useState(false);
   const [view, setView] = useState("board"); // "board" | "randomizer"
   // Buzzer is always on now — the enable/disable toggle was removed since
@@ -262,6 +273,25 @@ export default function JeopardyBoard({ onBack }) {
   const { publishBgm } = useBgmSync(roomCode);
   const { publishRandomizer } = useRandomizerSync(roomCode);
   const { playerStats } = useStatsSync(roomCode);
+
+  // Skills (e.g. Domain Expansion): every client plays the cutscene; the host
+  // applies the server-computed score deltas when it ends, since the host owns
+  // scores. Same mutate-then-persist pattern usePersistence uses for teams.
+  const {
+    activeSkill, clearActiveSkill, powerDrawResult, runPowerDraw, runPowerApply, clearPowerDrawResult,
+    armedPowerups, frozenTeams, powerupNotice, clearPowerupNotice, consumeArmed,
+  } = useSkillSync(roomCode, null);
+  const handleSkillDone = () => {
+    const skill = activeSkill;
+    clearActiveSkill();
+    const current = persistence.sessionRef.current;
+    if (!skill?.deltas?.length || !current?.data?.teams) return;
+    for (const { teamId, delta } of skill.deltas) {
+      const team = current.data.teams.find((t) => t.id === teamId);
+      if (team) team.score = (Number(team.score) || 0) + delta;
+    }
+    persistence.persist();
+  };
 
   // Clear the synced randomizer state for players whenever the host leaves
   // the randomizer screen (Back to Board, or applying an order — see
@@ -495,9 +525,13 @@ export default function JeopardyBoard({ onBack }) {
       {view === "randomizer" ? (
         <TeamRandomizer
           teams={data.teams}
+          players={persistence.players || []}
+          myDiscordUserId={null}
           onApplyOrder={applyRandomizerOrder}
           onClose={() => setView("board")}
           onBroadcast={publishRandomizer}
+          onPowerDraw={runPowerDraw}
+          onPowerApply={runPowerApply}
         />
       ) : (
         <>
@@ -531,6 +565,7 @@ export default function JeopardyBoard({ onBack }) {
               onToggleEditMode={() => setEditMode((v) => !v)}
               onOpenSessions={session.openSessionsModal}
               onOpenRandomizer={() => setView("randomizer")}
+              onPowerDraw={runPowerDraw}
               onResetRound={resetRound}
               roomCode={roomCode}
               players={persistence.players}
@@ -601,113 +636,24 @@ export default function JeopardyBoard({ onBack }) {
           {!(rd.type === "final" && rd.phase === "done" && rd.standingsRevealed) && (
           <div id="scoreboardSection">
             <div id="teamsWrap">
-            {[...data.teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).map((team, rankIdx) => {
-              const discordTeamMembers = teams.resolveDiscordMembersForTeam(team);
-              return (
-                <div
-                  key={team.id}
-                  className={
-                    "team-card" +
-                    (editMode ? " is-editing" : "") +
-                    (!editMode && teams.selectedScoreTeamId === team.id ? " kb-selected" : "") +
-                    (discordTeamMembers.some((m) => m.speaking) ? " discord-speaking" : "")
-                  }
-                  role={editMode ? undefined : "button"}
-                  tabIndex={editMode ? undefined : 0}
-                  title={editMode ? undefined : `Select (or press ${data.teams.indexOf(team) + 1}), then use ↑ / ↓ to adjust score`}
-                  aria-label={editMode ? undefined : `Select ${team.name}'s score to adjust with arrow keys, or press ${data.teams.indexOf(team) + 1}`}
-                  onClick={() => {
-                    if (editMode) return;
-                    teams.setSelectedScoreTeamId((id) => (id === team.id ? null : team.id));
-                  }}
-                >
-                  {editMode && (
-                    <button className="team-remove" title="Remove this team" onClick={() => teams.removeTeam(team)}>
-                      ✕
-                    </button>
-                  )}
-                  {editMode ? (
-                    <>
-                      <input
-                        className="team-name-input"
-                        disabled={!editMode}
-                        defaultValue={team.name}
-                        key={team.id + "-name"}
-                        onBlur={(e) => teams.renameTeam(team, e.target.value)}
-                      />
-                      {teams.discordDisplayMode === "discord" && (
-                        <div className="team-discord-picker" key={team.id + "-discord"}>
-                          {teams.discordMembers.map((m) => {
-                            const assignedIds = Array.isArray(team.discordUserIds)
-                              ? team.discordUserIds
-                              : team.discordUserId
-                              ? [team.discordUserId]
-                              : [];
-                            return (
-                              <button
-                                type="button"
-                                key={m.id}
-                                className={"team-discord-chip" + (assignedIds.includes(m.id) ? " is-selected" : "")}
-                                title={m.username}
-                                onClick={() => teams.toggleTeamDiscordUser(team, m.id)}
-                              >
-                                <img src={m.avatarUrl} alt="" />
-                                {m.speaking && <span className="team-discord-chip-speaking-dot" />}
-                              </button>
-                            );
-                          })}
-                          {teams.discordMembers.length === 0 && (
-                            <span className="team-discord-picker-empty">No one's in voice yet</span>
-                          )}
-                        </div>
-                      )}
-                    </>
-                  ) : (
-                    <div className="team-name-display">
-                      {discordTeamMembers.length > 0 && (
-                        <div className="team-discord-facepile">
-                          {discordTeamMembers.map((dm) => (
-                            <div className="team-discord-avatar-wrap" key={dm.id}>
-                              <img
-                                src={dm.avatarUrl}
-                                alt=""
-                                className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
-                                style={{ opacity: dm.deafened ? 0.4 : 1 }}
-                              />
-                              {dm.muted && <div className="team-discord-muted-badge" title="Muted" />}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                      <span className="team-name-text">{team.name}</span>
-                    </div>
-                  )}
-                  <div className="team-score-row">
-                    {editMode ? (
-                      <input
-                        className="team-score-display team-score-input"
-                        type="number"
-                        defaultValue={team.score}
-                        key={team.id + "-score"}
-                        title="Set this team's score manually"
-                        onBlur={(e) => teams.setTeamScore(team, e.target.value)}
-                        onWheel={(e) => e.target.blur()}
-                      />
-                    ) : (
-                      <div
-                        className={
-                          "team-score-display" +
-                          (teams.scorePulse[team.id] ? " " + teams.scorePulse[team.id] : "") +
-                          (teams.selectedScoreTeamId === team.id ? " kb-selected" : "")
-                        }
-                      >
-                        ${team.score}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
+            {[...data.teams].sort((a, b) => (b.score ?? 0) - (a.score ?? 0)).map((team) => (
+              <TeamCard
+                key={team.id}
+                team={team}
+                teamIndex={data.teams.indexOf(team)}
+                editMode={editMode}
+                selectedScoreTeamId={teams.selectedScoreTeamId}
+                setSelectedScoreTeamId={teams.setSelectedScoreTeamId}
+                discordDisplayMode={teams.discordDisplayMode}
+                discordTeamMembers={teams.resolveDiscordMembersForTeam(team)}
+                discordMembers={teams.discordMembers}
+                toggleTeamDiscordUser={teams.toggleTeamDiscordUser}
+                removeTeam={teams.removeTeam}
+                renameTeam={teams.renameTeam}
+                setTeamScore={teams.setTeamScore}
+                scorePulse={teams.scorePulse}
+              />
+            ))}
             {editMode && data.teams.length === 0 && (
               <div className="teams-empty-placeholder">
                 <span className="teams-empty-placeholder-text">No teams yet</span>
@@ -739,6 +685,8 @@ export default function JeopardyBoard({ onBack }) {
               onFlip={() => setQuestionFlipped(true)}
               onClose={clueEditor.closeClueModal}
               onAdjustTeamScore={teams.adjustTeamScore}
+              armedPowerups={armedPowerups}
+              onConsumeArmed={consumeArmed}
               timerEnabled={data.settings.timerEnabled}
               timerSeconds={activeClueObj.timerSeconds != null ? activeClueObj.timerSeconds : data.settings.timerDuration}
               onDuckMusic={clueEditor.setDuckMusic}
@@ -814,6 +762,10 @@ export default function JeopardyBoard({ onBack }) {
           onFinalStandingsVolumeChange={handleFinalStandingsVolumeChange}
         />
       )}
+      <ShopWidget discordUserId={hostDiscordUserId} />
+      <SkillOverlay activeSkill={activeSkill} onDone={handleSkillDone} />
+      <PowerDrawOverlay result={powerDrawResult} onDone={clearPowerDrawResult} />
+      <PowerupNotice notice={powerupNotice} onDone={clearPowerupNotice} />
     </div>
   );
 }

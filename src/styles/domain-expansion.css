@@ -1,0 +1,94 @@
+/* Domain Expansion — merged preview version */
+:root { --de-bar: 18vh; --de-rise: 4.6s; }
+
+.de-overlay { position: fixed; inset: 0; z-index: 9999; overflow: hidden; background: #050208;
+  font-family: 'Arial Black', Impact, 'Hiragino Mincho ProN', 'Noto Serif CJK JP', serif; }
+/* Show the Jeopardy board behind the slashes */
+.de-phase-slash, .de-phase-bars-out { background: transparent; }
+.de-layer { position: absolute; inset: 0; pointer-events: none; }
+
+.de-veil { background: #000; transition: background .6s; }
+.de-phase-title .de-veil, .de-phase-flash .de-veil {
+  background: radial-gradient(ellipse at 50% 55%, #5a0a14 0%, #22040a 45%, #050208 80%);
+  animation: de-pulse 2.4s ease-in-out infinite; }
+.de-phase-slash .de-veil, .de-phase-bars-out .de-veil { background: transparent; animation: none; transition: background .15s; }
+@keyframes de-pulse { 50% { filter: brightness(1.35); } }
+
+.de-smoke { opacity: 0; filter: blur(30px); background:
+  radial-gradient(circle at 20% 70%, rgba(120,20,30,.4), transparent 40%),
+  radial-gradient(circle at 80% 30%, rgba(90,10,40,.4), transparent 45%),
+  radial-gradient(circle at 50% 90%, rgba(160,30,20,.35), transparent 40%); }
+.de-phase-title .de-smoke, .de-phase-flash .de-smoke { opacity: 1; animation: de-drift 9s ease-in-out infinite alternate; }
+@keyframes de-drift { from { transform: translate(-3%,2%) scale(1); } to { transform: translate(3%,-2%) scale(1.15); } }
+
+.de-title-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; z-index: 5; }
+.de-eyebrow { font-size: clamp(11px,2.4vw,24px); font-weight: 900; letter-spacing: .42em; color: #000;
+  text-shadow: 0 0 6px #ff0022, 0 0 18px #ff0022; opacity: 0;
+  animation: de-erise var(--de-rise) cubic-bezier(.25,0,.25,1) forwards; }
+@keyframes de-erise { 0% { opacity: 0; transform: translateY(46px) scale(1.12); }
+  20%,50% { opacity: 1; transform: translateY(46px) scale(1.12); } 100% { opacity: 1; transform: none; } }
+.de-name { display: flex; gap: .06em; font-size: clamp(48px,13vw,150px); font-weight: 900; line-height: 1; color: #000;
+  -webkit-text-stroke: 2px #ff0022; paint-order: stroke fill; text-shadow: 0 0 30px #ff0022, 0 0 80px #ff0022; }
+.de-name span { display: inline-block; opacity: 0; transform: scale(1.5); filter: blur(14px);
+  animation: de-ch .6s cubic-bezier(.2,.8,.2,1) forwards; animation-delay: calc(var(--de-rise) + var(--i) * .22s); }
+@keyframes de-ch { to { opacity: 1; transform: none; filter: blur(0); } }
+.de-title-wrap.de-flashing { animation: de-blow .7s ease-in forwards; }
+@keyframes de-blow { 0% { opacity: 1; transform: scale(1.12); } 70% { opacity: 1; transform: scale(1.16); } 100% { opacity: 0; transform: scale(1.22); } }
+.de-title-wrap.de-flashing .de-name span, .de-title-wrap.de-flashing .de-eyebrow {
+  text-shadow: -8px 0 0 #ff0022, 8px 0 0 #ff0022, 0 0 30px #ff0022;
+  animation: de-jit .06s steps(2) infinite; opacity: 1; transform: none; filter: none; }
+@keyframes de-jit { 50% { transform: translateX(4px); } }
+
+.de-shrine { top: auto; bottom: 0; height: 64vh; display: flex; justify-content: center; transform: translateY(105%); z-index: 3; }
+.de-phase-slash .de-shrine { animation: de-up 2s cubic-bezier(.2,.7,.2,1) forwards; }
+.de-phase-bars-out .de-shrine { transform: translateY(0); opacity: 0; transition: opacity .6s; }
+@keyframes de-up { from { transform: translateY(35%); } to { transform: translateY(0); } }
+.de-shrine img { height: 100%; width: auto; filter: drop-shadow(0 0 18px #ff0022); }
+
+.de-slashes { z-index: 6; overflow: hidden; }
+.de-cut { position: absolute; left: -50vw; width: 200vw; height: var(--h); top: var(--t); background: var(--c); opacity: 0;
+  transform: rotate(var(--a));
+  box-shadow: 0 0 0 var(--ow) var(--oc), 0 0 var(--bl) calc(var(--bl) * .4) var(--c);
+  animation: de-strike var(--d) ease-out var(--dl) both; }
+@keyframes de-strike {
+  0% { opacity: 0; transform: rotate(var(--a)) scaleX(.2); }
+  15% { opacity: 1; transform: rotate(var(--a)) scaleX(1); }
+  70% { opacity: .9; transform: rotate(var(--a)) scaleX(1); }
+  100% { opacity: 0; transform: rotate(var(--a)) scaleX(1); } }
+
+.de-vig { opacity: 0; z-index: 5;
+  background: radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,.7) 100%),
+              radial-gradient(ellipse at center, transparent 60%, rgba(255,0,40,.45) 100%); }
+.de-phase-slash .de-vig { opacity: 1; animation: de-vp .5s ease-in-out infinite; }
+.de-phase-bars-out .de-vig { opacity: 0; transition: opacity .6s; }
+@keyframes de-vp { 50% { filter: brightness(1.6); } }
+.de-grain { opacity: .07; mix-blend-mode: overlay; z-index: 8;
+  background: repeating-linear-gradient(0deg, #ff0022 0 1px, transparent 1px 3px); }
+
+
+.de-shaking { animation: de-shake .08s linear infinite; transform-origin: center center; will-change: transform; }
+@keyframes de-shake {
+  0% { transform: translate(0,0) rotate(0); } 20% { transform: translate(3px,2px) rotate(.4deg); }
+  40% { transform: translate(4px,-1px) rotate(.3deg); } 60% { transform: translate(3px,1px) rotate(.2deg); }
+  80% { transform: translate(2px,3px) rotate(.3deg); } 100% { transform: translate(0,0) rotate(0); } }
+@media (prefers-reduced-motion: reduce) { .de-shaking { animation: none; } }
+
+/* ===== upgrades ===== */
+.de-phase-title .de-title-wrap { animation: de-push 9.4s linear forwards; }
+@keyframes de-push { to { transform: scale(1.12); } }
+.de-cast { margin-top: 18px; font-size: clamp(11px,2vw,20px); letter-spacing: .5em; color: #ff5566; text-shadow: 0 0 10px #ff0022;
+  opacity: 0; animation: de-castin .8s ease-out calc(var(--de-rise) + 1.7s) forwards; }
+.de-cast b { color: #ff3355; letter-spacing: .3em; }
+@keyframes de-castin { from { opacity: 0; transform: translateY(12px); letter-spacing: .9em; } to { opacity: 1; transform: none; } }
+.de-phase-flash .de-title-wrap { filter: drop-shadow(-10px 0 0 rgba(255,0,60,.8)) drop-shadow(10px 0 0 rgba(90,0,20,.9)); }
+
+.de-frozen, .de-frozen *, .de-frozen *::after { animation-play-state: paused !important; }
+
+/* damage number above each hit team's card */
+.de-dmg { position: absolute; z-index: 11; transform: translate(-50%, -100%); pointer-events: none;
+  font-weight: 900; font-size: clamp(16px, 2.2vw, 28px); color: #ff1a1a;
+  -webkit-text-stroke: 1.5px #000; paint-order: stroke fill; text-shadow: 0 0 8px rgba(255,0,34,.8);
+  animation: de-dmgup 2.4s ease-out forwards; }
+@keyframes de-dmgup { 0% { opacity: 0; transform: translate(-50%, -60%) scale(1.6); }
+  15% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
+  80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -190%) scale(1); } }

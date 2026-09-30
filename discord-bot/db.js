@@ -25,6 +25,17 @@
 //   Kept as opaque JSON (like boards.data) rather than normalized columns
 //   since the shape is still evolving and nothing here needs to be
 //   queried/filtered at the SQL level yet — just listed per board.
+//
+// CHANGES FOR COSMETICS SHOP:
+// - player_wallets: one row per Discord user, tracks their coin balance.
+//   Coins are earned at game-end (POST /api/boards/:id/games) — 100 per
+//   correct answer, +200 bonus for 1st place, +100 for 2nd.
+// - shop_items: the catalog of purchasable cosmetics, seeded at startup.
+//   type is 'buzz_sound' for now; extend with 'name_color', etc. later.
+//   data is a JSON blob with asset/config details specific to each type.
+// - player_inventory: which items each player owns + which is equipped.
+//   At most one item per type can be equipped at a time (enforced in
+//   the buy/equip routes, not at the DB level so it stays flexible).
 
 const path = require('node:path');
 const { DatabaseSync } = require('node:sqlite');
@@ -64,6 +75,30 @@ db.exec(`
     played_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS idx_saved_games_board ON saved_games(board_id);
+
+  CREATE TABLE IF NOT EXISTS player_wallets (
+    user_id    TEXT PRIMARY KEY,
+    coins      INTEGER NOT NULL DEFAULT 0,
+    updated_at INTEGER NOT NULL
+  );
+
+  CREATE TABLE IF NOT EXISTS shop_items (
+    id          TEXT PRIMARY KEY,
+    name        TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    price       INTEGER NOT NULL,
+    type        TEXT NOT NULL,
+    data        TEXT NOT NULL DEFAULT '{}'
+  );
+
+  CREATE TABLE IF NOT EXISTS player_inventory (
+    user_id     TEXT NOT NULL,
+    item_id     TEXT NOT NULL,
+    equipped    INTEGER NOT NULL DEFAULT 0,
+    acquired_at INTEGER NOT NULL,
+    PRIMARY KEY (user_id, item_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_inventory_user ON player_inventory(user_id);
 `);
 
 // --- lightweight migration for DBs created before this update ---
@@ -87,5 +122,94 @@ db.exec(`
   CREATE UNIQUE INDEX IF NOT EXISTS idx_boards_room_code
   ON boards(room_code) WHERE room_code IS NOT NULL;
 `);
+
+// ── Shop catalog seed ──────────────────────────────────────────────────────
+// Insert default items only if they don't already exist. Using INSERT OR
+// IGNORE so re-running (server restart) is safe and doesn't duplicate rows.
+// Add new items here — they'll appear on the next restart automatically.
+const seedItems = [
+  // ── Buzz sounds ──────────────────────────────────────────────────────────
+  // The 'asset' field is a path relative to the server's /api/media/sfx/
+  // proxy route (see shop.js). 'synth' items have no file — the client
+  // synthesises them from the 'synthParams' config instead, same pattern
+  // as boardSfx.js's fallback tones.
+  {
+    id: 'buzz_airhorn',
+    name: 'Air Horn',
+    description: 'A classic air horn blast.',
+    price: 300,
+    type: 'buzz_sound',
+    data: JSON.stringify({ asset: 'airhorn.mp3', preview: 'airhorn.mp3' }),
+  },
+  {
+    id: 'buzz_laser',
+    name: 'Laser',
+    description: 'Futuristic laser zap.',
+    price: 300,
+    type: 'buzz_sound',
+    data: JSON.stringify({ asset: 'laser.mp3', preview: 'laser.mp3' }),
+  },
+  {
+    id: 'buzz_retro',
+    name: 'Retro Beep',
+    description: '8-bit arcade buzz.',
+    price: 200,
+    type: 'buzz_sound',
+    data: JSON.stringify({ asset: 'retro.mp3', preview: 'retro.mp3' }),
+  },
+  {
+    id: 'buzz_synth_deep',
+    name: 'Deep Buzz',
+    description: 'Low, heavy synthesised buzz.',
+    price: 150,
+    type: 'buzz_sound',
+    data: JSON.stringify({
+      synth: true,
+      synthParams: { type: 'square', startHz: 110, endHz: 80, durationMs: 250, volume: 0.25 },
+    }),
+  },
+  {
+    id: 'buzz_synth_high',
+    name: 'High Ping',
+    description: 'Sharp high-pitched ping.',
+    price: 150,
+    type: 'buzz_sound',
+    data: JSON.stringify({
+      synth: true,
+      synthParams: { type: 'sine', startHz: 880, endHz: 1200, durationMs: 120, volume: 0.2 },
+    }),
+  },
+  // ── Skills ───────────────────────────────────────────────────────────────
+  // Skills are UNLOCKED by buying them in the shop (auto-equipped on purchase).
+  // Owning one does not let you fire it: during a game the host runs a
+  // Power-ups spin and every player with the skill equipped rolls
+  // data.grantChance for it. Only a granted skill can be used, once per game.
+  {
+    id: 'skill_domain_expansion',
+    name: 'Domain Expansion',
+    description: 'Unleash a slash attack, every other team loses 20% of its score (max 1000). 10% chance per spin. One use per game.',
+    price: 2000,
+    type: 'skill',
+    // grantChance -> chance (0-1) this skill is granted to its owner on each Power-ups spin
+    data: JSON.stringify({ effect: 'cleave', preview: 'domain_expansion', grantChance: 1 }),
+  },
+];
+
+const insertItem = db.prepare(`
+  INSERT OR IGNORE INTO shop_items (id, name, description, price, type, data)
+  VALUES (?, ?, ?, ?, ?, ?)
+`);
+for (const item of seedItems) {
+  insertItem.run(item.id, item.name, item.description, item.price, item.type, item.data);
+}
+
+// INSERT OR IGNORE never updates an existing row, so DBs created under the
+// old Power Pool model would keep their old price/description/data.
+// Re-sync the skill fields on every start (owners are unaffected — inventory
+// only references the id).
+const syncSkill = db.prepare(`UPDATE shop_items SET description = ?, price = ?, data = ? WHERE id = ?`);
+for (const item of seedItems) {
+  if (item.type === 'skill') syncSkill.run(item.description, item.price, item.data, item.id);
+}
 
 module.exports = db;
