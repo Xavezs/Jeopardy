@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useRef, useEffect } from "react";
 import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
 
 // Manual "who gets to pick next" override. Only players with a resolved
@@ -44,26 +44,58 @@ export default function Toolbar({
   onOpenSessions,
   onOpenRandomizer,
   onResetRound,
-  timerEnabled,
-  timerDuration,
-  sessionId,
-  onToggleTimerEnabled,
-  onSetTimerDuration,
   roomCode,
   players,
   teams,
   controlDiscordUserId,
   onHostSetControl,
-  onRandomizeDailyDoubles,
-  ddBuzzerEnabled,
-  onToggleDdBuzzerEnabled,
-  ddMinWagerZero,
-  onToggleDdMinWagerZero,
-  ddWagerBasisPlayerScore,
-  onToggleDdWagerBasisPlayerScore,
   onEndGame,
+  onRotateRoomCode,
+  appConfirm,
+  appAlert,
 }) {
   const [copyState, setCopyState] = useState("idle"); // "idle" | "copied" | "error"
+  const [rotatingRoomCode, setRotatingRoomCode] = useState(false);
+  // The "⋯" menu holding the setup/rare-use actions (Edit Board, Sessions,
+  // Reset Round, New Code) — kept out of the main row so the buttons a
+  // host actually taps mid-game (Randomize Order, End Game, the room
+  // code) aren't competing for attention with ones only used once per
+  // session. Closes on an outside click or Escape, same as the app's
+  // modals, so it doesn't linger open once the host has picked something
+  // or clicked elsewhere on the board.
+  const [overflowOpen, setOverflowOpen] = useState(false);
+  const overflowRef = useRef(null);
+
+  useEffect(() => {
+    if (!overflowOpen) return;
+    const handlePointerDown = (e) => {
+      if (overflowRef.current && !overflowRef.current.contains(e.target)) {
+        setOverflowOpen(false);
+      }
+    };
+    const handleKeyDown = (e) => {
+      if (e.key === "Escape") setOverflowOpen(false);
+    };
+    document.addEventListener("mousedown", handlePointerDown);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", handlePointerDown);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [overflowOpen]);
+
+  async function rotateRoomCode() {
+    if (!onRotateRoomCode || rotatingRoomCode) return;
+    if (!(await appConfirm("Generate a new room code? Everyone must rejoin with the new code."))) return;
+    setRotatingRoomCode(true);
+    try {
+      await onRotateRoomCode();
+    } catch (error) {
+      await appAlert(error?.message || "Could not generate a new room code.");
+    } finally {
+      setRotatingRoomCode(false);
+    }
+  }
 
   async function copyRoomCode() {
     if (!roomCode) return;
@@ -81,6 +113,7 @@ export default function Toolbar({
         await navigator.clipboard.writeText(roomCode);
         success = true;
       }
+
     } catch {
       success = false;
     }
@@ -110,39 +143,71 @@ export default function Toolbar({
   return (
     <>
       <div className="toolbar">
-        <button className="btn" onClick={onToggleEditMode}>
-          {editMode ? "✓ Done Editing" : "✎ Edit Board"}
-        </button>
-        <button className="btn" onClick={onOpenSessions}>
-          ⏱ Sessions
-        </button>
-        <button className="btn" onClick={onOpenRandomizer}>
-          Randomize Order
-        </button>
-        <button className="btn" onClick={onResetRound}>
-          ↺ Reset Round
-        </button>
-        {editMode && onRandomizeDailyDoubles && (
+        <div className="toolbar-overflow" ref={overflowRef}>
           <button
-            className="btn"
-            onClick={() => onRandomizeDailyDoubles()}
-            title="Randomly reassign Daily Double clue(s) for both rounds"
+            type="button"
+            className="btn toolbar-overflow-trigger"
+            onClick={() => setOverflowOpen((v) => !v)}
+            aria-haspopup="true"
+            aria-expanded={overflowOpen}
+            title="Board tools"
           >
-            Randomize Daily Doubles
+            ☰
           </button>
-        )}
-        <div className="room-code-container" title="Players enter this code at /play">
-          <span className="room-code-label">Room code</span>
-          <input
-            readOnly
-            value={roomCode || "Creating…"}
-            onFocus={(event) => event.currentTarget.select()}
-            onClick={(event) => event.currentTarget.select()}
-            aria-label="Room code"
-            className="room-code-input"
-          />
-          <button className="btn" onClick={copyRoomCode} disabled={!roomCode}>
-            {copyState === "copied" ? "Copied!" : copyState === "error" ? "Couldn't copy" : "Copy"}
+          {overflowOpen && (
+            <div className="toolbar-overflow-menu" role="menu">
+              <button
+                type="button"
+                className="toolbar-overflow-item"
+                role="menuitem"
+                onClick={() => { onOpenRandomizer(); setOverflowOpen(false); }}
+              >
+                Randomize Order
+              </button>
+              <button
+                type="button"
+                className="toolbar-overflow-item"
+                role="menuitem"
+                onClick={() => { onOpenSessions(); setOverflowOpen(false); }}
+              >
+                Sessions
+              </button>
+              <button
+                type="button"
+                className="toolbar-overflow-item"
+                role="menuitem"
+                onClick={() => { onResetRound(); setOverflowOpen(false); }}
+              >
+                Reset Round
+              </button>
+              <button
+                type="button"
+                className="toolbar-overflow-item"
+                role="menuitem"
+                onClick={() => { rotateRoomCode(); setOverflowOpen(false); }}
+                disabled={!roomCode || rotatingRoomCode}
+              >
+                {rotatingRoomCode ? "Changing code…" : "New Room Code"}
+              </button>
+            </div>
+          )}
+        </div>
+
+        <button className="btn btn-edit-board" onClick={onToggleEditMode}>
+          {editMode ? "Done Editing" : "Edit Board"}
+        </button>
+
+        <div className="room-code-badge" title="Players enter this code at /play">
+          <span className="room-code-badge-code">{roomCode || "…"}</span>
+          <button
+            type="button"
+            className="room-code-badge-copy"
+            onClick={copyRoomCode}
+            disabled={!roomCode}
+            aria-label="Copy room code"
+            title="Copy room code"
+          >
+            {copyState === "copied" ? "✓" : copyState === "error" ? "!" : "⧉"}
           </button>
         </div>
 
@@ -153,65 +218,16 @@ export default function Toolbar({
           onHostSetControl={onHostSetControl}
         />
 
-        {/* Optional — only shows once the host-side hook that assembles
-            finalScores (teams + ranking + playerStats) actually wires up
-            onEndGame. Left out entirely rather than rendered-disabled, so
-            a board mid-refactor doesn't show a dead button. */}
         {onEndGame && (
           <button
-            className="btn"
+            className="btn btn-end-game"
             onClick={onEndGame}
             title="Save this playthrough's final scores and stats, ending the game"
           >
-            🏁 End Game
+            End Game
           </button>
         )}
       </div>
-
-
-      {editMode && (
-        <div className="timer-settings-bar">
-          <label>
-            <input type="checkbox" checked={timerEnabled} onChange={onToggleTimerEnabled} />
-            Answer timer
-          </label>
-          <label>
-            Default:
-            <input
-              type="number"
-              min="1"
-              disabled={!timerEnabled}
-              defaultValue={timerDuration}
-              key={"timer-default-" + sessionId}
-              onBlur={(e) => onSetTimerDuration(e.target.value)}
-              onWheel={(e) => e.target.blur()}
-            />
-            sec
-          </label>
-          {onToggleDdBuzzerEnabled && (
-            <label title="Off (default): only the wagering team may answer a Daily Double, no buzzer race. On: the buzzer opens for everyone same as a normal clue.">
-              <input type="checkbox" checked={!!ddBuzzerEnabled} onChange={onToggleDdBuzzerEnabled} />
-              Buzzer on Daily Doubles
-            </label>
-          )}
-          {onToggleDdMinWagerZero && (
-            <label title="Off (default): minimum Daily Double wager equals the clue's own value (range: value–2x). On: minimum wager is $0 (range: 0–2x).">
-              <input type="checkbox" checked={!!ddMinWagerZero} onChange={onToggleDdMinWagerZero} />
-              Allow $0 Wager
-            </label>
-          )}
-          {onToggleDdWagerBasisPlayerScore && (
-            <label title="Off (default): max Daily Double wager is 2x the clue's own value. On: max wager is the wagering team's own current score. Combines with 'Allow $0 Wager' above for 4 total wager-range options.">
-              <input
-                type="checkbox"
-                checked={!!ddWagerBasisPlayerScore}
-                onChange={onToggleDdWagerBasisPlayerScore}
-              />
-              Max wager = Team Score
-            </label>
-          )}
-        </div>
-      )}
     </>
   );
 }

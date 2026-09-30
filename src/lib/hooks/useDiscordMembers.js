@@ -1,32 +1,33 @@
 // src/lib/hooks/useDiscordMembers.js
 import { useEffect, useState, useRef } from "react";
-import { io } from "socket.io-client";
-
-// Use the current origin so Discord can apply its URL mapping. During local
-// development, Vite proxies /socket.io to the bot server.
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
+import { useSocket } from "../SocketContext";
 
 export function useDiscordMembers(channelId = null) {
   const [members, setMembers] = useState([]);
-  const [connected, setConnected] = useState(false);
-  const socketRef = useRef(null);
+  const { socket, connected } = useSocket();
+  const channelIdRef = useRef(channelId);
+  channelIdRef.current = channelId;
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
-      setConnected(true);
-      if (channelId) {
-        socket.emit("watchVoiceChannel", channelId);
-      }
-    });
+    const handleConnect = () => {
+      if (channelIdRef.current) socket.emit("watchVoiceChannel", channelIdRef.current);
+    };
+    const handleVoiceState = (data) => setMembers(data);
 
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("voiceState", (data) => setMembers(data));
+    socket.on("connect", handleConnect);
+    socket.on("voiceState", handleVoiceState);
 
-    return () => socket.disconnect();
-  }, [channelId]);
+    if (socket.connected && channelId) {
+      socket.emit("watchVoiceChannel", channelId);
+    }
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("voiceState", handleVoiceState);
+    };
+  }, [socket, channelId]);
 
   return { members, connected };
 }

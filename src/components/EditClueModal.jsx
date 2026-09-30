@@ -15,6 +15,7 @@ export default function EditClueModal({
   clueValue,    
 }) {
   const [closing, setClosing] = useState(false);
+  const [advancedMode, setAdvancedMode] = useState(false);
   const mouseDownOnOverlay = React.useRef(false);
   const saveTimeout = React.useRef(null);
   const isFirstRender = React.useRef(true);
@@ -76,6 +77,16 @@ export default function EditClueModal({
         <div className="modal-title">
           Edit Clue {categoryName && clueValue ? `${categoryName} ${clueValue}` : ""}
         </div>
+        <div className="edit-clue-advanced-toggle-wrap">
+          <button
+            type="button"
+            className={"edit-clue-advanced-toggle" + (advancedMode ? " is-active" : "")}
+            onClick={() => setAdvancedMode((enabled) => !enabled)}
+            aria-expanded={advancedMode}
+          >
+            {advancedMode ? "Hide advanced" : "Advanced mode"}
+          </button>
+        </div>
 
         <div className="edit-clue-body">
           {/* Left column: Question Text + Question Media */}
@@ -99,6 +110,23 @@ export default function EditClueModal({
               onFile={(file) => onMediaFile("media", file)}
               onClear={() => onClearMedia("media")}
             />
+            {advancedMode && (
+              <div className="form-row media-clip-row" style={{ marginTop: '8px' }}>
+              <label style={{ fontSize: '12px', opacity: 0.85 }}>
+                Play audio/video for (sec) — leave blank to play in full
+              </label>
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                placeholder="e.g. 1"
+                value={editForm.mediaClipSeconds}
+                onChange={(e) => setEditForm((f) => ({ ...f, mediaClipSeconds: e.target.value }))}
+                onWheel={(e) => e.target.blur()}
+                style={{ maxWidth: '120px' }}
+              />
+              </div>
+            )}
           </div>
 
           {/* Right column: Answer Text + Answer Media */}
@@ -122,11 +150,27 @@ export default function EditClueModal({
               onFile={(file) => onMediaFile("answerMedia", file)}
               onClear={() => onClearMedia("answerMedia")}
             />
+            {advancedMode && (
+              <div className="form-row media-clip-row" style={{ marginTop: '8px' }}>
+              <label style={{ fontSize: '12px', opacity: 0.85 }}>
+                Play audio/video for (sec) — leave blank to play in full
+              </label>
+              <input
+                type="number"
+                min="0.1"
+                step="0.1"
+                placeholder="e.g. 1"
+                value={editForm.answerMediaClipSeconds}
+                onChange={(e) => setEditForm((f) => ({ ...f, answerMediaClipSeconds: e.target.value }))}
+                onWheel={(e) => e.target.blur()}
+                style={{ maxWidth: '120px' }}
+              />
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Timer override centered at the bottom */}
-        <div className="form-row edit-clue-timer-row" style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+        {advancedMode && <div className="form-row edit-clue-timer-row" style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
           <label>Timer override</label>
           <div className="timer-override-control" style={{ width: '100%', maxWidth: '260px' }}>
             <span className="timer-override-icon" aria-hidden="true">⏱</span>
@@ -140,7 +184,7 @@ export default function EditClueModal({
             />
             <span className="timer-override-suffix">sec</span>
           </div>
-        </div>
+        </div>}
 
         <div className="hint edit-clue-footnote">
           Image / video / audio auto-detected · files stay embedded in the board.

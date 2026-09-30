@@ -32,6 +32,10 @@ export function blankClue() {
     answerMediaType: "",
     used: false,
     timerSeconds: null,
+    // "Stop after N seconds" clip cutoff for question/answer audio/video —
+    // see useClueEditor.js's mediaClipSeconds/answerMediaClipSeconds.
+    mediaClipSeconds: null,
+    answerMediaClipSeconds: null,
     isDailyDouble: false,
   };
 }
@@ -87,6 +91,7 @@ export function defaultSessionData() {
     settings: {
       timerEnabled: true,
       timerDuration: 30,
+      ddBuzzerEnabled: true,
     },
   };
 }
@@ -151,6 +156,10 @@ export const SessionStore = {
     return await api("/api/boards/" + id + "/invite", { method: "POST" });
   },
 
+  async rotateInviteCode(id) {
+    return await api("/api/boards/" + id + "/rotate-invite", { method: "POST" });
+  },
+
   // POST /api/boards/join — a friend enters a room code and gets editor
   // access. Returns the full board (same shape as loadSession()).
   async joinBoard(roomCode) {
@@ -188,9 +197,10 @@ export const SessionStore = {
 };
 
 export function migrateClueSchemaIfNeeded(data) {
-  if (!data.settings) data.settings = { timerEnabled: true, timerDuration: 30 };
+  if (!data.settings) data.settings = { timerEnabled: true, timerDuration: 30, ddBuzzerEnabled: true };
   if (data.settings.timerEnabled === undefined) data.settings.timerEnabled = true;
   if (!data.settings.timerDuration) data.settings.timerDuration = 30;
+  if (data.settings.ddBuzzerEnabled === undefined) data.settings.ddBuzzerEnabled = true;
 
   if (!data.rounds) {
     const legacyValues = data.values || [100, 200, 300, 400, 500, 600, 700, 800, 900, 1000];
@@ -257,6 +267,8 @@ export function migrateClueSchemaIfNeeded(data) {
         if (clue.answerMediaUrl === undefined) clue.answerMediaUrl = "";
         if (clue.answerMediaType === undefined) clue.answerMediaType = "";
         if (clue.timerSeconds === undefined) clue.timerSeconds = null;
+        if (clue.mediaClipSeconds === undefined) clue.mediaClipSeconds = null;
+        if (clue.answerMediaClipSeconds === undefined) clue.answerMediaClipSeconds = null;
         if (clue.isDailyDouble === undefined) clue.isDailyDouble = false;
       });
     });

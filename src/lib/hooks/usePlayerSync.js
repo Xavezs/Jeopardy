@@ -1,8 +1,6 @@
 // lib/hooks/usePlayerSync.js
 import { useEffect, useState, useRef } from "react";
-import { io } from "socket.io-client";
-
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
+import { useSocket } from "../SocketContext";
 
 /* =========================================================================
    usePlayerSync
@@ -14,6 +12,22 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    after joining, so a player who joins mid-game sees the current board
    immediately instead of waiting for the host's next edit.
 
+   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
+   instead of opening its own connection. `connected` now reflects the
+   shared socket's state instead of one this hook owned itself.
+
+   IMPORTANT behavior change from the socket-per-hook version: leaveGame()
+   used to call socket.disconnect() after the server acked the leave —
+   safe back when this hook had its own private socket, but that same
+   call would now kill the ONE socket every other hook in this tab shares
+   (useBuzzer, useControlSync, useWagerSync, useFinalSync all mount
+   alongside this in PlayerView.jsx). The server's leaveGame handler
+   already does socket.leave(roomCode) + clears socket.gameRoomCode on its
+   own (see bot-server.js), so nothing here actually needs the transport
+   itself to go away — leaveGame() below now just emits/awaits the ack and
+   resets local join state, leaving the shared socket connected for
+   whatever screen the player lands on next.
+
    `me` — { id, username, discordUser } for the current logged-in player.
    When present, this hook identifies itself to the server via
    `joinAsPlayer` (which finds-or-creates a team named after `me.username`
@@ -21,9 +35,9 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    `joinRoom` used elsewhere. Falls back to `joinRoom` if `me` isn't
    available yet, so boardData/activeClue still populate.
    ========================================================================= */
-export function usePlayerSync(roomCode, me) {
+export function usePlayerSync(roomCode, me, onRoomCodeChanged) {
   const [boardData, setBoardData] = useState(null);
-  const [connected, setConnected] = useState(false);
+  const { socket, connected } = useSocket();
   // { catId, value, revealed } while a clue is open on the host, else null
   const [activeClue, setActiveClue] = useState(null);
   // { teamId, teamName } once the server confirms which team we joined
@@ -65,11 +79,12 @@ export function usePlayerSync(roomCode, me) {
   // joinRoom/joinAsPlayer handlers). Used by FinalJeopardyView to show a
   // per-player stats breakdown alongside Final Standings.
   const [playerStats, setPlayerStats] = useState({});
-  const socketRef = useRef(null);
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
   const meRef = useRef(me);
   meRef.current = me;
+  const onRoomCodeChangedRef = useRef(onRoomCodeChanged);
+  onRoomCodeChangedRef.current = onRoomCodeChanged;
   // Set once leaveGame() is called. Every join path (the 'connect' handler
   // and the roomCode/me effect below) checks this first — without it, a
   // stray reconnect or a re-render after leaving would immediately
@@ -93,27 +108,58 @@ export function usePlayerSync(roomCode, me) {
   }
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
+    const handleConnect = () => {
       if (hasLeftRef.current) return;
-      setConnected(true);
       sendJoin(socket);
-    });
-    socket.on("disconnect", () => setConnected(false));
-    socket.on("boardUpdate", ({ data }) => setBoardData(data));
-    socket.on("activeClueUpdate", (payload) => setActiveClue(payload || null));
-    socket.on("joinedTeam", (payload) => setJoinedTeam(payload || null));
-    socket.on("revealedCatsUpdate", (ids) => setRevealedCats(Array.isArray(ids) ? ids : []));
-    socket.on("roundBannerUpdate", (payload) => setRoundBanner(payload || null));
-    socket.on("playersUpdate", (list) => setPlayers(Array.isArray(list) ? list : []));
-    socket.on("bgmUpdate", (payload) => setBgm(payload || null));
-    socket.on("randomizerUpdate", (payload) => setRandomizer(payload || null));
-    socket.on("statsUpdate", (stats) => setPlayerStats(stats || {}));
+    };
+    const handleBoardUpdate = ({ data }) => setBoardData(data);
+    const handleActiveClueUpdate = (payload) => setActiveClue(payload || null);
+    const handleJoinedTeam = (payload) => setJoinedTeam(payload || null);
+    const handleRevealedCatsUpdate = (ids) => setRevealedCats(Array.isArray(ids) ? ids : []);
+    const handleRoundBannerUpdate = (payload) => setRoundBanner(payload || null);
+    const handlePlayersUpdate = (list) => setPlayers(Array.isArray(list) ? list : []);
+    const handleBgmUpdate = (payload) => setBgm(payload || null);
+    const handleRandomizerUpdate = (payload) => setRandomizer(payload || null);
+    const handleStatsUpdate = (stats) => setPlayerStats(stats || {});
+    const handleRoomCodeChanged = ({ roomCode: nextRoomCode }) => {
+      if (typeof nextRoomCode === "string" && nextRoomCode.trim()) {
+        onRoomCodeChangedRef.current?.(nextRoomCode.trim().toUpperCase());
+      }
+    };
 
-    return () => socket.disconnect();
-  }, []);
+    socket.on("connect", handleConnect);
+    socket.on("boardUpdate", handleBoardUpdate);
+    socket.on("activeClueUpdate", handleActiveClueUpdate);
+    socket.on("joinedTeam", handleJoinedTeam);
+    socket.on("revealedCatsUpdate", handleRevealedCatsUpdate);
+    socket.on("roundBannerUpdate", handleRoundBannerUpdate);
+    socket.on("playersUpdate", handlePlayersUpdate);
+    socket.on("bgmUpdate", handleBgmUpdate);
+    socket.on("randomizerUpdate", handleRandomizerUpdate);
+    socket.on("statsUpdate", handleStatsUpdate);
+    socket.on("roomCodeChanged", handleRoomCodeChanged);
+
+    // Socket may already be connected (shared across hooks that mount at
+    // slightly different times) — join immediately rather than waiting
+    // for a 'connect' event that already fired.
+    if (socket.connected) handleConnect();
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("boardUpdate", handleBoardUpdate);
+      socket.off("activeClueUpdate", handleActiveClueUpdate);
+      socket.off("joinedTeam", handleJoinedTeam);
+      socket.off("revealedCatsUpdate", handleRevealedCatsUpdate);
+      socket.off("roundBannerUpdate", handleRoundBannerUpdate);
+      socket.off("playersUpdate", handlePlayersUpdate);
+      socket.off("bgmUpdate", handleBgmUpdate);
+      socket.off("randomizerUpdate", handleRandomizerUpdate);
+      socket.off("statsUpdate", handleStatsUpdate);
+      socket.off("roomCodeChanged", handleRoomCodeChanged);
+    };
+  }, [socket]);
 
   // Re-send if the room code or player identity shows up after connect, or
   // changes (e.g. Discord identity resolves a moment after the initial
@@ -125,54 +171,40 @@ export function usePlayerSync(roomCode, me) {
   // whatever was last sent here) or the whole app stays stuck on the old
   // value even though PlayerView already has the correct one locally.
   useEffect(() => {
-    if (roomCode && socketRef.current?.connected) {
-      sendJoin(socketRef.current);
+    if (roomCode && socket?.connected) {
+      sendJoin(socket);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [roomCode, me?.username, me?.discordUser?.id, me?.discordUser?.avatarUrl]);
+  }, [roomCode, socket, me?.username, me?.discordUser?.id, me?.discordUser?.avatarUrl]);
 
   // Deliberate leave. Tells the server first (so the team/roster update
-  // reaches the host immediately, no 12s grace-period wait), THEN tears
-  // down the socket — doing it in that order means the leave message
-  // can't get lost in the disconnect. hasLeftRef stops anything from
-  // re-joining afterward if this hook happens to stay mounted a moment
-  // longer (e.g. while the parent switches screens away from PlayerView).
+  // reaches the host immediately, no 12s grace-period wait). hasLeftRef
+  // stops anything from re-joining afterward if this hook happens to stay
+  // mounted a moment longer (e.g. while the parent switches screens away
+  // from PlayerView).
+  //
+  // Does NOT disconnect the socket anymore — it's shared with every other
+  // hook in this tab (see the header comment above). The server's
+  // leaveGame handler already removes this player/team on its own; all
+  // that's left to do locally is wait for its ack (or time out) and reset
+  // join state.
   function leaveGame() {
     hasLeftRef.current = true;
     const code = roomCodeRef.current;
-    const socket = socketRef.current;
 
     // UI should reflect "left" immediately regardless of how the network
     // call below resolves.
     setJoinedTeam(null);
-    setConnected(false);
 
     if (!socket?.connected || !code) {
-      socket?.disconnect();
       return Promise.resolve();
     }
 
-    // Wait for the server to ack that it actually processed the leave
-    // before tearing down the socket. emit() immediately followed by
-    // disconnect() can drop the leaveGame message entirely — the socket
-    // closes before it finishes going out over the wire, so the server
-    // only ever sees the raw disconnect and falls back to the 12s grace
-    // period. A timeout guards against the ack itself never arriving
-    // (e.g. the server missed the message anyway) so leaveGame() can't
-    // hang forever — worst case we're back to the old disconnect-only
-    // behavior, not stuck.
-    //
-    // This returns a promise so callers (PlayerView's handleLeave) can
-    // await it before navigating away — navigating unmounts this hook,
-    // whose effect cleanup calls socket.disconnect() unconditionally, so
-    // if navigation happens before the ack lands, the unmount-triggered
-    // disconnect wins the race instead and we're back to square one.
     return new Promise((resolve) => {
       let settled = false;
       const finish = () => {
         if (settled) return;
         settled = true;
-        socket.disconnect();
         resolve();
       };
       socket.emit("leaveGame", code, () => finish());

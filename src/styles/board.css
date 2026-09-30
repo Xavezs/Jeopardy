@@ -124,7 +124,8 @@
     background: transparent; color: var(--text-dim); cursor:pointer;
     transition: transform .12s ease, background .12s ease, color .12s ease;
   }
-  .round-tab:hover{ color: var(--text); }
+  .round-tab:hover{ color: var(--text); background: rgba(240,185,66,0.14); }
+  .round-tab.active:hover{ background: linear-gradient(180deg, var(--gold), #c8932c); }
   .round-tab.active{
     background: linear-gradient(180deg, var(--gold), #c8932c); color: #1a1200;
     box-shadow: 0 2px 8px rgba(240,185,66,0.35);
@@ -166,10 +167,10 @@
 
   /* Combined control bar: round toggle + toolbar buttons + room code, all
      centered together as one group on a single line, in the order
-     toolbar buttons -> mode toggle -> room code.
-     .toolbar is set to display:contents so its own children (the 4 buttons
-     + the room-code-container) become direct flex items of .jp-control-bar,
-     letting us reorder them relative to .round-tabs with the order property. */
+     overflow menu -> round tabs -> live controls -> room code -> End Game.
+     .toolbar is set to display:contents so its own children become direct
+     flex items of .jp-control-bar, letting us reorder them relative to
+     .round-tabs with the order property. */
   .jp-control-bar{
     display: flex;
     flex-wrap: wrap;
@@ -183,21 +184,26 @@
     display: contents;
   }
   .jp-control-bar .toolbar > .btn{
-    order: 1; /* toolbar buttons first */
+    order: 3; /* default: live-game controls (Randomize Order, Randomize Daily Doubles) */
+  }
+  .jp-control-bar .toolbar > .toolbar-overflow{
+    order: 0; /* setup/rare-use menu, leftmost */
+  }
+  .jp-control-bar .toolbar > .btn.btn-edit-board{
+    order: 1; /* right next to the dropdown — toggled often, kept out of the menu */
   }
   .jp-control-bar .round-tabs{
-    order: 2; /* mode toggle in the middle */
+    order: 2; /* mode toggle right after the overflow trigger */
     margin: 0;
   }
-  .jp-control-bar .toolbar > .room-code-container{
-    order: 3; /* room code + copy last */
-  }
   .jp-control-bar .toolbar > .control-assign-container{
-    order: 4; /* board-control assign, after room code */
+    order: 3; /* alongside the other live controls */
   }
-  .jp-control-bar .timer-settings-bar{
-    flex-basis: 100%; /* always its own line below, never squeezed into the row */
-    order: 5;
+  .jp-control-bar .toolbar > .room-code-badge{
+    order: 4;
+  }
+  .jp-control-bar .toolbar > .btn.btn-end-game{
+    order: 5; /* rightmost — the one destructive action, kept apart from the rest */
   }
   @media (max-width: 900px){
     .jp-control-bar{ flex-direction: column; }
@@ -644,6 +650,23 @@
     -webkit-appearance: none; margin: 0;
   }
   .team-add-card{ display:flex; align-items:center; justify-content:center; width:36px; height:50px; flex:0 0 auto; align-self: center; justify-self: center;}
+
+  /* Placeholder shown in edit mode when no teams exist yet */
+  .teams-empty-placeholder{
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 4px; padding: 10px 20px;
+    border: 2px dashed rgba(240,185,66,0.25); border-radius: 10px;
+    background: rgba(255,255,255,0.02);
+    min-width: 140px; align-self: center;
+  }
+  .teams-empty-placeholder-text{
+    font-family: var(--font-display); font-size: 12px; letter-spacing: .5px;
+    color: var(--text-dim);
+  }
+  .teams-empty-placeholder-hint{
+    font-family: var(--font-body); font-size: 10px;
+    color: var(--gold-dim); opacity: .7;
+  }
 
   @keyframes overlayFadeIn{ from{ opacity:0; } to{ opacity:1; } }
   @keyframes overlayFadeOut{ from{ opacity:1; } to{ opacity:0; } }
@@ -1174,22 +1197,113 @@
     50% { box-shadow: 0 0 22px rgba(232,84,74,0.75); }
   }
 
-  /* Global timer settings row (toolbar area) */
-  .timer-settings-bar{
-    display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap;
-    font-size:12px; color:var(--text-dim); margin-bottom:10px; letter-spacing:.3px; 
+  /* ── Board settings gear cell (top-left corner of edit-mode grid) ───── */
+  .board-settings-gear-cell{
+    display: flex; align-items: center; justify-content: center;
   }
-  .timer-settings-bar label{ display:flex; align-items:center; gap:6px; cursor:pointer; }
-  .timer-settings-bar input[type=checkbox]{ accent-color: var(--gold); width:14px; height:14px; cursor:pointer; }
-  .timer-settings-bar input[type=number]{
-    width:56px; background: rgba(0,0,0,0.3); border:1px solid var(--gold-dim); border-radius:6px;
-    color: var(--text); font-family: var(--font-body); text-align:center; padding:4px 4px; 
+  .board-settings-gear-wrap{ position: relative; }
+
+  /* Same shape/size as the overflow trigger btn */
+  .board-settings-gear-btn{
+    width: 40px; height: 40px; border-radius: 8px;
+    display: flex; align-items: center; justify-content: center;
+    background: linear-gradient(180deg, #1a2570, #0e1550);
+    border: 1px solid rgba(240,185,66,0.4);
+    color: var(--text); cursor: pointer;
+    transition: transform .12s ease, box-shadow .12s ease, background .12s ease;
   }
-  .timer-settings-bar input[type=number]:disabled{ opacity:.4; cursor:not-allowed; }
-  .timer-settings-bar input[type=number]:focus{ outline:none; border-color: var(--gold); }
-  .timer-settings-bar input::-webkit-outer-spin-button,
-  .timer-settings-bar input::-webkit-inner-spin-button{
-    -webkit-appearance: none; margin: 0;
+  .board-settings-gear-btn:hover{
+    background: linear-gradient(180deg, #212c86, #121a5c);
+    box-shadow: 0 4px 14px rgba(240,185,66,0.18);
+  }
+  .board-settings-gear-btn:active{ transform: scale(0.96); }
+  .board-settings-gear-btn.is-open{
+    background: linear-gradient(180deg, #212c86, #121a5c);
+  }
+
+  /* Popover — identical to .toolbar-overflow-menu */
+  .board-settings-popover{
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0;
+    z-index: 200;
+    display: flex; flex-direction: column;
+    min-width: 210px;
+    padding: 6px;
+    background: linear-gradient(180deg, #1a2570, #0e1550);
+    border: 1px solid rgba(240,185,66,0.35);
+    border-radius: 10px;
+    box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+  }
+
+  /* Section label — dim uppercase caption between groups */
+  .bsp-group-label{
+    padding: 6px 10px 2px;
+    font-family: var(--font-body); font-size: 10px; font-weight: 700;
+    letter-spacing: .8px; text-transform: uppercase;
+    color: var(--text-dim); opacity: .6;
+  }
+
+  /* Thin divider between sections */
+  .bsp-divider{
+    height: 1px; margin: 4px 6px;
+    background: rgba(240,185,66,0.15);
+  }
+
+  /* Setting row — label + switch side by side */
+  .toolbar-overflow-item{ display: flex; align-items: center; justify-content: space-between; }
+  .bsp-row{
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 10px; gap: 12px;
+  }
+  .bsp-row-label{
+    font-family: var(--font-body); font-size: 12px; font-weight: 700;
+    letter-spacing: .3px; color: var(--text); flex: 1;
+  }
+
+  /* Toggle switch track */
+  .bsp-switch{
+    position: relative; flex-shrink: 0;
+    width: 34px; height: 18px; border-radius: 999px;
+    border: none; cursor: pointer; padding: 0;
+    background: rgba(255,255,255,0.12);
+    transition: background .2s ease;
+  }
+  .bsp-switch.is-on{ background: var(--gold); }
+  .bsp-switch:focus-visible{ outline: 2px solid var(--gold); outline-offset: 2px; }
+
+  /* Thumb */
+  .bsp-switch-thumb{
+    position: absolute; top: 2px; left: 2px;
+    width: 14px; height: 14px; border-radius: 50%;
+    background: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+    transition: transform .2s cubic-bezier(0.34,1.56,0.64,1);
+  }
+  .bsp-switch.is-on .bsp-switch-thumb{ transform: translateX(16px); }
+
+  /* Duration row — not a button, just an inline label+input strip */
+  .bsp-duration-row{
+    display: flex; align-items: center; gap: 6px;
+    padding: 4px 10px 6px;
+  }
+  .bsp-duration-label{
+    font-family: var(--font-body); font-size: 12px; font-weight: 700;
+    letter-spacing: .3px; color: var(--text); flex: 1;
+  }
+
+  /* Timer input used in the duration row */
+  .settings-timer-input{
+    width: 44px; background: rgba(0,0,0,0.3); border: 1px solid var(--gold-dim); border-radius: 6px;
+    color: var(--text); font-family: var(--font-body); font-size: 12px;
+    text-align: center; padding: 4px;
+    -moz-appearance: textfield; appearance: textfield;
+  }
+  .settings-timer-input:focus{ outline: none; border-color: var(--gold); }
+  .settings-timer-input::-webkit-outer-spin-button,
+  .settings-timer-input::-webkit-inner-spin-button{ -webkit-appearance: none; margin: 0; }
+  .settings-timer-unit{
+    font-size: 11px; color: var(--text-dim); letter-spacing: .3px;
   }
 
   .score-row{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; border-top:1px solid rgba(240,185,66,0.2); padding-top:16px; }
@@ -1234,6 +1348,18 @@
   }
 
   .form-row{ margin-bottom:14px; }
+  .edit-clue-advanced-toggle-wrap{
+    display:flex; justify-content:flex-end; margin:-8px 0 12px;
+  }
+  .edit-clue-advanced-toggle{
+    border:1px solid rgba(240,185,66,0.35); border-radius:999px; padding:6px 12px;
+    background:rgba(240,185,66,0.06); color:var(--text-dim); font:inherit; font-size:11px;
+    cursor:pointer; transition:color .15s ease, border-color .15s ease, background .15s ease;
+  }
+  .edit-clue-advanced-toggle:hover, .edit-clue-advanced-toggle.is-active{
+    color:var(--gold); border-color:var(--gold); background:rgba(240,185,66,0.12);
+  }
+
   .form-row label{ display:block; font-size:12px; color:var(--text-dim); margin-bottom:5px; letter-spacing:.5px;}
 
   /* "Has a file?" status badge next to a MediaField's label — quick
@@ -1539,6 +1665,82 @@
   align-items: center;
   gap: 12px;
   flex-grow: 1;
+}
+
+.clue-media-clip-control {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  align-self: center;
+  color: rgba(255,255,255,0.72);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.clue-media-player-row {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+}
+
+.clue-media-player-row > .custom-audio-player,
+.clue-media-player-row > .custom-video-player {
+  width: 100%;
+  max-width: 600px;
+  margin-left: 0;
+  margin-right: 0;
+}
+
+.clue-media-player-row > .clue-media-clip-control {
+  position: static;
+  min-height: 28px;
+  margin: -14px auto 10px;
+  padding: 3px 10px;
+  border: 1px solid rgba(240,185,66,0.25);
+  border-radius: 6px;
+  background: rgba(15,23,42,0.9);
+  white-space: nowrap;
+}
+
+.clue-media-clip-control input {
+  width: 92px;
+  padding: 6px 9px;
+  border: 1px solid rgba(240,185,66,0.45);
+  border-radius: 6px;
+  background: rgba(15,23,42,0.9);
+  color: var(--gold);
+  font: inherit;
+  font-size: 0.78rem;
+  text-align: right;
+  outline: none;
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.clue-media-clip-control input::-webkit-outer-spin-button,
+.clue-media-clip-control input::-webkit-inner-spin-button,
+.media-clip-row input[type="number"]::-webkit-outer-spin-button,
+.media-clip-row input[type="number"]::-webkit-inner-spin-button {
+  -webkit-appearance: none;
+  margin: 0;
+}
+
+.media-clip-row input[type="number"] {
+  -moz-appearance: textfield;
+  appearance: textfield;
+}
+
+.clue-media-clip-control input:focus {
+  border-color: var(--gold);
+  box-shadow: 0 0 0 2px rgba(240,185,66,0.16);
+}
+
+.clue-media-clip-unit {
+  color: rgba(255,255,255,0.48);
+  text-transform: lowercase;
 }
 
 /* Timers text */
@@ -2275,29 +2477,103 @@ button.btn.gold:hover{ background: linear-gradient(180deg, var(--gold), #c8932c)
   box-shadow: 0 0 10px rgba(255, 215, 0, 0.7);
 }
 
-.room-code-container {
+/* Compact room-code badge — code + one copy icon, replacing the old
+   label+input+two-buttons row. copyRoomCode() (Toolbar.jsx) already
+   handles the actual clipboard write with its own fallback chain, so this
+   just needs to be a plain clickable target, not a selectable <input>. */
+.room-code-badge {
   display: flex;
   align-items: center;
   gap: 6px;
-  
-}
-
-.room-code-label {
-  font-size: 12px;
-  color: var(--text-dim);
-  
-}
-
-.room-code-input {
-  width: 90px;
-  padding: 7px 8px;
-  letter-spacing: 0.08em;
-  text-align: center;
-  font-weight: 700;
+  padding: 5px 6px 5px 12px;
   background: rgba(0, 0, 0, 0.32);
   border: 1px solid rgba(240,185,66,0.28);
-  border-radius: 6px;
+  border-radius: 999px;
+}
+
+.room-code-badge-code {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
   color: var(--text);
+}
+
+.room-code-badge-copy {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font-size: 13px;
+  line-height: 1;
+  background: rgba(240,185,66,0.12);
+  border: 1px solid rgba(240,185,66,0.3);
+  border-radius: 999px;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .12s ease, transform .12s ease;
+}
+.room-code-badge-copy:hover:not(:disabled){ background: rgba(240,185,66,0.22); }
+.room-code-badge-copy:active:not(:disabled){ transform: scale(0.92); }
+.room-code-badge-copy:disabled{ opacity: 0.5; cursor: default; }
+
+/* Setup/rare-use actions menu (Edit Board, Sessions, Reset Round, New
+   Room Code) — see the comment in Toolbar.jsx for why these are tucked
+   away instead of sitting in the main row. */
+.toolbar-overflow{
+  position: relative;
+}
+.toolbar-overflow-trigger{
+  font-size: 16px !important;
+  line-height: 1;
+  padding: 7px 12px !important;
+}
+.toolbar-overflow-menu{
+  position: absolute;
+  top: calc(100% + 6px);
+  left: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 190px;
+  padding: 6px;
+  background: linear-gradient(180deg, #1a2570, #0e1550);
+  border: 1px solid rgba(240,185,66,0.35);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(0,0,0,0.45);
+}
+.toolbar-overflow-item{
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-align: left;
+  cursor: pointer;
+  transition: background .12s ease;
+}
+.toolbar-overflow-item:hover:not(:disabled){ background: rgba(240,185,66,0.14); }
+.toolbar-overflow-item:disabled{ opacity: 0.5; cursor: default; }
+
+/* End Game — deliberately distinct from the neutral navy .btn styling
+   above: it's the one destructive, session-ending action in this row and
+   shouldn't read with the same casual weight as Randomize Order. */
+button.btn.btn-end-game{
+  background: linear-gradient(180deg, #7a2230, #4a1018);
+  border-color: rgba(255,120,120,0.4);
+  color: #ffd9d9;
+}
+button.btn.btn-end-game:hover{
+  background: linear-gradient(180deg, #8f2838, #571219);
+  box-shadow: 0 4px 14px rgba(200,60,60,0.25);
 }
 
 .control-assign-container {

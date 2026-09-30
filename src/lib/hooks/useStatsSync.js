@@ -1,17 +1,17 @@
 // lib/hooks/useStatsSync.js
 import { useEffect, useRef, useState } from "react";
-import { io } from "socket.io-client";
-
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
+import { useSocket } from "../SocketContext";
 
 /* =========================================================================
    useStatsSync
    Host-side listener for the per-player correct/wrong counters the server
    tracks in room.playerStats (see bot-server.js's judgeAnswer handler).
-   Own small socket + `joinRoom` rather than piggybacking on useControlSync's
-   connection — joinRoom already resends the room's current playerStats to
-   any socket that joins (host included), same as it does for buzzerState/
+   joinRoom already resends the room's current playerStats to any socket
+   that joins (host included), same as it does for buzzerState/
    activeClueUpdate/controlChanged, so this needs nothing new server-side.
+
+   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
+   instead of opening its own connection.
 
    Returns { playerStats } shaped like:
      { [discordUserId]: { correct: number, wrong: number } }
@@ -23,30 +23,39 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    ========================================================================= */
 export function useStatsSync(roomCode) {
   const [playerStats, setPlayerStats] = useState({});
-  const socketRef = useRef(null);
+  const { socket } = useSocket();
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
+    const handleConnect = () => {
       if (roomCodeRef.current) socket.emit("joinRoom", roomCodeRef.current);
-    });
-    socket.on("statsUpdate", (stats) => setPlayerStats(stats || {}));
+    };
+    const handleStatsUpdate = (stats) => setPlayerStats(stats || {});
 
-    return () => socket.disconnect();
-  }, []);
+    socket.on("connect", handleConnect);
+    socket.on("statsUpdate", handleStatsUpdate);
+
+    if (socket.connected && roomCodeRef.current) {
+      socket.emit("joinRoom", roomCodeRef.current);
+    }
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("statsUpdate", handleStatsUpdate);
+    };
+  }, [socket]);
 
   // Re-join if roomCode shows up/changes after the socket already connected
   // (mirrors the same pattern in usePlayerSync/useControlSync-style hooks —
   // roomCode is often not known yet on first mount).
   useEffect(() => {
-    if (roomCode && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", roomCode);
+    if (roomCode && socket?.connected) {
+      socket.emit("joinRoom", roomCode);
     }
-  }, [roomCode]);
+  }, [roomCode, socket]);
 
   return { playerStats };
 }

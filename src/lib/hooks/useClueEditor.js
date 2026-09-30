@@ -40,7 +40,7 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
 
   /* ---------------- CLUE EDIT MODAL ---------------- */
   const [editingTarget, setEditingTarget] = useState(null); // {catId, value}
-  const [editForm, setEditForm] = useState({ question: "", answer: "", timerSeconds: "" });
+  const [editForm, setEditForm] = useState({ question: "", answer: "", timerSeconds: "", mediaClipSeconds: "", answerMediaClipSeconds: "" });
   const [mediaState, setMediaState] = useState({
     media: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
     answerMedia: { mode: "url", url: "", fileRef: "", fileName: "", fileType: "" },
@@ -58,6 +58,13 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
       question: clue.question || "",
       answer: clue.answer || "",
       timerSeconds: clue.timerSeconds != null ? String(clue.timerSeconds) : "",
+      // "Stop playback after N seconds" — a per-clue clip cutoff for
+      // question/answer audio/video, independent of timerSeconds above
+      // (which is the ANSWER timer, not a media limit). Built for
+      // "1-second music round"-style clues where you want the snippet to
+      // auto-stop instead of manually pausing it every time.
+      mediaClipSeconds: clue.mediaClipSeconds != null ? String(clue.mediaClipSeconds) : "",
+      answerMediaClipSeconds: clue.answerMediaClipSeconds != null ? String(clue.answerMediaClipSeconds) : "",
     });
     const existing = clue.mediaUrl || "";
     const media =
@@ -140,6 +147,13 @@ export function useClueEditor({ sessionRef, touch, persist, currentRoundOf, appC
       clue.answer = editForm.answer.trim();
       const parsedTimer = parseInt(editForm.timerSeconds, 10);
       clue.timerSeconds = editForm.timerSeconds.trim() === "" || isNaN(parsedTimer) || parsedTimer <= 0 ? null : parsedTimer;
+      // Media clip cutoff — same "blank/invalid/<=0 means no limit" parsing
+      // as timerSeconds above. Stored per-clue so it's set once and stays
+      // with the board (see useClueEditor.js header comment).
+      const parsedClip = parseFloat(editForm.mediaClipSeconds);
+      clue.mediaClipSeconds = editForm.mediaClipSeconds.trim() === "" || isNaN(parsedClip) || parsedClip <= 0 ? null : parsedClip;
+      const parsedAnswerClip = parseFloat(editForm.answerMediaClipSeconds);
+      clue.answerMediaClipSeconds = editForm.answerMediaClipSeconds.trim() === "" || isNaN(parsedAnswerClip) || parsedAnswerClip <= 0 ? null : parsedAnswerClip;
       const m = mediaState.media;
       if (m.mode === "file") {
         clue.mediaUrl = m.fileRef;

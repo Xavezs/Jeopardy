@@ -3,6 +3,7 @@ import JeopardyBoard from './JeopardyBoard';
 import LoginGate from "./components/LoginGate";
 import PlayerView from "./components/PlayerView";
 import RoleSelect from "./components/RoleSelect";
+import { SocketProvider } from "./lib/SocketContext";
 import { getDiscordIdentity } from './discordSdk';
 import { installGlobalBoardSfx } from './lib/boardSfx';
 import '@fontsource/quicksand/300.css';
@@ -77,19 +78,25 @@ export default function App() {
 
   // 2. CONDITIONAL RETURNS (Safe now because hooks have already run)
   if (currentPath.startsWith("/play")) {
-    return <PlayerView />;
+    return (
+      <SocketProvider>
+        <PlayerView />
+      </SocketProvider>
+    );
   }
 
   if (hostMode) {
     return (
-      <LoginGate>
-        <JeopardyBoard
-          onBack={() => {
-            sessionStorage.removeItem(ACTIVE_HOST_MODE_KEY);
-            setHostMode(false);
-          }}
-        />
-      </LoginGate>
+      <SocketProvider>
+        <LoginGate>
+          <JeopardyBoard
+            onBack={() => {
+              sessionStorage.removeItem(ACTIVE_HOST_MODE_KEY);
+              setHostMode(false);
+            }}
+          />
+        </LoginGate>
+      </SocketProvider>
     );
   }
 

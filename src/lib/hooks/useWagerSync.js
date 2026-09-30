@@ -1,8 +1,6 @@
 // lib/hooks/useWagerSync.js
 import { useEffect, useRef, useCallback } from "react";
-import { io } from "socket.io-client";
-
-const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
+import { useSocket } from "../SocketContext";
 
 /* =========================================================================
    useWagerSync
@@ -13,6 +11,11 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    it to the room as wagerSubmitted. The host is expected to respond by
    calling its own setDailyDoubleWager(amount) — this hook never sets
    anything itself, it just relays the number.
+
+   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
+   instead of opening its own connection — listeners are added/removed
+   with socket.on/off rather than the socket itself being created/torn
+   down here.
 
    `roomCode` — required to receive/send anything.
    `me` — { discordUserId } for the current logged-in player. Only needed
@@ -30,12 +33,12 @@ const BOT_SERVER_URL = import.meta.env.VITE_BOT_SERVER_URL ?? "";
    OPEN_CONTROL) for good UX, same as selectClue/isMyTurn.
    ========================================================================= */
 export function useWagerSync(roomCode, me, { onWagerSubmitted } = {}) {
-  const socketRef = useRef(null);
+  const { socket } = useSocket();
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
 
   // Same ref-not-dependency reasoning as useControlSync's
-  // onClueSelectedRef/meRef — keeps the socket connection stable across
+  // onClueSelectedRef/meRef — keeps listener attachment stable across
   // re-renders while always calling the latest callback/identity.
   const onWagerSubmittedRef = useRef(onWagerSubmitted);
   onWagerSubmittedRef.current = onWagerSubmitted;
@@ -44,34 +47,44 @@ export function useWagerSync(roomCode, me, { onWagerSubmitted } = {}) {
   meRef.current = me;
 
   useEffect(() => {
-    const socket = io(BOT_SERVER_URL);
-    socketRef.current = socket;
+    if (!socket) return;
 
-    socket.on("connect", () => {
+    const handleConnect = () => {
       if (roomCodeRef.current) socket.emit("joinRoom", roomCodeRef.current);
-    });
-    socket.on("wagerSubmitted", (payload) => {
-      onWagerSubmittedRef.current?.(payload);
-    });
+    };
+    const handleWagerSubmitted = (payload) => onWagerSubmittedRef.current?.(payload);
 
-    return () => socket.disconnect();
-  }, []);
+    socket.on("connect", handleConnect);
+    socket.on("wagerSubmitted", handleWagerSubmitted);
+
+    // Socket may already be connected (shared across hooks that mount at
+    // slightly different times) — join immediately rather than waiting
+    // for a 'connect' event that already fired.
+    if (socket.connected && roomCodeRef.current) {
+      socket.emit("joinRoom", roomCodeRef.current);
+    }
+
+    return () => {
+      socket.off("connect", handleConnect);
+      socket.off("wagerSubmitted", handleWagerSubmitted);
+    };
+  }, [socket]);
 
   useEffect(() => {
-    if (roomCode && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", roomCode);
+    if (roomCode && socket?.connected) {
+      socket.emit("joinRoom", roomCode);
     }
-  }, [roomCode]);
+  }, [roomCode, socket]);
 
   const submitWager = useCallback((amount) => {
     const roomCode = roomCodeRef.current;
-    if (!roomCode) return;
-    socketRef.current?.emit("submitWager", {
+    if (!roomCode || !socket) return;
+    socket.emit("submitWager", {
       roomCode,
       amount,
       discordUserId: meRef.current?.discordUserId ?? null,
     });
-  }, []);
+  }, [socket]);
 
   return { submitWager };
 }

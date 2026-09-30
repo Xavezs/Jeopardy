@@ -4,6 +4,7 @@ const { Client, GatewayIntentBits, REST, Routes } = require('discord.js');
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { router: authRouter } = require('./auth');
 
@@ -11,6 +12,9 @@ const { router: authRouter } = require('./auth');
 const PORT = process.env.PORT || 4001;
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CLIENT_ID = process.env.CLIENT_ID;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173';
+const allowedOrigins = FRONTEND_URL.split(',').map((origin) => origin.trim()).filter(Boolean);
+const isAllowedOrigin = (origin) => !origin || allowedOrigins.includes(origin);
 
 // How long a disconnected player's team membership is held before we treat
 // it as a real leave. Socket.IO fires 'disconnect' on tab-blur, brief
@@ -32,6 +36,10 @@ app.set('trust proxy', 1);
 
 // Middleware
 app.use(express.json());
+app.use(cors({
+  origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
+  credentials: true,
+}));
 app.use(cookieParser());
 
 const mediaRouter = require('./media');
@@ -111,13 +119,45 @@ app.get('/api/youtube-widgetapi.js', async (req, res) => {
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
-    origin: '*',
+    origin: (origin, callback) => callback(null, isAllowedOrigin(origin)),
     methods: ['GET', 'POST'],
+    credentials: true,
   },
 });
 
 // Shared in-memory state for the browser host and player views.
 const gameRooms = new Map();
+const invalidatedRoomCodes = new Set();
+
+// How often the empty-room sweep below runs. Doesn't need to be frequent —
+// this is just memory hygiene, not anything time-sensitive to a live game.
+const ROOM_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
+
+// Rooms are never deleted anywhere else: a disconnect only ever removes
+// the *player* from room.players (see the 'disconnect' handler and its
+// DISCONNECT_GRACE_MS timeout below), never the room itself. Without this,
+// every room anyone ever hosts stays in `gameRooms` for the lifetime of
+// the process, even long after everyone's left. This sweep reclaims a
+// room once it's genuinely abandoned.
+//
+// Checked against Socket.IO's own room membership (io.sockets.adapter.rooms),
+// not room.players — room.players only ever gets entries from joinAsPlayer,
+// so a host who's alone building/editing a board (no one's called
+// joinAsPlayer yet) has no roster entry at all. Checking room.players here
+// would treat that as "empty" and delete the room, board and all, out from
+// under an actively-connected host. Checking actual socket presence instead
+// covers the host (and any spectator) the same way it covers players.
+function sweepEmptyRooms() {
+  for (const [roomCode, room] of gameRooms) {
+    const socketsInRoom = io.sockets.adapter.rooms.get(roomCode);
+    if (socketsInRoom && socketsInRoom.size > 0) continue; // someone's still actually connected
+    const hasPendingReconnect = room?.pendingRemovals && room.pendingRemovals.size > 0;
+    if (hasPendingReconnect) continue;
+    gameRooms.delete(roomCode);
+  }
+}
+
+setInterval(sweepEmptyRooms, ROOM_SWEEP_INTERVAL_MS).unref();
 
 /* =========================================================================
    VOICE PRESENCE (roster + mute/deaf only — no bot audio connection)
@@ -258,6 +298,25 @@ function detachFromTeamIfAbandoned(roomCode, leaving) {
   io.to(roomCode).emit('boardUpdate', room.board);
 }
 
+// The host re-announces its saved board after reconnecting. That snapshot can
+// be older than the live player roster, so preserve the Discord memberships
+// already known by the room instead of allowing the host snapshot to erase
+// them. Board content remains host-owned; only live team membership is merged.
+function mergeLivePlayerMemberships(boardData, players) {
+  if (!Array.isArray(boardData?.teams) || !Array.isArray(players)) return;
+
+  const teamsById = new Map(boardData.teams.map((team) => [team.id, team]));
+  for (const player of players) {
+    if (!player?.teamId || !player.discordUserId) continue;
+    const team = teamsById.get(player.teamId);
+    if (!team) continue;
+    if (!Array.isArray(team.discordUserIds)) team.discordUserIds = [];
+    if (!team.discordUserIds.includes(player.discordUserId)) {
+      team.discordUserIds.push(player.discordUserId);
+    }
+  }
+}
+
 // Sentinel stored in room.controlDiscordUserId to mean "control is open —
 // any connected player may pick", as opposed to null ("locked, host only")
 // or an actual discordUserId ("assigned to that one player"). Deliberately
@@ -310,6 +369,10 @@ io.on('connection', (socket) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
+    if (invalidatedRoomCodes.has(roomCode)) {
+      socket.emit('errorMsg', 'This room code has been replaced.');
+      return;
+    }
 
     socket.isHost = payload && typeof payload === 'object' && payload.role === 'host';
     socket.join(roomCode);
@@ -322,8 +385,39 @@ io.on('connection', (socket) => {
     if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room?.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
     if (room?.randomizer) socket.emit('randomizerUpdate', room.randomizer);
+    if (room?.players) socket.emit('playersUpdate', room.players);
     if (room) socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
     if (room?.playerStats) socket.emit('statsUpdate', room.playerStats);
+  });
+
+  socket.on('rotateRoomCode', ({ oldRoomCode, newRoomCode }, ack) => {
+    const reject = (message) => {
+      if (typeof ack === 'function') ack({ ok: false, error: message });
+    };
+    if (!socket.isHost || typeof oldRoomCode !== 'string' || typeof newRoomCode !== 'string') {
+      reject('Only the host can change the room code.');
+      return;
+    }
+    const oldCode = oldRoomCode.trim().toUpperCase();
+    const newCode = newRoomCode.trim().toUpperCase();
+    if (!oldCode || !newCode || socket.gameRoomCode !== oldCode || gameRooms.has(newCode)) {
+      reject('The live room is no longer available.');
+      return;
+    }
+
+    const room = gameRooms.get(oldCode);
+    if (!room) {
+      reject('The live room is no longer available.');
+      return;
+    }
+    invalidatedRoomCodes.add(oldCode);
+    gameRooms.set(newCode, room);
+    gameRooms.delete(oldCode);
+    socket.leave(oldCode);
+    socket.join(newCode);
+    socket.gameRoomCode = newCode;
+    io.to(oldCode).emit('roomCodeChanged', { roomCode: newCode });
+    if (typeof ack === 'function') ack({ ok: true });
   });
 
   socket.on('activeClueUpdate', ({ roomCode: rawRoomCode, activeClue }) => {
@@ -642,11 +736,16 @@ io.on('connection', (socket) => {
     }
 
     const room = gameRooms.get(roomCode) || {};
+    mergeLivePlayerMemberships(data, room.players);
+    if (Object.prototype.hasOwnProperty.call(data, 'controlDiscordUserId')) {
+      room.controlDiscordUserId = data.controlDiscordUserId || null;
+    }
     room.board = { data, updatedAt: updatedAt || Date.now() };
     gameRooms.set(roomCode, room);
 
     // socket.to(...) ensures the host doesn't receive its own echo back
     socket.to(roomCode).emit('boardUpdate', room.board);
+    emitControlState(roomCode, room);
   });
 
   socket.on('watchVoiceChannel', (rawChannelId) => {
@@ -673,6 +772,10 @@ io.on('connection', (socket) => {
     const roomCode = rawRoomCode.trim().toUpperCase();
     const trimmedName = teamName.trim();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH || !trimmedName || trimmedName.length > MAX_TEAM_NAME_LENGTH) return;
+    if (invalidatedRoomCodes.has(roomCode)) {
+      socket.emit('errorMsg', 'This room code has been replaced.');
+      return;
+    }
 
     socket.join(roomCode);
     socket.gameRoomCode = roomCode;
@@ -711,6 +814,15 @@ io.on('connection', (socket) => {
       const team = room.board.data.teams.find((t) => t.id === existing.teamId);
       socket.emit('joinedTeam', { teamId: existing.teamId, teamName: team?.name || trimmedName });
       io.to(roomCode).emit('playersUpdate', room.players);
+
+      // Reconnect path was previously missing this — the fresh-join branch
+      // below sends boardUpdate, but a returning player (tab refresh, brief
+      // drop) landed here instead and never got the board at all, since
+      // usePlayerSync's boardData starts at null on every fresh mount and
+      // nothing else would resend it until the host's next edit. Without
+      // this, a mid-game refresh could leave a player staring at a blank
+      // board indefinitely.
+      if (room.board) socket.emit('boardUpdate', room.board);
 
       if (room.buzzer) socket.emit('buzzerState', room.buzzer);
       if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);

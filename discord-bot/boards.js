@@ -208,6 +208,17 @@ router.post('/:id/invite', requireRole('owner'), (req, res) => {
   res.json({ roomCode: code });
 });
 
+// POST /api/boards/:id/rotate-invite — owner only. Replaces the existing
+// room code when the host needs to invalidate a compromised or broken code.
+router.post('/:id/rotate-invite', requireRole('owner'), (req, res) => {
+  let code;
+  do {
+    code = newRoomCode();
+  } while (db.prepare('SELECT 1 FROM boards WHERE room_code = ?').get(code));
+  db.prepare('UPDATE boards SET room_code = ? WHERE id = ?').run(code, req.params.id);
+  res.json({ roomCode: code });
+});
+
 // POST /api/boards/join — { roomCode } -> joins caller as editor
 router.post('/join', (req, res) => {
   const { roomCode } = req.body;

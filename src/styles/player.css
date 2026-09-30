@@ -304,8 +304,8 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .pv-cell.pv-used {
   background: linear-gradient(180deg, #0b1044, #070a2c);
   opacity: 0.28;
-  color: transparent;
-  text-shadow: none;
+  color: var(--gold);
+  text-shadow: 0 0 10px rgba(240,185,66,0.25);
 }
 
 /* My turn (or control is open to everyone) — this cell is actually
