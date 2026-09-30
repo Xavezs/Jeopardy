@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from "react";
+import React, { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import "../styles/player.css";
 import "../styles/board.css"; // TeamCard's classes (.team-card, .team-discord-avatar, etc.) are defined here — this file never needed them before it built its own team markup.
 import { usePlayerSync } from "../lib/hooks/usePlayerSync";
@@ -11,8 +11,14 @@ import { useDiscordMembers } from "../lib/hooks/useDiscordMembers";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
 import { isYoutubeUrl } from "../lib/youtube";
 import { getDiscordIdentity, activityChannelId } from "../discordSdk";
-import { unlockAudioPlayback } from "../lib/sfx";
+import { unlockAudioPlayback, getSharedAudioCtx, withRunningCtx } from "../lib/sfx";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
+import ShopModal from "./ShopModal";
+import ShopWidget from "./ShopWidget";
+import { fetchLoadout } from "../lib/api/shop";
+import SkillOverlay from "./SkillOverlay";
+import { useSkillSync } from "../lib/hooks/useSkillSync";
+import { PowerupTray, PowerupNotice } from "./PowerupUI";
 import TeamCard from "./TeamCard";
 import TeamRandomizer from "./TeamRandomizer";
 import {
@@ -1128,6 +1134,60 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
 
   const { queue, activePlayer, alreadyBuzzed, buzz, buzzerLive } = useBuzzer(roomCode, buzzerMe);
 
+  // ── Cosmetics shop ────────────────────────────────────────────────────
+  // The player's equipped loadout — fetched once on mount (if they have a
+  // Discord identity, which is the stable key for the wallet). Refreshed
+  // whenever the shop modal closes so equip changes take effect immediately.
+  const [loadout, setLoadout] = useState({});
+  const hasDiscordId = !!me.discordUser?.id;
+
+  const refreshLoadout = useCallback(async () => {
+    if (!hasDiscordId) return;
+    try {
+      const data = await fetchLoadout();
+      setLoadout(data || {});
+    } catch (_) { /* non-fatal — default sound plays if loadout fails */ }
+  }, [hasDiscordId]);
+
+  useEffect(() => { refreshLoadout(); }, [refreshLoadout]);
+
+  // Custom buzz sound — plays locally when THIS player presses buzz,
+  // giving instant tactile feedback before the server round-trip lands.
+  // Falls back to nothing extra (the universal playBuzzSfx() in useBuzzer
+  // still fires for everyone on the server echo). Only synth items are
+  // supported client-side for now; file-based assets would need a fetch.
+  const playCustomBuzzSound = useCallback(() => {
+    const buzzItem = loadout.buzz_sound;
+    if (!buzzItem?.data?.synth || !buzzItem.data.synthParams) return;
+    try {
+      const ctx = getSharedAudioCtx();
+      if (!ctx) return;
+      withRunningCtx(ctx, () => {
+        const t0 = ctx.currentTime;
+        const { type = 'square', startHz = 220, endHz = 440, durationMs = 200, volume = 0.2 } = buzzItem.data.synthParams;
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(startHz, t0);
+        osc.frequency.linearRampToValueAtTime(endHz, t0 + durationMs / 1000);
+        gain.gain.setValueAtTime(0.0001, t0);
+        gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
+        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationMs / 1000);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+        osc.start(t0);
+        osc.stop(t0 + durationMs / 1000 + 0.05);
+      });
+    } catch (_) { /* best effort */ }
+  }, [loadout]);
+
+  // Wrap buzz() so custom sound fires at click time, before the server echo.
+  const handleBuzz = useCallback(() => {
+    playCustomBuzzSound();
+    buzz();
+  }, [playCustomBuzzSound, buzz]);
+
   // Board control: who's currently allowed to pick the next category/clue.
   // Keyed by discordUserId (same stable id buzzerMe already uses), NOT this
   // player's local `me.id` — see useControlSync.js for why.
@@ -1155,6 +1215,20 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
   // needed here (unlike submitWager above), since every team submits in
   // parallel. See FinalJeopardyView below for where these get called.
   const { submitFinalWager, submitFinalAnswer } = useFinalSync(roomCode, { discordUserId: buzzerMe.id });
+
+  // Skills — cutscene plays for everyone; the host applies the score change.
+  const {
+    skillsUsed, skillsGranted, powerupsGranted, activeSkill, castSkill, clearActiveSkill,
+    armedPowerups, frozenTeams, powerupNotice, clearPowerupNotice, hint, clearHint, activatePowerup,
+  } = useSkillSync(roomCode, { discordUserId: buzzerMe.id });
+  const equippedSkill = loadout.skill || null;
+  // Unlocked in the shop, but only usable once the host's Power-ups spin grants it.
+  const skillGranted = !!equippedSkill && (skillsGranted[buzzerMe.id] || []).includes(equippedSkill.id);
+  const skillSpent = !!equippedSkill && (skillsUsed[buzzerMe.id] || []).includes(equippedSkill.id);
+  // Power-ups (2x / Shield / Steal / Freeze / Hint / Re-Buzz) — usable both on
+  // the board and mid-clue (unlike Domain Expansion, which locks during a clue).
+  const myPowerups = powerupsGranted[buzzerMe.id] || [];
+  const myHint = hint && hint.catId === activeClue?.catId && hint.value === activeClue?.value ? hint : null;
 
   // Display name for whoever currently holds the board, for the "whose
   // turn" indicator — resolved from the synced players roster rather than
@@ -1349,6 +1423,10 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
     };
   }, [openClue?.isDailyDouble, openClue?.dailyDoubleWager, activeClue?.catId, activeClue?.value]);
 
+  useEffect(() => {
+    if (!activeClue && hint) clearHint();
+  }, [activeClue, hint, clearHint]);
+
   const buzzDisabled = !buzzerLive || iHaveFloor || alreadyBuzzed;
   const buzzBarActive = buzzerLive || alreadyBuzzed || iHaveFloor;
 
@@ -1480,11 +1558,11 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
       if (tag === "INPUT" || tag === "TEXTAREA" || e.target?.isContentEditable) return;
       e.preventDefault();
       if (e.repeat || buzzDisabled) return;
-      buzz();
+      handleBuzz();
     }
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [buzzDisabled, buzz]);
+  }, [buzzDisabled, handleBuzz]);
 
   const [mediaUrl, setMediaUrl] = useState("");
   const [renderAs, setRenderAs] = useState("");
@@ -1732,6 +1810,10 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
         </button>
       </div>
 
+      <ShopWidget discordUserId={me.discordUser?.id} onChanged={refreshLoadout} />
+      <SkillOverlay activeSkill={activeSkill} onDone={clearActiveSkill} />
+      <PowerupNotice notice={powerupNotice} onDone={clearPowerupNotice} />
+
       {!openClue && rd.type !== "final" && (
         <div className={"pv-control-indicator" + (isMyTurn ? " pv-control-mine" : "")}>
           {isMyTurn
@@ -1900,6 +1982,20 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
           </div>
 
           <div className="pv-clue-scoreboard">
+            <PowerupTray
+              inline
+              items={myPowerups}
+              armed={armedPowerups}
+              frozenTeams={frozenTeams}
+              teams={boardData.teams}
+              myTeamId={joinedTeam?.teamId}
+              inClue
+              buzzerLive={buzzerLive}
+              isFinal={false}
+              hasControl={controlDiscordUserId === buzzerMe.id}
+              hint={myHint}
+              onUse={activatePowerup}
+            />
             <BuzzStatusText
               buzzerLive={buzzerLive}
               iHaveFloor={iHaveFloor}
@@ -1910,7 +2006,7 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
             <button
               className={"pv-buzz-btn pv-buzz-btn-side" + (buzzDisabled ? " pv-buzz-disabled" : "")}
               disabled={buzzDisabled}
-              onClick={buzz}
+              onClick={handleBuzz}
             >
               BUZZ
             </button>
@@ -1921,7 +2017,13 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
       )}
 
       {randomizer?.active ? (
-        <TeamRandomizer teams={boardData.teams} readOnly syncedState={randomizer} />
+        <TeamRandomizer
+            teams={boardData.teams}
+            players={players}
+            myDiscordUserId={me?.discordUser?.id ?? null}
+            readOnly
+            syncedState={randomizer}
+          />
       ) : rd.type === "final" ? (
         <FinalJeopardyView
           rd={rd}
@@ -1980,6 +2082,40 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
         </div>
       )}
 
+      {!openClue && !randomizer?.active && rd.type !== "final" && (
+        <div className="pv-leaderboard-powerups">
+          <PowerupTray
+            inline
+            items={myPowerups}
+            armed={armedPowerups}
+            frozenTeams={frozenTeams}
+            teams={boardData.teams}
+            myTeamId={joinedTeam?.teamId}
+            inClue={false}
+            buzzerLive={buzzerLive}
+            isFinal={false}
+            hasControl={controlDiscordUserId === buzzerMe.id}
+            hint={myHint}
+            onUse={activatePowerup}
+          />
+          {/* Domain Expansion lives here, and ONLY here — it's the one skill
+              blocked from firing while a clue is open (see bot-server.js's
+              useSkill handler), so it has no place in the in-clue tray.
+              Once used it's just gone for the rest of the game, no "(used)"
+              ghost button hanging around. */}
+          {equippedSkill && skillGranted && !skillSpent && (
+            <button
+              type="button"
+              className="pv-skill-btn pv-skill-btn--inline"
+              disabled={!!activeSkill}
+              onClick={() => castSkill(equippedSkill.id)}
+              title={equippedSkill.description}
+            >
+              {equippedSkill.name}
+            </button>
+          )}
+        </div>
+      )}
       {!openClue && rd.type !== "final" && (
         <TeamScoreRow teams={boardData.teams} joinedTeamId={joinedTeam?.teamId} pulseMap={pulseMap} discordMembersByTeam={discordMembersByTeam} buzzStateByTeam={buzzStateByTeam} />
       )}

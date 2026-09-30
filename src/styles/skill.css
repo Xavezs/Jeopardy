@@ -1,0 +1,280 @@
+/* =========================================================================
+   Skill button (player screen) — e.g. Domain Expansion.
+   `button.pv-skill-btn` is deliberately more specific than any global
+   `button` / `.btn` rule so it can't be flattened into a grey full-width bar.
+   ========================================================================= */
+button.pv-skill-btn {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
+  white-space: nowrap;
+  z-index: 60;
+  width: auto;
+  min-width: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 11px 20px 11px 16px;
+  border: 1.5px solid #e11d2e;
+  border-radius: 10px;
+  color: #fff;
+  font: inherit;
+  font-weight: 800;
+  font-size: 0.95rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  cursor: pointer;
+  overflow: hidden;
+  background:
+    linear-gradient(115deg, transparent 0 58%, rgba(225, 29, 46, 0.55) 58% 61%, transparent 61%),
+    linear-gradient(160deg, #1a0508 0%, #050203 100%);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 18px rgba(225, 29, 46, 0.55), inset 0 0 14px rgba(225, 29, 46, 0.25);
+  animation: pv-skill-pulse 2.2s ease-in-out infinite;
+  transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
+}
+
+/* small sigil in front of the label */
+button.pv-skill-btn::before {
+  content: "";
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  background: #e11d2e;
+  clip-path: polygon(50% 0, 100% 50%, 50% 100%, 0 50%);
+  box-shadow: 0 0 10px #e11d2e;
+}
+
+button.pv-skill-btn:hover:not(:disabled) {
+  transform: translate(-50%, -2px);
+  filter: brightness(1.15);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 28px rgba(225, 29, 46, 0.85), inset 0 0 18px rgba(225, 29, 46, 0.4);
+}
+
+button.pv-skill-btn:active:not(:disabled) {
+  transform: translateX(-50%) scale(0.97);
+}
+
+button.pv-skill-btn:focus-visible {
+  outline: 2px solid var(--gold, #f0b942);
+  outline-offset: 3px;
+}
+
+/* used / playing */
+button.pv-skill-btn:disabled {
+  animation: none;
+  cursor: not-allowed;
+  color: rgba(255, 255, 255, 0.4);
+  border-color: rgba(255, 255, 255, 0.18);
+  background: linear-gradient(160deg, #15151c 0%, #0b0b10 100%);
+  box-shadow: none;
+}
+button.pv-skill-btn:disabled::before {
+  background: rgba(255, 255, 255, 0.25);
+  box-shadow: none;
+}
+
+@keyframes pv-skill-pulse {
+  0%, 100% { box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 14px rgba(225,29,46,.45), inset 0 0 12px rgba(225,29,46,.2); }
+  50%      { box-shadow: 0 0 0 1px rgba(0,0,0,.6), 0 0 30px rgba(225,29,46,.85), inset 0 0 18px rgba(225,29,46,.4); }
+}
+
+@media (max-width: 600px) {
+  button.pv-skill-btn {
+    bottom: 10px;
+    padding: 9px 14px 9px 12px;
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  button.pv-skill-btn { animation: none; }
+}
+
+/* Shop "Power" tab copy */
+.power-tab-intro { margin: 0 0 12px; opacity: 0.8; font-size: 0.72rem; }
+
+/* Player's own granted power-ups (given when the host applies the spin) */
+.pv-powerup-chips {
+  position: fixed;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px;
+  max-width: calc(100vw - 32px);
+  z-index: 59;
+}
+.pv-powerup-chip {
+  padding: 4px 10px;
+  border: 1px solid var(--gold, #f0b942);
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.7);
+  color: var(--gold, #f0b942);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+/* =========================================================================
+   Power-up tray (player) + activation banner (everyone)
+   ========================================================================= */
+.pv-powerup-chips { display: none; } /* legacy static chips, replaced by the tray */
+
+.pv-powerup-tray {
+  position: fixed;
+  left: 50%;
+  bottom: 74px;
+  transform: translateX(-50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  max-width: calc(100vw - 32px);
+  z-index: 59;
+}
+.pv-powerup-tray--inline {
+  position: static;
+  transform: none;
+  width: 100%;
+  max-width: 100%;
+  margin: 8px 0;
+  z-index: auto;
+}
+.pv-powerup-row { display: flex; flex-wrap: wrap; justify-content: center; gap: 6px; }
+
+button.pv-powerup-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  min-width: 0;
+  margin: 0;
+  font: inherit;
+  font-size: 0.8rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
+}
+button.pv-powerup-btn:hover:not(:disabled),
+button.pv-powerup-btn.is-picking {
+  transform: translateY(-1px);
+  box-shadow: 0 0 12px rgba(240, 185, 66, 0.6);
+}
+button.pv-powerup-btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.pv-powerup-icon { font-size: 0.95em; line-height: 1; }
+
+.pv-powerup-picker {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid rgba(240, 185, 66, 0.5);
+  border-radius: 10px;
+  background: rgba(0, 0, 0, 0.82);
+}
+.pv-powerup-picker-title { width: 100%; text-align: center; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--gold, #f0b942); }
+.pv-powerup-picker-empty { font-size: 0.75rem; opacity: 0.7; }
+button.pv-powerup-target {
+  width: auto; min-width: 0; margin: 0; padding: 4px 10px;
+  font: inherit; font-size: 0.78rem; font-weight: 700; cursor: pointer;
+  color: #fff; background: rgba(60, 120, 255, 0.35);
+  border: 1px solid rgba(120, 170, 255, 0.7); border-radius: 8px;
+}
+button.pv-powerup-target:hover:not(:disabled) { background: rgba(60, 120, 255, 0.6); }
+button.pv-powerup-cancel { background: transparent; border-color: rgba(255, 255, 255, 0.35); }
+
+.pv-powerup-hint {
+  display: flex; flex-direction: column; align-items: center; gap: 2px;
+  padding: 6px 12px; border-radius: 10px;
+  background: rgba(240, 185, 66, 0.15); border: 1px solid var(--gold, #f0b942);
+}
+.pv-powerup-hint-label { font-size: 0.68rem; letter-spacing: 0.1em; text-transform: uppercase; color: var(--gold, #f0b942); }
+.pv-powerup-hint-text { font-family: monospace; font-size: 1.05rem; letter-spacing: 0.12em; color: #fff; white-space: pre-wrap; text-align: center; word-break: break-word; }
+
+.pv-powerup-armed { display: flex; flex-wrap: wrap; justify-content: center; gap: 4px; }
+.pv-powerup-armed-tag {
+  padding: 2px 8px; font-size: 0.7rem; font-weight: 800; letter-spacing: 0.06em; text-transform: uppercase;
+  color: #0b0b0b; background: var(--gold, #f0b942); border-radius: 999px;
+}
+.pv-powerup-error { font-size: 0.78rem; color: #ff8a8a; text-align: center; }
+
+/* Team badges (host sidebar): armed 2x / Shield, frozen */
+.pu-team-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+.pu-team-badge {
+  padding: 1px 6px; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+  border-radius: 999px; color: #0b0b0b; background: var(--gold, #f0b942);
+}
+.pu-team-badge--freeze { background: #8fd3ff; }
+
+/* Activation banner */
+.pu-notice {
+  position: fixed;
+  top: 18px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 2000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  max-width: min(92vw, 560px);
+  padding: 10px 16px;
+  border: 1.5px solid var(--gold, #f0b942);
+  border-radius: 12px;
+  background: rgba(8, 10, 30, 0.94);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.95rem;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.5), 0 0 18px rgba(240, 185, 66, 0.35);
+  cursor: pointer;
+  animation: pu-notice-in 0.25s ease-out;
+}
+.pu-notice-icon { font-size: 1.3rem; }
+@keyframes pu-notice-in {
+  from { opacity: 0; transform: translate(-50%, -12px); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+@media (prefers-reduced-motion: reduce) { .pu-notice { animation: none; } }
+
+
+/* =========================================================================
+   Leaderboard-attached power-ups (base screen) — same idea as the inline
+   tray used inside the clue overlay, but sitting just above the base
+   SCOREBOARD panel instead of floating fixed over the whole screen.
+   ========================================================================= */
+.pv-leaderboard-powerups {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 0 0 10px;
+}
+
+/* De-fix the skill button so it sits in normal flow here instead of
+   pinned to the bottom of the screen. */
+button.pv-skill-btn.pv-skill-btn--inline {
+  position: static;
+  left: auto;
+  bottom: auto;
+  transform: none;
+  max-width: 100%;
+}
+
+/* The base hover/active rules assume the fixed-position button's own
+   `transform: translateX(-50%)` centering, so their hover/active states
+   also bake that -50% horizontal shift in. Once the button is inline
+   (transform: none as its resting state) that same -50% just shoves it
+   sideways by half its own width on hover — these overrides drop the
+   horizontal component and keep only the lift/press. */
+button.pv-skill-btn.pv-skill-btn--inline:hover:not(:disabled) {
+  transform: translateY(-2px);
+}
+button.pv-skill-btn.pv-skill-btn--inline:active:not(:disabled) {
+  transform: scale(0.97);
+}

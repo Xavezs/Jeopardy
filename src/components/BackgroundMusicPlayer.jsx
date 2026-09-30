@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { getMediaUrl } from "../lib/storage";
 import { isSoundCloudUrl } from "../lib/soundcloud";
 import { subscribeSfxDucking } from "../lib/boardSfx";
@@ -301,7 +302,7 @@ export default function BackgroundMusicPlayer({
   const hasTrack = !!track.fileRef;
   const isPerRound = mode === "perRound";
 
-  return (
+  return createPortal(
     <div className="bgm-widget">
       {open && (
         <div className="bgm-panel">
@@ -469,6 +470,7 @@ export default function BackgroundMusicPlayer({
           }}
         />
       )}
-    </div>
+    </div>,
+    document.body
   );
 }

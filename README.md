@@ -22,6 +22,12 @@ wager, buzzer, and score updates in real time.
   undo-last-judgment flow.
 - **Teams and Discord identity** — team scores, Discord usernames, avatars,
   speaking state, and player statistics.
+- **Shop and coins** — players earn coins from correct answers and podium
+  finishes, then spend them in the shop on cosmetics (such as buzzer sounds)
+  and skills.
+- **Power-ups and skills** — the host runs a Power-ups spin in the Randomizer;
+  players can win one-shot power-ups (2x Points, Shield, Steal, Freeze, Hint,
+  Re-Buzz) and, if they own it, the **Domain Expansion** skill.
 - **Game-show presentation** — themed styling, sound effects, background music,
   timers, animations, and standings celebration.
 - **Persistence** — board/session data is saved locally and can use the
@@ -34,6 +40,9 @@ src/
   App.jsx                     Host/player entry and role routing
   JeopardyBoard.jsx           Host board and game orchestration
   components/                 Board, player, clue, media, and modal UI
+  components/DomainExpansion.jsx  Domain Expansion cutscene (styles: styles/domain-expansion.css)
+  components/SkillOverlay.jsx     Plays the cutscene for whichever skill is active
+  lib/powerups.js             Client-side power-up catalog and usage rules
   lib/hooks/                  Persistence and real-time synchronization hooks
   lib/storage/                Session, media, and local storage helpers
   styles/                     Board and player styles
@@ -42,6 +51,8 @@ discord-bot/
   auth.js                     Discord Activity authentication
   boards.js                   Board API routes
   media.js                    Media upload/proxy routes
+  shop.js                     Shop, wallet, and loadout API
+  give-skill.js               CLI helper to grant a skill to a Discord user
   db.js                       Local SQLite persistence
 vite.config.js                Vite development server and API proxy
 start.bat                     Windows launcher for the local services
@@ -128,6 +139,57 @@ Do not commit either `.env` file, `service-account.json`, or the local
 
 For local browser testing outside Discord, use the development fallback
 supported by `src/discordSdk.js`.
+
+## Shop, power-ups, and skills
+
+**Coins.** Players earn 100 coins per correct answer in a game, plus a bonus
+for finishing on the podium (+200 for 1st, +100 for 2nd). Coins are spent in
+the shop, which requires a signed-in Discord user.
+
+**Power-ups.** During a game the host opens the Randomizer's Power-ups tab and
+runs a spin. Winners receive one-shot power-ups that they activate from the
+player view. Power-ups cannot be used during Final Jeopardy.
+
+| Power-up  | Effect                                                    |
+| --------- | --------------------------------------------------------- |
+| 2x Points | Your team's next correct answer scores double.            |
+| Shield    | Cancels your team's next wrong-answer penalty.            |
+| Steal     | Take board control and pick the next clue.                |
+| Freeze    | Lock another team out of buzzing for this clue or the next. |
+| Hint      | Privately reveals the first letter of each answer word.   |
+| Re-Buzz   | Jump to the front of the buzz queue.                      |
+
+Hint and Re-Buzz only work while a clue is open (Re-Buzz also needs a live
+buzzer).
+
+**Skills.** Skills are bought in the shop and auto-equipped. Owning one does
+not let a player fire it: on each Power-ups spin, every player with the skill
+equipped rolls its `grantChance`, and only a granted skill can be used, once
+per game.
+
+**Domain Expansion** is the current skill. When cast, every client plays a
+full-screen cutscene, and every other team with a positive score loses 20% of
+its score (capped at 1000). The server computes the deltas; the host applies
+them when the cutscene ends, since the host owns scores.
+
+The cutscene opens as a circle from the caster's team card, then plays a
+blood-moon title with layered smoke and a letterbox, a white flash, a slash
+barrage with a rising shrine, and finally a scar and damage number over each
+hit team's card. Pacing lives in the `TIMING` object and the title text in
+`CONTENT`, both at the top of `src/components/DomainExpansion.jsx`. If you
+change `riseMs`, update `--de-rise` in `src/styles/domain-expansion.css` to
+match. Team cards must keep their `data-team-id` attribute, which the cutscene
+uses to position its effects.
+
+To grant a skill to a user for testing:
+
+```powershell
+cd discord-bot
+node give-skill.js <discordUserId> [itemId]
+```
+
+`itemId` defaults to `skill_domain_expansion`. Shop items and prices are seeded
+in `discord-bot/db.js`.
 
 ## Production notes
 

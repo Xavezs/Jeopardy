@@ -169,6 +169,8 @@ export default function ClueModal({
   onToggleReveal,
   onClose,
   onAdjustTeamScore,
+  armedPowerups = [],
+  onConsumeArmed,
   timerEnabled,
   timerSeconds,
   onDuckMusic,
@@ -614,10 +616,17 @@ export default function ClueModal({
         e.preventDefault();
         if (e.key === "ArrowUp") {
           playCorrectSfx();
-          onAdjustTeamScore(team, effectiveValue);
+          // A pending 2x Points for this team doubles the award, then is spent.
+          const armedDouble = armedPowerups.find((a) => a.kind === "double" && a.teamId === team.id);
+          const award = armedDouble ? effectiveValue * 2 : effectiveValue;
+          onAdjustTeamScore(team, award);
+          if (armedDouble && onConsumeArmed) onConsumeArmed(armedDouble.id);
         } else {
           playIncorrectSfx();
-          onAdjustTeamScore(team, -effectiveValue);
+          // A pending Shield for this team cancels the penalty, then is spent.
+          const armedShield = armedPowerups.find((a) => a.kind === "shield" && a.teamId === team.id);
+          if (!armedShield) onAdjustTeamScore(team, -effectiveValue);
+          if (armedShield && onConsumeArmed) onConsumeArmed(armedShield.id);
         }
         // If the team we just scored is whoever currently has the buzzer,
         // automatically advance to the next person in line — scoring them
@@ -662,7 +671,7 @@ export default function ClueModal({
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, effectiveValue, isDailyDouble, wagerLocked, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser, onJudgeAnswer]);
+  }, [flipped, revealed, onToggleReveal, teams, sortedTeams, selectedTeamId, value, effectiveValue, isDailyDouble, wagerLocked, onAdjustTeamScore, buzzerEnabled, onArmBuzzer, onNextBuzzer, onPrevBuzzer, buzzerWinner, resolveTeamForDiscordUser, onJudgeAnswer, armedPowerups, onConsumeArmed]);
 
   // Auto-arm the buzzed-in team's scoreboard slot
   useEffect(() => {
@@ -1196,6 +1205,17 @@ export default function ClueModal({
                 tabIndex={0}
                 aria-label={`Select ${team.name} (${i + 1})`}
               >
+                {(() => {
+                  const teamArmed = armedPowerups.filter((a) => a.teamId === team.id);
+                  if (!teamArmed.length) return null;
+                  return (
+                    <div className="pu-team-badges">
+                      {teamArmed.map((a) => (
+                        <span key={a.id} className="pu-team-badge">{a.label}</span>
+                      ))}
+                    </div>
+                  );
+                })()}
                 {teamBuzzState && (
                   <div
                     className={

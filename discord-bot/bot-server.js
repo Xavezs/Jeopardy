@@ -7,6 +7,7 @@ const { Server } = require('socket.io');
 const cors = require('cors');
 const cookieParser = require('cookie-parser');
 const { router: authRouter } = require('./auth');
+const db = require('./db');
 
 // Environment Variables & Port Config
 const PORT = process.env.PORT || 4001;
@@ -48,6 +49,7 @@ const mediaRouter = require('./media');
 app.use('/api/auth', authRouter);
 app.use('/api/boards', require('./boards'));
 app.use('/api/media', mediaRouter);
+app.use('/api/shop', require('./shop'));
 
 // =========================================================================
 // YouTube IFrame API proxy — Discord Activities lock script-src to 'self',
@@ -360,6 +362,193 @@ function findClueMediaUrls(boardData, catId, value) {
   return [];
 }
 
+/* =========================================================================
+   SKILLS (type 'skill' in shop.js)
+   Flow: a player UNLOCKS a skill by buying it in the shop (auto-equipped).
+   During a game the host pulls the lever on the Randomizer's Power-ups tab
+   (which calls `hostPowerDraw`); every
+   connected, teamed player who has a skill equipped and hasn't been granted
+   it yet rolls that skill's data.grantChance (default 5%). Only GRANTED skills
+   can be fired (`useSkill`), once per player per room.
+
+   Server-authoritative: ownership/equip state is read from SQLite (never
+   trusted from the client). Scores are owned by the host client, so the server
+   only validates and computes the per-team deltas, then broadcasts
+   `skillUsed`; every client plays the cutscene and the HOST applies the deltas
+   when it ends (same "host is the source of truth for scores" rule as
+   everything else).
+
+   room.skillsGranted: { [discordUserId]: string[] } — skill ids granted by a draw
+   room.skillsUsed:    { [discordUserId]: string[] } — skill ids already spent
+   ========================================================================= */
+const SKILL_DOMAIN_EXPANSION = 'skill_domain_expansion';
+const DEFAULT_GRANT_CHANCE = 0.05; // used if a skill's data has no grantChance
+const CLEAVE_PERCENT = 0.20;   // each opponent loses 10% of their score...
+const CLEAVE_MAX_LOSS = 1000;   // ...capped at this many points
+// Slightly longer than DomainExpansion.jsx's total runtime (~27s) so two
+// skills can never overlap on screen.
+const SKILL_ANIMATION_MS = 30 * 1000;
+
+// Skills this user has equipped: [{ id, name, grantChance }]
+function getEquippedSkills(userId) {
+  try {
+    return db
+      .prepare(
+        `SELECT i.id, i.name, i.data FROM player_inventory inv
+         JOIN shop_items i ON i.id = inv.item_id
+         WHERE inv.user_id = ? AND inv.equipped = 1 AND i.type = 'skill'`
+      )
+      .all(userId)
+      .map((row) => {
+        let chance = DEFAULT_GRANT_CHANCE;
+        try {
+          const n = Number(JSON.parse(row.data || '{}').grantChance);
+          if (Number.isFinite(n)) chance = Math.min(1, Math.max(0, n));
+        } catch (_) { /* keep default */ }
+        return { id: row.id, name: row.name, grantChance: chance };
+      });
+  } catch (err) {
+    console.error('getEquippedSkills failed:', err.message);
+    return [];
+  }
+}
+
+/* ---- Per-player privacy for power-ups -------------------------------------
+   Only the host may see everyone's power-ups. Players receive just their own
+   entry of skillsGranted / powerupsGranted / randomizer.playerPowerups. */
+function ownEntry(map, uid) {
+  return uid && map && map[uid] ? { [uid]: map[uid] } : {};
+}
+function playerOfSocket(room, socketId) {
+  return (room?.players || []).find((p) => p.socketId === socketId) || null;
+}
+function grantsFor(room, socket) {
+  const skills = room?.skillsGranted || {};
+  const items = room?.powerupsGranted || {};
+  if (socket.isHost) return { skills, items };
+  const uid = playerOfSocket(room, socket.id)?.discordUserId;
+  return { skills: ownEntry(skills, uid), items: ownEntry(items, uid) };
+}
+function randomizerFor(room, socket) {
+  const r = room?.randomizer;
+  if (!r) return null;
+  if (socket.isHost || !r.playerPowerups) return r;
+  const uid = playerOfSocket(room, socket.id)?.discordUserId;
+  return { ...r, playerPowerups: ownEntry(r.playerPowerups, uid) };
+}
+function sendGrantsTo(socket, room) {
+  const g = grantsFor(room, socket);
+  socket.emit('skillsGrantedUpdate', g.skills);
+  socket.emit('powerupsGrantedUpdate', g.items);
+  sendPowerupStateTo(socket, room);
+}
+function broadcastGrants(roomCode, room) {
+  const players = (room.players || []).filter((p) => p.socketId);
+  for (const p of players) {
+    io.to(p.socketId).emit('skillsGrantedUpdate', ownEntry(room.skillsGranted, p.discordUserId));
+    io.to(p.socketId).emit('powerupsGrantedUpdate', ownEntry(room.powerupsGranted, p.discordUserId));
+  }
+  const ids = players.map((p) => p.socketId);
+  io.to(roomCode).except(ids).emit('skillsGrantedUpdate', room.skillsGranted || {});
+  io.to(roomCode).except(ids).emit('powerupsGrantedUpdate', room.powerupsGranted || {});
+}
+
+/* =========================================================================
+   POWER-UPS (the six spin items: 2x Points, Shield, Steal, Freeze, Hint,
+   Re-Buzz). Handed out by the host's Power-ups spin (room.powerupsGranted,
+   { [discordUserId]: label[] }). A player activates one with `usePowerup` —
+   during a clue OR on the board (Domain Expansion is the only thing that is
+   blocked mid-clue). Each activation consumes one copy of the label.
+
+   Server-authoritative; scores stay host-owned, so:
+   - 2x Points / Shield become "armed" entries (room.armedPowerups). The host
+     client reads them when it judges an answer, applies the effect to the
+     score delta and reports back with `hostConsumeArmed`.
+   - Steal moves board control to the caster.
+   - Freeze locks a target team out of the buzzer for the current clue (or the
+     next one if no clue is open). room.frozenTeams: { [teamId]: { live } }
+   - Hint privately tells the caster the shape of the answer.
+   - Re-Buzz puts the caster at the front of the buzz queue.
+   ========================================================================= */
+const POWERUP_KINDS = {
+  '2x Points': 'double',
+  'Shield': 'shield',
+  'Steal': 'steal',
+  'Freeze': 'freeze',
+  'Hint': 'hint',
+  'Re-Buzz': 'rebuzz',
+};
+
+function currentRound(room) {
+  const data = room?.board?.data;
+  return data?.rounds?.[data.currentRound] || data?.rounds?.[0] || null;
+}
+
+function findActiveClue(room) {
+  const ac = room?.activeClue;
+  if (!ac) return null;
+  const cat = (currentRound(room)?.categories || []).find((c) => c.id === ac.catId);
+  return cat?.clues?.[ac.value] ?? cat?.clues?.[String(ac.value)] ?? null;
+}
+
+// "The Eiffel Tower" -> "T__ E_____ T____" (first letter of each word only).
+function buildAnswerHint(answer) {
+  const text = String(answer || '').replace(/<[^>]*>/g, '').trim();
+  if (!text) return null;
+  return text
+    .split(/\s+/)
+    .map((w) => {
+      let shown = false;
+      return w
+        .split('')
+        .map((ch) => {
+          if (!/[\p{L}\p{N}]/u.test(ch)) return ch;
+          if (!shown) { shown = true; return ch; }
+          return '_';
+        })
+        .join('');
+    })
+    .join('  ');
+}
+
+function publicArmed(room) {
+  return (room.armedPowerups || []).map((a) => ({
+    id: a.id, kind: a.kind, label: a.label, teamId: a.teamId, username: a.username,
+  }));
+}
+function publicFrozen(room) {
+  const out = {};
+  for (const [teamId, f] of Object.entries(room.frozenTeams || {})) out[teamId] = { live: !!f.live };
+  return out;
+}
+function broadcastPowerupState(roomCode, room) {
+  io.to(roomCode).emit('powerupsArmedUpdate', publicArmed(room));
+  io.to(roomCode).emit('frozenTeamsUpdate', publicFrozen(room));
+}
+function sendPowerupStateTo(socket, room) {
+  socket.emit('powerupsArmedUpdate', publicArmed(room || {}));
+  socket.emit('frozenTeamsUpdate', publicFrozen(room || {}));
+}
+function teamOfPlayer(room, discordUserId) {
+  return (room.players || []).find((p) => p.discordUserId === discordUserId)?.teamId || null;
+}
+
+function hasEquippedSkill(userId, skillId) {
+  try {
+    const row = db
+      .prepare(
+        `SELECT 1 FROM player_inventory inv
+         JOIN shop_items i ON i.id = inv.item_id
+         WHERE inv.user_id = ? AND inv.item_id = ? AND inv.equipped = 1 AND i.type = 'skill'`
+      )
+      .get(userId, skillId);
+    return !!row;
+  } catch (err) {
+    console.error('hasEquippedSkill failed:', err.message);
+    return false;
+  }
+}
+
 // 5. Unified Socket.io Real-time Game Coordination
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
@@ -374,7 +563,11 @@ io.on('connection', (socket) => {
       return;
     }
 
-    socket.isHost = payload && typeof payload === 'object' && payload.role === 'host';
+    // Only ever PROMOTE to host here. Other hooks re-emit joinRoom with a plain
+    // room-code string, which must not wipe the host flag set by the host join.
+    if (payload && typeof payload === 'object' && payload.role === 'host') {
+      socket.isHost = true;
+    }
     socket.join(roomCode);
     socket.gameRoomCode = roomCode;
 
@@ -384,10 +577,12 @@ io.on('connection', (socket) => {
     if (room?.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room?.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
-    if (room?.randomizer) socket.emit('randomizerUpdate', room.randomizer);
+    if (room?.randomizer) socket.emit('randomizerUpdate', randomizerFor(room, socket));
     if (room?.players) socket.emit('playersUpdate', room.players);
     if (room) socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
     if (room?.playerStats) socket.emit('statsUpdate', room.playerStats);
+    socket.emit('skillsUsedUpdate', room?.skillsUsed || {});
+    sendGrantsTo(socket, room);
   });
 
   socket.on('rotateRoomCode', ({ oldRoomCode, newRoomCode }, ack) => {
@@ -435,6 +630,21 @@ io.on('connection', (socket) => {
     const isNewClue =
       activeClue && (!prevClue || prevClue.catId !== activeClue.catId || prevClue.value !== activeClue.value);
     room.activeClue = activeClue || null;
+
+    // Freeze lifecycle: a freeze cast between clues starts biting when the next
+    // clue opens, and every freeze ends when the clue it covered closes.
+    if (room.frozenTeams && Object.keys(room.frozenTeams).length) {
+      let changed = false;
+      if (isNewClue) {
+        for (const f of Object.values(room.frozenTeams)) if (!f.live) { f.live = true; changed = true; }
+      } else if (!activeClue) {
+        for (const [teamId, f] of Object.entries(room.frozenTeams)) {
+          if (f.live) { delete room.frozenTeams[teamId]; changed = true; }
+        }
+      }
+      if (changed) io.to(roomCode).emit('frozenTeamsUpdate', publicFrozen(room));
+    }
+
     gameRooms.set(roomCode, room);
     socket.to(roomCode).emit('activeClueUpdate', room.activeClue);
 
@@ -628,6 +838,330 @@ io.on('connection', (socket) => {
     }
   });
 
+  // Host lever pull on the Randomizer's Power-ups tab. Every connected,
+  // teamed player with a skill equipped (and not yet granted it) rolls that
+  // skill's grantChance. Winners are added to room.skillsGranted, which is
+  // what unlocks the in-game button. The roll happens here; the host's client
+  // gets the winners back through the socket ack and builds the slot-machine
+  // result from them (the spin is then broadcast via `randomizerUpdate`).
+  socket.on('hostPowerDraw', ({ roomCode: rawRoomCode } = {}, ack) => {
+    const reply = (payload) => { if (typeof ack === 'function') ack(payload); };
+    if (typeof rawRoomCode !== 'string') { reply({ error: 'Bad request.' }); return; }
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) { reply({ error: 'Bad request.' }); return; }
+    if (!socket.isHost || socket.gameRoomCode !== roomCode) {
+      socket.emit('errorMsg', 'Only the host can spin the Power-ups.');
+      reply({ error: 'Only the host can spin the Power-ups.' });
+      return;
+    }
+
+    const room = gameRooms.get(roomCode);
+    if (!room) { reply({ error: 'Room not found.' }); return; }
+
+    const data = room.board?.data;
+    const rd = data?.rounds?.[data.currentRound] || data?.rounds?.[0];
+    if (rd?.type === 'final') {
+      socket.emit('errorMsg', 'Power-ups are disabled during Final Jeopardy.');
+      reply({ error: 'Power-ups are disabled during Final Jeopardy.' });
+      return;
+    }
+
+    room.skillsGranted = room.skillsGranted || {};
+    console.log('[powerDraw] players:', (room.players || []).map(p => ({ id: p.discordUserId, team: p.teamId, connected: p.connected })));
+    const results = [];
+    const seen = new Set();
+    for (const player of room.players || []) {
+      const uid = player.discordUserId;
+      if (!uid || !player.teamId || player.connected === false || seen.has(uid)) continue;
+      seen.add(uid);
+
+      const already = room.skillsGranted[uid] || [];
+      for (const skill of getEquippedSkills(uid)) {
+        if (already.includes(skill.id)) continue;
+        const won = Math.random() < skill.grantChance;
+        console.log('[powerDraw] roll', uid, skill.id, 'chance =', skill.grantChance, 'won =', won);
+        results.push({
+          discordUserId: uid,
+          username: player.discordUsername || uid,
+          teamId: player.teamId,
+          skillId: skill.id,
+          skillName: skill.name,
+          won,
+        });
+      }
+    }
+    gameRooms.set(roomCode, room);
+
+    // Nothing is granted yet: this roll is only a preview for the host. The
+    // winners are held here until the host confirms with `hostPowerApply`.
+    room.pendingDraw = results.filter((r) => r.won).map((r) => ({ discordUserId: r.discordUserId, skillId: r.skillId }));
+    // Only the winners are needed by the Randomizer (per-skill, per-player).
+    reply({
+      winners: results
+        .filter((r) => r.won)
+        .map((r) => ({ discordUserId: r.discordUserId, skillId: r.skillId, skillName: r.skillName })),
+    });
+  });
+
+  // Host clicks "Apply Power-ups" after the spin. Only now does anyone receive
+  // anything: the previewed skill winners are unlocked, and every item shown in
+  // the spin is stored for its player. Each player is sent only their own.
+  socket.on('hostPowerApply', ({ roomCode: rawRoomCode, playerPowerups } = {}, ack) => {
+    const reply = (payload) => { if (typeof ack === 'function') ack(payload); };
+    if (typeof rawRoomCode !== 'string') { reply({ error: 'Bad request.' }); return; }
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) { reply({ error: 'Bad request.' }); return; }
+    if (!socket.isHost || socket.gameRoomCode !== roomCode) {
+      socket.emit('errorMsg', 'Only the host can apply the Power-ups.');
+      reply({ error: 'Only the host can apply the Power-ups.' });
+      return;
+    }
+    const room = gameRooms.get(roomCode);
+    if (!room) { reply({ error: 'Room not found.' }); return; }
+
+    const data = room.board?.data;
+    const rd = data?.rounds?.[data.currentRound] || data?.rounds?.[0];
+    if (rd?.type === 'final') { reply({ error: 'Power-ups are disabled during Final Jeopardy.' }); return; }
+
+    room.skillsGranted = room.skillsGranted || {};
+    room.powerupsGranted = room.powerupsGranted || {};
+
+    for (const w of room.pendingDraw || []) {
+      const have = room.skillsGranted[w.discordUserId] || [];
+      if (!have.includes(w.skillId)) room.skillsGranted[w.discordUserId] = [...have, w.skillId];
+    }
+    room.pendingDraw = [];
+
+    const known = new Set((room.players || []).map((p) => p.discordUserId).filter(Boolean));
+    if (playerPowerups && typeof playerPowerups === 'object') {
+      for (const [uid, labels] of Object.entries(playerPowerups)) {
+        if (!known.has(uid) || !Array.isArray(labels)) continue;
+        const clean = labels.filter((l) => typeof l === 'string' && l.length <= 40).slice(0, 3);
+        room.powerupsGranted[uid] = [...(room.powerupsGranted[uid] || []), ...clean];
+      }
+    }
+
+    gameRooms.set(roomCode, room);
+    broadcastGrants(roomCode, room);
+    reply({ ok: true });
+  });
+
+  // Player uses an equipped skill. Validates identity (the roster entry must
+  // belong to THIS socket), Final Jeopardy lockout, ownership + equipped
+  // state, once-per-game use, and no overlapping cutscenes.
+  socket.on('useSkill', ({ roomCode: rawRoomCode, skillId, discordUserId }) => {
+    if (typeof rawRoomCode !== 'string' || typeof skillId !== 'string' || !discordUserId) return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
+    if (skillId !== SKILL_DOMAIN_EXPANSION) {
+      socket.emit('errorMsg', 'Unknown skill.');
+      return;
+    }
+
+    const room = gameRooms.get(roomCode);
+    if (!room) return;
+
+    const player = (room.players || []).find(
+      (p) => p.discordUserId === discordUserId && p.socketId === socket.id
+    );
+    if (!player || !player.teamId) {
+      socket.emit('errorMsg', 'Not registered in this room.');
+      return;
+    }
+
+    const data = room.board?.data;
+    const rd = data?.rounds?.[data.currentRound] || data?.rounds?.[0];
+    if (rd?.type === 'final') {
+      socket.emit('errorMsg', 'Skills cannot be used during Final Jeopardy.');
+      return;
+    }
+    if (room.activeClue) {
+      socket.emit('errorMsg', 'Domain Expansion cannot be used while a clue is open.');
+      return;
+    }
+    if (room.skillBusyUntil && Date.now() < room.skillBusyUntil) {
+      socket.emit('errorMsg', 'Another skill is already playing.');
+      return;
+    }
+    if (!hasEquippedSkill(discordUserId, skillId)) {
+      socket.emit('errorMsg', 'You do not have that skill equipped.');
+      return;
+    }
+
+    const granted = room.skillsGranted?.[discordUserId] || [];
+    if (!granted.includes(skillId)) {
+      socket.emit('errorMsg', 'You have not been granted that skill yet — wait for a Power-ups spin.');
+      return;
+    }
+
+    room.skillsUsed = room.skillsUsed || {};
+    const used = room.skillsUsed[discordUserId] || [];
+    if (used.includes(skillId)) {
+      socket.emit('errorMsg', 'You already used that skill this game.');
+      return;
+    }
+
+    const deltas = (data?.teams || [])
+      .filter((t) => t.id !== player.teamId && Number(t.score) > 0)
+      .map((t) => ({
+        teamId: t.id,
+        teamName: t.name,
+        delta: -Math.min(CLEAVE_MAX_LOSS, Math.round(Number(t.score) * CLEAVE_PERCENT)),
+      }))
+      .filter((d) => d.delta !== 0);
+
+    room.skillsUsed[discordUserId] = [...used, skillId];
+    room.skillBusyUntil = Date.now() + SKILL_ANIMATION_MS;
+    gameRooms.set(roomCode, room);
+
+    io.to(roomCode).emit('skillsUsedUpdate', room.skillsUsed);
+    io.to(roomCode).emit('skillUsed', {
+      skillId,
+      effect: 'cleave',
+      discordUserId,
+      username: player.discordUsername || discordUserId,
+      teamId: player.teamId,
+      deltas,
+    });
+  });
+
+  // Player activates one of their granted power-ups. Allowed during a clue and
+  // on the board. Validates identity, Final Jeopardy lockout and that the
+  // player actually holds the item, then consumes it and applies its effect.
+  socket.on('usePowerup', ({ roomCode: rawRoomCode, label, discordUserId, targetTeamId } = {}, ack) => {
+    const reply = (payload) => { if (typeof ack === 'function') ack(payload); };
+    const fail = (msg) => { socket.emit('errorMsg', msg); reply({ error: msg }); };
+    if (typeof rawRoomCode !== 'string' || typeof label !== 'string' || !discordUserId) { reply({ error: 'Bad request.' }); return; }
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) { reply({ error: 'Bad request.' }); return; }
+    const kind = POWERUP_KINDS[label];
+    if (!kind) return fail('Unknown power-up.');
+
+    const room = gameRooms.get(roomCode);
+    if (!room) { reply({ error: 'Room not found.' }); return; }
+
+    const player = (room.players || []).find(
+      (p) => p.discordUserId === discordUserId && p.socketId === socket.id
+    );
+    if (!player || !player.teamId) return fail('Not registered in this room.');
+    if (currentRound(room)?.type === 'final') return fail('Power-ups cannot be used during Final Jeopardy.');
+
+    const held = room.powerupsGranted?.[discordUserId] || [];
+    const heldIdx = held.indexOf(label);
+    if (heldIdx === -1) return fail('You do not have that power-up.');
+
+    const teams = room.board?.data?.teams || [];
+    const clue = findActiveClue(room);
+    const inClue = !!room.activeClue;
+    const teamId = player.teamId;
+    let hint = null;
+
+    // ── per-kind validation (nothing is consumed until every check passes) ──
+    if (kind === 'double' || kind === 'shield') {
+      if ((room.armedPowerups || []).some((a) => a.kind === kind && a.teamId === teamId)) {
+        return fail(`Your team already has ${label} ready.`);
+      }
+    } else if (kind === 'steal') {
+      if (room.controlDiscordUserId === discordUserId) return fail('You already have board control.');
+    } else if (kind === 'freeze') {
+      const target = teams.find((t) => t.id === targetTeamId);
+      if (!target || target.id === teamId) return fail('Pick an opposing team to freeze.');
+      if (room.frozenTeams?.[target.id]) return fail(`${target.name} is already frozen.`);
+    } else if (kind === 'hint') {
+      if (!inClue || !clue) return fail('Hint can only be used while a clue is open.');
+      if (room.activeClue.revealed) return fail('The answer is already revealed.');
+      hint = buildAnswerHint(clue.answer);
+      if (!hint) return fail('This clue has no answer to hint at.');
+    } else if (kind === 'rebuzz') {
+      if (!inClue) return fail('Re-Buzz can only be used while a clue is open.');
+      if (!room.buzzer?.live) return fail('The buzzer is not live right now.');
+      if (room.frozenTeams?.[teamId]?.live) return fail('Your team is frozen.');
+      const q = room.buzzer.queue || [];
+      if (q[room.buzzer.activeIndex]?.id === discordUserId) return fail('You already have the floor.');
+    }
+
+    // ── consume ──
+    const next = [...held];
+    next.splice(heldIdx, 1);
+    room.powerupsGranted = { ...(room.powerupsGranted || {}), [discordUserId]: next };
+
+    const myTeam = teams.find((t) => t.id === teamId);
+    const notice = {
+      label, kind,
+      discordUserId,
+      username: player.discordUsername || discordUserId,
+      teamId,
+      teamName: myTeam?.name || 'Team',
+      targetTeamId: null,
+      targetTeamName: null,
+    };
+
+    // ── apply ──
+    if (kind === 'double' || kind === 'shield') {
+      room.armedPowerups = [
+        ...(room.armedPowerups || []),
+        { id: `pu_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`, kind, label, discordUserId, username: notice.username, teamId },
+      ];
+    } else if (kind === 'steal') {
+      room.controlDiscordUserId = discordUserId;
+      emitControlState(roomCode, room);
+    } else if (kind === 'freeze') {
+      const target = teams.find((t) => t.id === targetTeamId);
+      notice.targetTeamId = target.id;
+      notice.targetTeamName = target.name;
+      room.frozenTeams = { ...(room.frozenTeams || {}), [target.id]: { live: inClue } };
+      // A clue is already running: bump the frozen team's people who are still
+      // waiting in the queue (whoever currently has the floor keeps it).
+      if (inClue && room.buzzer?.queue?.length) {
+        const b = room.buzzer;
+        const queue = b.queue.filter((e, i) => i <= b.activeIndex || teamOfPlayer(room, e.id) !== target.id);
+        if (queue.length !== b.queue.length) {
+          room.buzzer = { ...b, queue };
+          io.to(roomCode).emit('buzzerState', room.buzzer);
+        }
+      }
+    } else if (kind === 'rebuzz') {
+      const b = room.buzzer;
+      const existing = (b.queue || []).find((e) => e.id === discordUserId);
+      const entry = existing || {
+        id: discordUserId,
+        username: player.discordUsername || discordUserId,
+        avatarUrl: player.discordAvatarUrl,
+      };
+      const rest = (b.queue || []).filter((e) => e.id !== discordUserId);
+      // Insert at the current floor position; whoever held it moves down one.
+      // (After removing the caster, indices before `at` are unaffected only if
+      // the caster wasn't ahead of it — recompute `at` on the filtered list.)
+      const oldIdx = (b.queue || []).findIndex((e) => e.id === discordUserId);
+      let at = Math.max(0, b.activeIndex);
+      if (oldIdx !== -1 && oldIdx < at) at -= 1;
+      rest.splice(at, 0, entry);
+      room.buzzer = { ...b, queue: rest, activeIndex: at };
+      io.to(roomCode).emit('buzzerState', room.buzzer);
+    }
+
+    gameRooms.set(roomCode, room);
+    broadcastGrants(roomCode, room);
+    broadcastPowerupState(roomCode, room);
+    io.to(roomCode).emit('powerupUsed', { ...notice, at: Date.now() });
+    if (kind === 'hint') socket.emit('powerupHint', { label, hint, catId: room.activeClue.catId, value: room.activeClue.value });
+    reply({ ok: true });
+  });
+
+  // Host reports that an armed effect (2x / Shield) was just applied to a
+  // score, so it is spent. Host-only — players can't clear each other's.
+  socket.on('hostConsumeArmed', ({ roomCode: rawRoomCode, id } = {}) => {
+    if (typeof rawRoomCode !== 'string' || typeof id !== 'string') return;
+    const roomCode = rawRoomCode.trim().toUpperCase();
+    if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
+    if (!socket.isHost || socket.gameRoomCode !== roomCode) return;
+    const room = gameRooms.get(roomCode);
+    if (!room?.armedPowerups) return;
+    room.armedPowerups = room.armedPowerups.filter((a) => a.id !== id);
+    gameRooms.set(roomCode, room);
+    broadcastPowerupState(roomCode, room);
+  });
+
   // Host override — manual assign, used as the fallback when the current
   // control holder disconnects and doesn't come back within the grace
   // window (see the 'disconnect' handler below), whenever the host wants
@@ -711,7 +1245,11 @@ io.on('connection', (socket) => {
     const room = gameRooms.get(roomCode) || {};
     room.randomizer = randomizer || null;
     gameRooms.set(roomCode, room);
-    socket.to(roomCode).emit('randomizerUpdate', room.randomizer);
+    const playerSockets = (room.players || []).filter((p) => p.socketId);
+    for (const p of playerSockets) {
+      io.to(p.socketId).emit('randomizerUpdate', randomizerFor(room, { id: p.socketId, isHost: false }));
+    }
+    socket.to(roomCode).except(playerSockets.map((p) => p.socketId)).emit('randomizerUpdate', room.randomizer);
   });
 
   socket.on('boardUpdate', ({ roomCode: rawRoomCode, data, updatedAt }) => {
@@ -828,9 +1366,11 @@ io.on('connection', (socket) => {
       if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
       if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
       if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
-      if (room.randomizer) socket.emit('randomizerUpdate', room.randomizer);
+      if (room?.randomizer) socket.emit('randomizerUpdate', randomizerFor(room, socket));
       socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
       if (room.playerStats) socket.emit('statsUpdate', room.playerStats);
+    socket.emit('skillsUsedUpdate', room?.skillsUsed || {});
+    sendGrantsTo(socket, room);
       return;
     }
 
@@ -874,9 +1414,11 @@ io.on('connection', (socket) => {
     if (room.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);
     if (room.bgm !== undefined) socket.emit('bgmUpdate', room.bgm);
-    if (room.randomizer) socket.emit('randomizerUpdate', room.randomizer);
+    if (room?.randomizer) socket.emit('randomizerUpdate', randomizerFor(room, socket));
     socket.emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
     if (room.playerStats) socket.emit('statsUpdate', room.playerStats);
+    socket.emit('skillsUsedUpdate', room?.skillsUsed || {});
+    sendGrantsTo(socket, room);
   });
 
   // Deliberate "Leave" click, as opposed to a disconnect (tab close,
@@ -921,6 +1463,14 @@ io.on('connection', (socket) => {
   
   socket.on('buzz', ({ roomCode: rawRoomCode, player }) => {
     if (!player?.id) return;
+    if (typeof rawRoomCode === 'string') {
+      const r = gameRooms.get(rawRoomCode.trim().toUpperCase());
+      const tid = r ? teamOfPlayer(r, player.id) : null;
+      if (tid && r.frozenTeams?.[tid]?.live) {
+        socket.emit('errorMsg', 'Your team is frozen for this clue.');
+        return;
+      }
+    }
     updateBuzzer(rawRoomCode, (buzzer) => {
       if (!buzzer.live || buzzer.queue.some((entry) => entry.id === player.id)) return buzzer;
       const queue = [...buzzer.queue, player];

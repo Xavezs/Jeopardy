@@ -175,21 +175,32 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
     persist();
   }
 
-  // Resolves the live Discord members (if any) assigned to a given team.
-  // Always an array — empty when Discord mode is off or nothing's assigned.
+  // Resolves the live Discord members (if any) for a given team.
+  // Primary source: team.discordUserIds (manually assigned chips).
+  // Fallback: players roster (anyone who joined via PlayerView and was
+  // auto-assigned to this team) — same source the player side uses, so
+  // speaking glow works even when nobody has manually assigned chips.
   function resolveDiscordMembersForTeam(team) {
     if (discordDisplayMode !== "discord") return [];
-    const ids = Array.isArray(team.discordUserIds)
+
+    // 1. Manual assignments
+    const assignedIds = Array.isArray(team.discordUserIds)
       ? team.discordUserIds
       : team.discordUserId
       ? [team.discordUserId]
       : [];
-    return ids
+
+    // 2. Roster-based: players who joined and landed on this team
+    const rosterIds = (players || [])
+      .filter((p) => p.teamId === team.id && p.discordUserId)
+      .map((p) => p.discordUserId);
+
+    // Merge, deduplicate
+    const allIds = [...new Set([...assignedIds, ...rosterIds])];
+    if (allIds.length === 0) return [];
+
+    return allIds
       .map((id) => {
-        // Live voice-channel presence wins when we have it (speaking/mute/
-        // deafen state). Otherwise fall back to the identity broadcast on
-        // join (playersUpdate) so the avatar still shows, just without
-        // live state, instead of rendering nothing.
         const voice = discordMembers.find((m) => m.id === id);
         if (voice) return voice;
         const p = (players || []).find((pl) => pl.discordUserId === id);

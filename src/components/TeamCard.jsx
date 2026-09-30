@@ -48,9 +48,11 @@ export default function TeamCard({
     <div
       className={
         "team-card" +
+        (editMode ? " is-editing" : "") +
         (!editMode && selectedScoreTeamId === team.id ? " kb-selected" : "") +
         (discordTeamMembers && discordTeamMembers.some((m) => m.speaking) ? " discord-speaking" : "")
       }
+      data-team-id={team.id}
       role={editMode ? undefined : "button"}
       tabIndex={editMode ? undefined : 0}
       title={editMode ? undefined : `Select (or press ${teamIndex + 1}), then use ↑ / ↓ to adjust score`}

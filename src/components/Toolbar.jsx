@@ -162,7 +162,7 @@ export default function Toolbar({
                 role="menuitem"
                 onClick={() => { onOpenRandomizer(); setOverflowOpen(false); }}
               >
-                Randomize Order
+                Randomizer
               </button>
               <button
                 type="button"

@@ -262,6 +262,30 @@ router.post('/:id/games', requireRole('editor'), (req, res) => {
   db.prepare(
     'INSERT INTO saved_games (id, board_id, host_id, final_scores, played_at) VALUES (?, ?, ?, ?, ?)'
   ).run(id, req.params.id, req.user.id, JSON.stringify(finalScores), now);
+
+  // ── Credit player wallets ─────────────────────────────────────────────
+  // 100 coins per correct answer + placement bonuses (200 for 1st, 100 for
+  // 2nd). Only players with a resolved Discord user id get credited — a
+  // player without one has no stable key to attach a wallet to.
+  const ranking = Array.isArray(finalScores.ranking) ? finalScores.ranking : [];
+  const rankByTeam = new Map(ranking.map((r) => [r.teamId, r.rank]));
+
+  const creditStmt = db.prepare(`
+    INSERT INTO player_wallets (user_id, coins, updated_at) VALUES (?, ?, ?)
+    ON CONFLICT(user_id) DO UPDATE SET
+      coins = coins + excluded.coins,
+      updated_at = excluded.updated_at
+  `);
+
+  for (const [userId, stats] of Object.entries(finalScores.playerStats || {})) {
+    if (!userId || userId.startsWith('p_')) continue; // skip non-Discord ids
+    let earned = (stats.correct || 0) * 100;
+    const rank = stats.teamId ? rankByTeam.get(stats.teamId) : null;
+    if (rank === 1) earned += 200;
+    else if (rank === 2) earned += 100;
+    if (earned > 0) creditStmt.run(userId, earned, now);
+  }
+
   res.json({ id, boardId: req.params.id, hostId: req.user.id, playedAt: now, finalScores });
 });
 

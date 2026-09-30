@@ -1,1 +1,32 @@
 html, body { margin: 0; padding: 0; } body { background: #060815; }
+
+/* ── Shop widget button — used on all screens (player, host, role-select) ── */
+:root {
+  --gold: #f0b942;
+  --bg-deep: #060815;
+}
+.shop-widget {
+  box-sizing: border-box;
+  font-family: var(--font-body), 'Quicksand', system-ui, -apple-system, sans-serif;
+  position: fixed;
+  left: 18px;
+  bottom: 18px;
+  z-index: 310;
+}
+.shop-widget-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  border: 1px solid rgba(240,185,66,0.3);
+  background: linear-gradient(180deg, rgba(30,42,130,0.85), rgba(6,9,26,0.9));
+  color: #f0b942;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+.shop-widget-btn:hover {
+  border-color: #f0b942;
+  box-shadow: 0 0 0 2px rgba(240,185,66,0.25), 0 4px 14px rgba(0,0,0,0.4);
+}
