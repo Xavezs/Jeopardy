@@ -21,7 +21,7 @@ const hasFrameId = new URLSearchParams(window.location.search).has('frame_id');
 // — it only ever applies to someone deliberately opening a plain browser
 // tab with this flag set.
 //
-// Usage: http://localhost:5173/?fakePlayer=1&name=Player1
+// Usage: http://localhost:5180/?fakePlayer=1&name=Player1
 // The id is stored in sessionStorage (not localStorage) so it survives a
 // refresh within the SAME tab (useful for testing reconnect/grace-period
 // behavior) but a genuinely new tab/window gets its own fresh identity.

@@ -183,11 +183,11 @@ const seedItems = [
   // Skills are UNLOCKED by buying them in the shop (auto-equipped on purchase).
   // Owning one does not let you fire it: during a game the host runs a
   // Power-ups spin and every player with the skill equipped rolls
-  // data.grantChance for it. Only a granted skill can be used, once per game.
+  // data.grantChance for it. Only a granted skill can be used, once per win; winning it again re-arms it.
   {
     id: 'skill_domain_expansion',
     name: 'Domain Expansion',
-    description: 'Unleash a slash attack, every other team loses 20% of its score (max 1000). 10% chance per spin. One use per game.',
+    description: 'Unleash a slash attack, every other team loses 20% of its score (max 1000). 10% chance per spin. One use per win.',
     price: 2000,
     type: 'skill',
     // grantChance -> chance (0-1) this skill is granted to its owner on each Power-ups spin

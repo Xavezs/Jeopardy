@@ -13,7 +13,7 @@ import { useSocket } from "../SocketContext";
    cutscene should be showing, else null. Render <SkillOverlay> from it and
    call `clearActiveSkill()` in its onDone.
    `castSkill(skillId)` — PLAYER-SIDE. Only fires the request; the server
-   validates ownership, once-per-game use and the Final Jeopardy lockout
+   validates ownership, one-use-per-win and the Final Jeopardy lockout
    and answers with `errorMsg` if it refuses.
    `skillsUsed` — { [discordUserId]: string[] }
    `skillsGranted` — { [discordUserId]: string[] } skills won from a Power-ups spin.
@@ -25,7 +25,11 @@ import { useSocket } from "../SocketContext";
    broadcasts it like any other spin.
 
    Score changes are NOT applied here: the host applies `activeSkill.deltas`
-   when the cutscene ends (see JeopardyBoard), since the host owns scores.
+   (see JeopardyBoard), since the host owns scores. Each skill use carries an
+   `eventId`; the host applies it once, then calls `ackSkillDeltas(eventId)`.
+   `pendingSkillDeltas` — [{ id, deltas }] the server resends to a host that
+   (re)joins before acknowledging, so damage is not lost if the host's tab was
+   closed during the cutscene.
    ========================================================================= */
 export function useSkillSync(roomCode, me) {
   const { socket } = useSocket();
@@ -33,6 +37,8 @@ export function useSkillSync(roomCode, me) {
   const [skillsGranted, setSkillsGranted] = useState({});
   const [powerupsGranted, setPowerupsGranted] = useState({});
   const [activeSkill, setActiveSkill] = useState(null);
+  // Score deltas the server still owes the HOST (sent on host join/reconnect).
+  const [pendingSkillDeltas, setPendingSkillDeltas] = useState([]);
   // Power-up (2x / Shield / Steal / Freeze / Hint / Re-Buzz) live state.
   const [armedPowerups, setArmedPowerups] = useState([]);
   const [frozenTeams, setFrozenTeams] = useState({});
@@ -51,6 +57,8 @@ export function useSkillSync(roomCode, me) {
     const handleGrantedUpdate = (granted) => setSkillsGranted(granted || {});
     socket.on("skillsUsedUpdate", handleUsedUpdate);
     socket.on("skillUsed", handleSkillUsed);
+    const handleSkillPending = (list) => setPendingSkillDeltas(Array.isArray(list) ? list : []);
+    socket.on("skillDeltasPending", handleSkillPending);
     const handlePowerupsUpdate = (items) => setPowerupsGranted(items || {});
     socket.on("skillsGrantedUpdate", handleGrantedUpdate);
     socket.on("powerupsGrantedUpdate", handlePowerupsUpdate);
@@ -69,10 +77,21 @@ export function useSkillSync(roomCode, me) {
       socket.off("powerupHint", handleHint);
       socket.off("skillsUsedUpdate", handleUsedUpdate);
       socket.off("skillUsed", handleSkillUsed);
+      socket.off("skillDeltasPending", handleSkillPending);
       socket.off("skillsGrantedUpdate", handleGrantedUpdate);
       socket.off("powerupsGrantedUpdate", handlePowerupsUpdate);
     };
   }, [socket]);
+
+  // HOST-SIDE: tell the server a skill's deltas were applied and persisted.
+  const ackSkillDeltas = useCallback(
+    (eventId) => {
+      const code = roomCodeRef.current;
+      if (!code || !socket || !eventId) return;
+      socket.emit("skillDeltasApplied", { roomCode: code, eventId });
+    },
+    [socket]
+  );
 
   const castSkill = useCallback(
     (skillId) => {
@@ -151,6 +170,8 @@ export function useSkillSync(roomCode, me) {
     consumeArmed,
     runPowerApply,
     activeSkill,
+    pendingSkillDeltas,
+    ackSkillDeltas,
     castSkill,
     clearActiveSkill,
     runPowerDraw,

@@ -136,7 +136,6 @@ export function PowerupNotice({ notice, onDone }) {
   if (!notice) return null;
   return createPortal(
     <div className="pu-notice" role="status" aria-live="polite" onClick={() => onDone?.()}>
-      <span className="pu-notice-icon" aria-hidden="true">{POWERUP_INFO[notice.label]?.icon || "⚡"}</span>
       <span className="pu-notice-text">{noticeText(notice)}</span>
     </div>,
     document.body

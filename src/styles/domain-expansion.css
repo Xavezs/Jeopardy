@@ -1,159 +1,84 @@
-/* Domain Expansion — v2 */
-:root { --de-bar: 18vh; --de-rise: 4.6s; }
+/* Domain Expansion — v4 (split-screen cut). Pacing lives in DomainExpansion.jsx */
+.de-overlay{position:fixed;inset:0;z-index:9999;overflow:hidden;font-family:'Arial Black',Impact,'Hiragino Mincho ProN','Noto Serif CJK JP',serif}
+/* warm-up: painted at ~1% opacity with every animation frozen, so the heavy first-frame raster is done before the clock starts */
+.de-overlay:not(.de-go){opacity:.01;pointer-events:none}
+.de-overlay:not(.de-go) *{animation-play-state:paused!important}
+.de-overlay.de-go{animation:de-circ .7s cubic-bezier(.3,.7,.2,1)}
+@keyframes de-circ{from{clip-path:circle(0 at var(--ox,50vw) var(--oy,50vh))}to{clip-path:circle(150% at var(--ox,50vw) var(--oy,50vh))}}
+.de-overlay.de-fade{animation:de-fo .25s ease forwards}
+@keyframes de-fo{to{opacity:0}}
+.de-stage{position:absolute;inset:0;overflow:hidden;background:#050208;color:#fff}
+.de-stage.de-clear{background:transparent}
 
-.de-overlay { position: fixed; inset: 0; z-index: 9999; overflow: hidden; background: #050208;
-  font-family: 'Arial Black', Impact, 'Hiragino Mincho ProN', 'Noto Serif CJK JP', serif;
-  animation: de-open .7s cubic-bezier(.3,.7,.2,1); }
-/* circle opens from the caster's team card */
-@keyframes de-open { from { clip-path: circle(0 at var(--ox, 50vw) var(--oy, 50vh)); } to { clip-path: circle(150% at var(--ox, 50vw) var(--oy, 50vh)); } }
-/* Show the Jeopardy board behind the slashes */
-.de-phase-slash, .de-phase-bars-out { background: transparent; }
-.de-overlay.de-fade { animation: de-fadeout .25s ease forwards; }
-.de-layer { position: absolute; inset: 0; pointer-events: none; }
+/* two halves of the same scene, split along the diagonal cut */
+.de-half{position:absolute;inset:0;z-index:2;will-change:transform}
+.de-hA{clip-path:polygon(0 0,100% 0,100% 30.4%,0 70.4%)} /* 0.4% overlap hides the anti-aliased seam */
+.de-hB{clip-path:polygon(0 70%,100% 30%,100% 100%,0 100%)}
 
-.de-veil { background: #000; transition: background .6s; }
-.de-phase-title .de-veil, .de-phase-flash .de-veil {
-  background: linear-gradient(180deg, #020001 0%, #0c0205 40%, #280509 78%, #460a12 100%); }
-/* transition: the sky fades out to reveal the board while the slashes and shrine start */
-.de-phase-slash .de-veil { background: linear-gradient(180deg, #020001 0%, #0c0205 40%, #280509 78%, #460a12 100%); animation: de-fadeout .9s ease-in-out forwards; }
-.de-phase-bars-out .de-veil { background: transparent; animation: none; }
+/* atmosphere */
+.de-sky{position:absolute;inset:0;background:linear-gradient(180deg,#020001,#0c0205 40%,#280509 78%,#460a12)}
+.de-moon{position:absolute;left:50%;top:50%;width:56vh;height:56vh;margin:-30vh 0 0 -28vh;border-radius:50%;background:radial-gradient(circle at 50% 42%,#8a1424,#4b0912 55%,#150207);box-shadow:0 0 40px 6px rgba(255,20,45,.4),0 0 140px 40px rgba(140,8,25,.28);animation:de-mb var(--bt,1.3s) ease-in-out infinite}
+.de-moon::before{content:'';position:absolute;inset:-9%;border-radius:50%;border:2px dashed rgba(255,70,85,.55);animation:de-sp 70s linear infinite}
+.de-smoke{position:absolute;inset:-20%;will-change:transform;animation:de-dr1 14s ease-in-out infinite alternate;background:radial-gradient(ellipse 30% 25% at 20% 70%,rgba(180,15,40,.5),transparent),radial-gradient(ellipse 35% 30% at 72% 55%,rgba(110,8,28,.55),transparent),radial-gradient(ellipse 25% 20% at 50% 92%,rgba(230,30,50,.4),transparent)}
+.de-smoke.de-b{animation-name:de-dr2;animation-duration:19s;opacity:.7;transform:scaleX(-1)}
+.de-fog{position:absolute;left:0;right:0;bottom:0;height:40%;background:radial-gradient(ellipse 50% 60% at 30% 100%,rgba(160,20,35,.35),transparent),radial-gradient(ellipse 50% 55% at 70% 100%,rgba(120,10,30,.3),transparent)}
+.de-vig{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 45%,rgba(0,0,0,.8)),radial-gradient(ellipse at center,transparent 55%,rgba(255,0,40,.5));animation:de-bt var(--bt,1.3s) ease-in-out infinite}
+.de-em{position:absolute;bottom:-12px;border-radius:50%;background:#ff3344;opacity:0;animation:de-em var(--d) linear var(--dl) infinite}
+.de-mist{position:absolute;inset:-25%;pointer-events:none;will-change:transform;transform:translateZ(0)}
+@keyframes de-mA{from{transform:translate3d(-8%,3%,0) scale(1.05)}to{transform:translate3d(8%,-4%,0) scale(1.2)}}
+@keyframes de-mB{from{transform:translate3d(7%,-2%,0)}to{transform:translate3d(-9%,4%,0) scale(1.1)}}
+.de-mist.de-m1{background:var(--de-m1) 0 0/70vmax;opacity:.7;animation:de-mA 45s ease-in-out infinite alternate}
+.de-mist.de-m2{background:var(--de-m2) 0 0/50vmax;opacity:.65;animation:de-mB 30s ease-in-out infinite alternate}
 
-/* ===== title text ===== */
-.de-title-wrap { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; text-align: center; z-index: 5; }
-.de-phase-title .de-title-wrap, .de-phase-flash .de-title-wrap { animation: de-push 9.4s linear forwards; }
-@keyframes de-push { to { transform: scale(1.08); } }
-.de-eyebrow { font-size: clamp(11px,2.4vw,24px); font-weight: 900; letter-spacing: .42em; color: #000;
-  text-shadow: 0 0 14px #ff0022; opacity: 0;
-  animation: de-erise var(--de-rise) cubic-bezier(.25,0,.25,1) forwards; }
-@keyframes de-erise { 0% { opacity: 0; transform: translateY(46px) scale(1.12); }
-  20%,50% { opacity: 1; transform: translateY(46px) scale(1.12); } 100% { opacity: 1; transform: none; } }
-.de-name { display: flex; gap: .06em; font-size: clamp(48px,13vw,150px); font-weight: 900; line-height: 1; color: #000;
-  -webkit-text-stroke: 5px #ff0022; paint-order: stroke fill; font-synthesis: weight;
-  text-shadow: 0 0 40px #ff0022, 0 0 2px #ff0022, 1px 1px 0 #ff0022, -1px -1px 0 #ff0022; }
-.de-name span { display: inline-block; opacity: 0; transform: scale(1.5); filter: blur(12px);
-  animation: de-ch .6s cubic-bezier(.2,.8,.2,1) forwards; animation-delay: calc(var(--de-rise) + var(--i) * .22s); }
-@keyframes de-ch { to { opacity: 1; transform: none; filter: blur(0); } }
-.de-eyebrow.de-wave { filter: url(#de-water); }
+/* title */
+.de-ttl{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;animation:de-push 5.2s linear forwards}
+.de-eb{font-size:clamp(11px,2.4vw,24px);letter-spacing:.42em;color:#000;text-shadow:0 0 14px #f02;opacity:0;animation:de-eb 3.8s .3s cubic-bezier(.45,0,.2,1) forwards}
+.de-eb.de-wv{filter:url(#de-water)}
+.de-ln{height:2px;width:0;margin:4px 0 8px;background:linear-gradient(90deg,transparent,#ff0022,transparent);box-shadow:0 0 12px #f02;animation:de-ln 1s 3.1s ease-out forwards}
+.de-nm{display:flex;gap:.06em;font-size:clamp(48px,13vw,150px);line-height:1;color:#000;font-weight:900;font-synthesis:weight;-webkit-text-stroke:5px #ff0022;paint-order:stroke fill;text-shadow:0 0 40px #ff0022,0 0 2px #ff0022,1px 1px 0 #ff0022,-1px -1px 0 #ff0022}
+.de-nm span{display:inline-block;opacity:0;animation:de-slam .55s calc(2.3s + var(--i)*.26s) cubic-bezier(.2,.9,.2,1) forwards}
+.de-cast{margin-top:16px;font-size:clamp(10px,2vw,20px);letter-spacing:.5em;color:#ff5566;opacity:0;animation:de-ci .8s 3.5s ease-out forwards}
+.de-cast b{color:#ff3355}
 
-.de-tline { height: 2px; width: 0; margin: 4px 0 8px; background: linear-gradient(90deg, transparent, #ff0022, transparent);
-  box-shadow: 0 0 12px #ff0022; animation: de-lineg 1.2s ease-out calc(var(--de-rise) + .2s) forwards; }
-@keyframes de-lineg { to { width: min(70vw, 700px); } }
+/* the cut line, shrine, slash canvas, rings, letterbox, impact frame */
+.de-cutsvg{position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none}
+.de-cutsvg line{stroke:#fff;stroke-width:2;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:1;opacity:0;filter:drop-shadow(0 0 6px #f03)}
+.de-stage.de-draw .de-cutsvg line{opacity:1;animation:de-dw .22s ease-out forwards}
+.de-stage.de-open .de-cutsvg line{stroke-dashoffset:0;opacity:1;animation:de-wd 1s ease-out forwards}
+.de-shr{position:absolute;left:0;right:0;bottom:0;height:62vh;display:flex;justify-content:center;opacity:0;transform:translateY(35%);z-index:1}
+.de-shr::before{content:'';position:absolute;left:10%;right:10%;bottom:0;height:70%;background:radial-gradient(ellipse at 50% 100%,rgba(255,20,50,.6),transparent 70%)}
+.de-shr img{position:relative;height:100%;filter:drop-shadow(0 0 18px #f02)}
+.de-shr.de-up{animation:de-up 3.4s cubic-bezier(.2,.7,.2,1) forwards}
+.de-shr.de-out{opacity:.95;transform:none;animation:de-out .7s forwards}
+.de-cv{position:absolute;inset:0;width:100%;height:100%;z-index:5;pointer-events:none}
+.de-fx{position:absolute;inset:0;z-index:6;pointer-events:none}
+.de-ring{position:absolute;left:50%;top:48%;width:10vh;height:10vh;margin:-5vh 0 0 -5vh;border-radius:50%;border:2px solid rgba(255,50,70,.85);box-shadow:0 0 16px rgba(255,20,45,.5);animation:de-rg 1.4s ease-out forwards}
+.de-lb i{position:absolute;left:0;right:0;height:0;background:#000;z-index:8;transition:height 1s cubic-bezier(.2,.7,.2,1)}
+.de-lb i:first-child{top:0}.de-lb i:last-child{bottom:0}
+.de-stage[data-lb="1"] .de-lb i{height:9vh}.de-stage[data-lb="2"] .de-lb i{height:5vh}
+.de-imp{position:absolute;inset:0;background:#fff;mix-blend-mode:difference;opacity:0;z-index:9;pointer-events:none}
 
-.de-cast { margin-top: 16px; font-size: clamp(10px,2vw,20px); letter-spacing: .5em; color: #ff5566; text-shadow: 0 0 10px #ff0022;
-  opacity: 0; animation: de-castin .8s ease-out calc(var(--de-rise) + 1.7s) forwards; }
-.de-cast b { color: #ff3355; letter-spacing: .3em; }
-@keyframes de-castin { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+/* aftermath: scar + crack + damage number over each hit team card (overlay only, real cards untouched) */
+.de-scar{position:absolute;z-index:10;pointer-events:none;overflow:hidden;border-radius:6px;box-shadow:inset 0 0 0 2px #cc0022;opacity:0;animation:de-sev .6s ease-out var(--dl) forwards}
+.de-scar svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
+.de-scar path{fill:none;stroke:#fff;stroke-width:2;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:1;filter:drop-shadow(0 0 4px #f02);animation:de-dw .25s ease-out var(--dl) forwards}
+.de-dmg{position:absolute;z-index:11;transform:translate(-50%,-100%);pointer-events:none;font-weight:900;font-size:clamp(16px,2.2vw,28px);color:#ff1a1a;-webkit-text-stroke:1.5px #000;paint-order:stroke fill;text-shadow:0 0 8px rgba(255,0,34,.8);opacity:0;animation:de-dmgup 1.9s ease-out var(--dl) forwards}
 
-/* dissolve: title scales up and fades while the slashes and shrine ease in underneath */
-.de-leaving .de-title-wrap { animation: de-dissolve .9s ease-in-out forwards; }
-@keyframes de-dissolve { from { opacity: 1; transform: scale(1.08); } to { opacity: 0; transform: scale(1.3); } }
-
-/* ===== atmosphere: blood moon + ritual ring + layered smoke ===== */
-.de-atm { overflow: hidden; }
-.de-moon { position: absolute; left: 50%; top: 50%; width: 56vh; height: 56vh; border-radius: 50%;
-  transform: translate(-50%,-54%);
-  background: radial-gradient(circle at 50% 42%, #8a1424 0, #4b0912 55%, #150207 100%);
-  box-shadow: 0 0 40px 6px rgba(255,20,45,.4), 0 0 140px 40px rgba(140,8,25,.28);
-  animation: de-moonp 6s ease-in-out infinite alternate; }
-.de-moon::before, .de-moon::after { content: ''; position: absolute; border-radius: 50%; }
-.de-moon::before { inset: -9%; border: 2px dashed rgba(255,70,85,.55); animation: de-spin 70s linear infinite; }
-.de-moon::after { inset: -18%; border: 1px solid rgba(255,40,60,.35); }
-@keyframes de-moonp { from { transform: translate(-50%,-54%) scale(1); } to { transform: translate(-50%,-54%) scale(1.05); } }
-@keyframes de-spin { to { transform: rotate(360deg); } }
-
-.de-smk { position: absolute; left: -20%; top: 0; width: 140%; height: 100%; will-change: transform; }
-.de-s1 { -webkit-mask-image: linear-gradient(0deg,#000 0,#000 30%,transparent 85%); mask-image: linear-gradient(0deg,#000 0,#000 30%,transparent 85%);
-  animation: de-sa 22s ease-in-out infinite alternate; }
-.de-s2 { opacity: .8; -webkit-mask-image: linear-gradient(180deg,#000 0,transparent 70%); mask-image: linear-gradient(180deg,#000 0,transparent 70%);
-  animation: de-sb 30s ease-in-out infinite alternate; }
-.de-s3 { opacity: .7; animation: de-sc 16s ease-in-out infinite alternate; }
-@keyframes de-sa { from { transform: translate(-7%,2%) scale(1); } to { transform: translate(7%,-4%) scale(1.15); } }
-@keyframes de-sb { from { transform: translate(6%,-2%) scale(1.1); } to { transform: translate(-6%,3%) scale(1); } }
-@keyframes de-sc { from { transform: translateY(10%); } to { transform: translateY(-12%); } }
-
-.de-fog { top: auto; height: 45%; bottom: 0; width: 140%; will-change: transform;
-  background: radial-gradient(ellipse 40% 60% at 15% 100%, rgba(160,20,35,.32), transparent),
-              radial-gradient(ellipse 45% 55% at 60% 100%, rgba(120,10,30,.28), transparent);
-  animation: de-fogd 12s ease-in-out infinite alternate, de-fadein 1.2s ease-out both; }
-@keyframes de-fogd { from { transform: translateX(-8%); } to { transform: translateX(0); } }
-@keyframes de-fadein { from { opacity: 0; } to { opacity: 1; } }
-
-.de-embers { overflow: hidden; z-index: 4; }
-.de-embers i { position: absolute; bottom: -12px; left: var(--x); width: var(--s); height: var(--s); border-radius: 50%;
-  background: #ff3344; will-change: transform; opacity: 0; animation: de-ember var(--d) linear var(--dl) infinite; }
-@keyframes de-ember { 0% { opacity: 0; transform: translate(0,0) scale(1); } 10% { opacity: 1; }
-  100% { opacity: 0; transform: translate(var(--dx), -110vh) scale(.3); } }
-
-/* atmosphere fades while the title dissolves under the slashes */
-@keyframes de-fadeout { to { opacity: 0; } }
-.de-leaving .de-atm, .de-leaving .de-fog, .de-leaving .de-embers { animation: de-fadeout .9s ease-in-out forwards; }
-
-/* ===== ripple rings as the kanji land ===== */
-.de-ring { position: absolute; left: 50%; top: 46%; width: 10vh; height: 10vh; margin: -5vh 0 0 -5vh; border-radius: 50%;
-  border: 2px solid rgba(255,50,70,.85); box-shadow: 0 0 16px rgba(255,20,45,.5), inset 0 0 16px rgba(255,20,45,.3);
-  z-index: 4; pointer-events: none; animation: de-rg 1.6s ease-out forwards; }
-@keyframes de-rg { from { transform: scale(.3); opacity: .95; } to { transform: scale(10); opacity: 0; } }
-
-/* ===== white flash at the cut ===== */
-.de-flashfx { background: #fff; opacity: 0; z-index: 7; }
-.de-phase-flash .de-flashfx { animation: de-fl .14s ease-out forwards; }
-@keyframes de-fl { 0% { opacity: .85; } 100% { opacity: 0; } }
-
-/* ===== cinematic letterbox ===== */
-.de-lb i { position: absolute; left: 0; right: 0; height: 0; background: #000; z-index: 8;
-  transition: height 1.1s cubic-bezier(.2,.7,.2,1); }
-.de-lb i:first-child { top: 0; } .de-lb i:last-child { bottom: 0; }
-.de-phase-title .de-lb i, .de-phase-flash .de-lb i { height: 9vh; }
-.de-phase-slash .de-lb i { height: 5vh; }
-
-/* ===== shrine ===== */
-.de-shrine { top: auto; bottom: 0; height: 64vh; display: flex; justify-content: center; transform: translateY(105%); z-index: 3; will-change: transform; }
-.de-phase-slash .de-shrine { animation: de-up 2s cubic-bezier(.2,.7,.2,1) forwards, de-fadein .9s ease-out both; }
-.de-phase-bars-out .de-shrine { transform: translateY(0); opacity: 0; transition: opacity .6s; }
-@keyframes de-up { from { transform: translateY(35%); } to { transform: translateY(0); } }
-.de-shrine img { height: 100%; width: auto; filter: drop-shadow(0 0 16px #ff0022); }
-
-/* ===== slashes ===== */
-.de-slashes { z-index: 6; overflow: hidden; }
-.de-cut { position: absolute; left: -50vw; width: 200vw; height: var(--h); top: var(--t); background: var(--c); opacity: 0;
-  transform: rotate(var(--a));
-  box-shadow: 0 0 0 var(--ow) var(--oc);
-  animation: de-strike var(--d) ease-out var(--dl) both; }
-@keyframes de-strike {
-  0% { opacity: 0; transform: rotate(var(--a)) scaleX(.2); }
-  15% { opacity: 1; transform: rotate(var(--a)) scaleX(1); }
-  70% { opacity: .9; transform: rotate(var(--a)) scaleX(1); }
-  100% { opacity: 0; transform: rotate(var(--a)) scaleX(1); } }
-
-.de-vig { opacity: 0; z-index: 5;
-  background: radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.65) 100%),
-              radial-gradient(ellipse at center, transparent 62%, rgba(255,0,40,.4) 100%); }
-.de-phase-slash .de-vig { opacity: 1; animation: de-vp .6s ease-in-out infinite; }
-.de-phase-bars-out .de-vig { opacity: 0; transition: opacity .6s; }
-@keyframes de-vp { 50% { opacity: .65; } }
-
-/* ===== body shake during the barrage ===== */
-.de-shaking { animation: de-shake .08s linear infinite; transform-origin: center center; will-change: transform; }
-@keyframes de-shake {
-  0% { transform: translate(0,0) rotate(0); } 20% { transform: translate(3px,2px) rotate(.4deg); }
-  40% { transform: translate(4px,-1px) rotate(.3deg); } 60% { transform: translate(3px,1px) rotate(.2deg); }
-  80% { transform: translate(2px,3px) rotate(.3deg); } 100% { transform: translate(0,0) rotate(0); } }
-@media (prefers-reduced-motion: reduce) { .de-shaking { animation: none; } }
-
-.de-frozen, .de-frozen *, .de-frozen *::after { animation-play-state: paused !important; }
-
-/* ===== aftermath: scar over each hit team's card + damage number ===== */
-.de-scar { position: absolute; z-index: 10; pointer-events: none; overflow: hidden; border-radius: 6px;
-  box-shadow: inset 0 0 0 2px #cc0022; opacity: 0;
-  animation: de-sev .5s ease-out forwards; }
-.de-scar::after { content: ''; position: absolute; left: -15%; right: -15%; top: 50%; height: 2px; background: #fff;
-  box-shadow: 0 0 10px #f02; transform: rotate(var(--r, -14deg)); }
-@keyframes de-sev { 0% { opacity: 1; background: rgba(255,32,64,.85); } 100% { opacity: 1; background: rgba(255,32,64,0); } }
-
-.de-dmg { position: absolute; z-index: 11; transform: translate(-50%, -100%); pointer-events: none;
-  font-weight: 900; font-size: clamp(16px, 2.2vw, 28px); color: #ff1a1a;
-  -webkit-text-stroke: 1.5px #000; paint-order: stroke fill; text-shadow: 0 0 8px rgba(255,0,34,.8);
-  opacity: 0; animation: de-dmgup 2.4s ease-out forwards; }
-@keyframes de-dmgup { 0% { opacity: 0; transform: translate(-50%, -60%) scale(1.6); }
-  15% { opacity: 1; transform: translate(-50%, -100%) scale(1); }
-  80% { opacity: 1; } 100% { opacity: 0; transform: translate(-50%, -190%) scale(1); } }
+@keyframes de-mb{0%,100%{transform:scale(1)}12%{transform:scale(1.05)}24%{transform:scale(1)}36%{transform:scale(1.035)}}
+@keyframes de-bt{0%,100%{opacity:.55}12%{opacity:1}24%{opacity:.6}36%{opacity:.9}}
+@keyframes de-sp{to{transform:rotate(360deg)}}
+@keyframes de-dr1{to{transform:translate(7%,-4%) scale(1.15)}}
+@keyframes de-dr2{to{transform:scaleX(-1) translate(-6%,3%) scale(1.1)}}
+@keyframes de-em{0%{opacity:0;transform:translate(0)}10%{opacity:1}100%{opacity:0;transform:translate(var(--dx),-110vh) scale(.3)}}
+@keyframes de-push{to{transform:scale(1.08)}}
+@keyframes de-eb{0%{opacity:0;letter-spacing:.55em;transform:translateY(50px) scale(1.35)}12%,35%{opacity:1;letter-spacing:.55em;transform:translateY(50px) scale(1.35)}100%{opacity:1;letter-spacing:.42em;transform:none}}
+@keyframes de-ln{to{width:min(70vw,700px)}}
+@keyframes de-slam{0%{opacity:0;transform:scale(2.6);filter:blur(14px)}55%{opacity:1;transform:scale(.9);filter:blur(0)}78%{transform:scale(1.05)}100%{opacity:1;transform:none}}
+@keyframes de-ci{from{opacity:0;transform:translateY(12px)}to{opacity:1;transform:none}}
+@keyframes de-dw{to{stroke-dashoffset:0}}
+@keyframes de-wd{0%{stroke-width:2}30%{stroke-width:34;stroke:#ffd0d8}100%{stroke-width:70;opacity:0;stroke-dashoffset:0}}
+@keyframes de-up{to{opacity:.95;transform:none}}
+@keyframes de-out{to{opacity:0}}
+@keyframes de-rg{from{transform:scale(.3);opacity:.95}to{transform:scale(10);opacity:0}}
+@keyframes de-sev{0%{opacity:1;background:rgba(255,32,64,.85)}100%{opacity:1;background:rgba(255,32,64,0)}}
+@keyframes de-dmgup{0%{opacity:0;transform:translate(-50%,-60%) scale(2.6)}12%{opacity:1;transform:translate(-50%,-100%) scale(1)}75%{opacity:1}100%{opacity:0;transform:translate(-50%,-190%) scale(1)}}

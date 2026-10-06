@@ -202,7 +202,7 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
 
         {/* Header */}
         <div className="shop-modal-header">
-          <div className="shop-modal-title">Shop (WIP)</div>
+          <div className="shop-modal-title">Shop</div>
           <div className="shop-coins-badge">
             <span className="shop-coins-icon">C</span>
             <span className="shop-coins-value">{coins.toLocaleString()}</span>
@@ -262,11 +262,6 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
 
         {!loading && !error && tab === 'power' && (
           <>
-            <p className="power-tab-intro">
-              Unlock a power here and it's equipped automatically. In a game, the host spins the Power-ups
-              tab of the Randomizer: every player with a power equipped rolls a 10% chance to win it on the
-              slot machine, and once won you can use it once per game.
-            </p>
             {powerItems.length === 0
               ? <p className="shop-empty">You've unlocked every power. Check your Inventory.</p>
               : (

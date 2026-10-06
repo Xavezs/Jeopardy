@@ -36,7 +36,7 @@ const POWERUPS = [
   // Skill from the shop. NOT handed out by the random shuffle: whether a player
   // lands on it is decided by the server's per-player grantChance roll (see
   // `onPowerDraw` in PowerupSlot), which also unlocks the in-game button.
-  { id: "domain", label: "Domain Expansion", desc: "Every other team loses 10% of its score (max 500). One use per game." },
+  { id: "domain", label: "Domain Expansion", desc: "Every other team loses 20% of its score (max 1000). One use per win; spin again to win it back." },
 ];
 const DOMAIN_LABEL = "Domain Expansion";
 const FILLER_POWERUPS = POWERUPS.filter((p) => p.label !== DOMAIN_LABEL);

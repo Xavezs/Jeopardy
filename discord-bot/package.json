@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node bot-server.js",
     "start:dev": "nodemon bot-server.js",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "node --test tests/roomPersistence.test.js tests/ctxWiring.test.js tests/skillMath.test.js tests/skillsHandler.test.js tests/skillRules.test.js tests/hostAuth.test.js"
   },
   "keywords": [],
   "author": "",

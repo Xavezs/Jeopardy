@@ -12,6 +12,7 @@ import TeamRandomizer from "./components/TeamRandomizer";
 import BackgroundMusicPlayer from "./components/BackgroundMusicPlayer";
 import ShopWidget from "./components/ShopWidget";
 import SkillOverlay from "./components/SkillOverlay";
+import { HIT_AT } from "./components/DomainExpansion";
 import PowerDrawOverlay from "./components/PowerDrawOverlay";
 import { PowerupNotice } from "./components/PowerupUI";
 import { useSkillSync } from "./lib/hooks/useSkillSync";
@@ -280,18 +281,54 @@ export default function JeopardyBoard({ onBack }) {
   const {
     activeSkill, clearActiveSkill, powerDrawResult, runPowerDraw, runPowerApply, clearPowerDrawResult,
     armedPowerups, frozenTeams, powerupNotice, clearPowerupNotice, consumeArmed,
+    pendingSkillDeltas, ackSkillDeltas,
   } = useSkillSync(roomCode, null);
-  const handleSkillDone = () => {
-    const skill = activeSkill;
-    clearActiveSkill();
+  // Scores are applied on a plain timer (timed to the cutscene's hit moment) instead of
+  // when the animation ends: the cutscene runs on requestAnimationFrame, which browsers
+  // pause when the host window is in the background, so the points used to wait until
+  // the host alt-tabbed back. Timers still run in the background.
+  //
+  // Applying is idempotent per server `eventId`: ids already applied are kept in the
+  // session data itself (data.appliedSkillEvents), so neither a refresh nor a server
+  // resend (skillDeltasPending, sent when the host rejoins) can double-apply. The
+  // server keeps the deltas until we acknowledge, so damage is never lost if the host
+  // was away when the skill landed.
+  const appliedSkillRef = useRef(null);
+  const applySkillDeltas = (eventId, deltas) => {
     const current = persistence.sessionRef.current;
-    if (!skill?.deltas?.length || !current?.data?.teams) return;
-    for (const { teamId, delta } of skill.deltas) {
-      const team = current.data.teams.find((t) => t.id === teamId);
-      if (team) team.score = (Number(team.score) || 0) + delta;
+    if (!current?.data?.teams) return; // session not loaded yet: stay pending, retried on rejoin
+    const applied = current.data.appliedSkillEvents || [];
+    if (eventId && applied.includes(eventId)) {
+      ackSkillDeltas(eventId); // applied earlier but the ack never reached the server
+      return;
     }
+    for (const { teamId, delta } of deltas || []) {
+      const team = current.data.teams.find((t) => t.id === teamId);
+      if (team) team.score = Math.max(0, (Number(team.score) || 0) + delta);
+    }
+    if (eventId) current.data.appliedSkillEvents = [...applied, eventId].slice(-20);
     persistence.persist();
+    ackSkillDeltas(eventId);
   };
+  const applySkillDeltasRef = useRef(applySkillDeltas);
+  applySkillDeltasRef.current = applySkillDeltas;
+
+  useEffect(() => {
+    const skill = activeSkill;
+    if (!skill?.deltas?.length || appliedSkillRef.current === skill) return;
+    appliedSkillRef.current = skill;
+    setTimeout(() => { // no cleanup on purpose: clearing activeSkill must not cancel it
+      applySkillDeltasRef.current(skill.eventId, skill.deltas);
+    }, HIT_AT + 600);
+  }, [activeSkill]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Deltas the server resent because we weren't around to acknowledge them.
+  useEffect(() => {
+    for (const entry of pendingSkillDeltas || []) {
+      applySkillDeltasRef.current(entry.id, entry.deltas);
+    }
+  }, [pendingSkillDeltas]);
+  const handleSkillDone = () => clearActiveSkill();
 
   // Clear the synced randomizer state for players whenever the host leaves
   // the randomizer screen (Back to Board, or applying an order — see

@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import { useSocket } from "../SocketContext";
 import { SessionStore } from "../storage";
+import { emitHostJoin } from "../hostJoin";
 
 // A board can disappear out from under an open session — deleted by its
 // owner from another device/tab, a delete that succeeded server-side even
@@ -103,10 +104,12 @@ export function usePersistence(isHost = true) {
   useEffect(() => {
     if (!socket) return;
 
-    const handleConnect = () => {
+    const handleConnect = async () => {
       const roomCode = roomCodeRef.current;
       if (!roomCode) return;
-      socket.emit("joinRoom", { roomCode, role: "host" });
+      // Verified host join (ticket fetched over HTTP). Awaited so the board
+      // re-announce below is only sent once the server has seen our joinRoom.
+      await emitHostJoin(socket, roomCode);
       const s = sessionRef.current;
       if (s && isHostRef.current) {
         socket.emit("boardUpdate", {
@@ -225,15 +228,17 @@ export function usePersistence(isHost = true) {
   const setRoomCode = useCallback((code) => {
     roomCodeRef.current = code || null;
     if (code && socketRef.current?.connected) {
-      socketRef.current.emit("joinRoom", { roomCode: code, role: "host" });
-      const s = sessionRef.current;
-      if (s && isHostRef.current) {
-        socketRef.current.emit("boardUpdate", {
-          roomCode: code,
-          data: s.data,
-          updatedAt: s.updatedAt,
-        });
-      }
+      const activeSocket = socketRef.current;
+      emitHostJoin(activeSocket, code).then(() => {
+        const s = sessionRef.current;
+        if (s && isHostRef.current) {
+          activeSocket.emit("boardUpdate", {
+            roomCode: code,
+            data: s.data,
+            updatedAt: s.updatedAt,
+          });
+        }
+      });
     }
   }, []);
 

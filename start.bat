@@ -8,7 +8,7 @@ echo Starting Frontend Vite Server...
 start cmd /k "npm run dev"
 
 echo Starting Cloudflare Tunnel...
-start cmd /k "cloudflared tunnel --url http://localhost:5173"
+start cmd /k "cloudflared tunnel --url http://localhost:5180"
 
 echo All services launched!
 pause

@@ -1,5 +1,6 @@
 const express = require('express'); //[cite: 2]
-const jwt = require('jsonwebtoken'); //[cite: 2]
+const jwt = require('jsonwebtoken');
+const { signTicket } = require('./hostAuth'); //[cite: 2]
 
 // 1. Initialize Express Router
 const router = express.Router(); //[cite: 2]
@@ -9,7 +10,7 @@ const CLIENT_ID = process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID; //[cit
 const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || process.env.CLIENT_SECRET; //[cite: 2]
 const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI; //[cite: 2]
 const SESSION_SECRET = process.env.SESSION_SECRET || 'default_fallback_secret'; //[cite: 2]
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5173'; //[cite: 2]
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5180'; //[cite: 2]
 
 const COOKIE_NAME = 'jeopardy_session'; //[cite: 2]
 const SCOPES = 'identify'; //[cite: 2]
@@ -215,6 +216,12 @@ function optionalAuth(req, res, next) { //[cite: 2]
   next(); //[cite: 2]
 }
 
+// Short-lived proof of identity for the socket connection. The host client
+// sends it with joinRoom so the server can verify who is claiming to host.
+router.get('/socket-ticket', requireAuth, (req, res) => {
+  res.json({ ticket: signTicket(jwt, SESSION_SECRET, req.user.id) });
+});
+
 router.get('/me', optionalAuth, (req, res) => { //[cite: 2]
   res.json({ user: req.user || null }); //[cite: 2]
 });
@@ -229,4 +236,4 @@ router.post('/dev-login', (req, res) => {
   res.cookie(COOKIE_NAME, token, cookieOptions(req));
   return res.json({ user: mockUser });
 });
-module.exports = { router, requireAuth, optionalAuth, COOKIE_NAME }; //[cite: 2]
+module.exports = { router, requireAuth, optionalAuth, COOKIE_NAME, SESSION_SECRET }; //[cite: 2]

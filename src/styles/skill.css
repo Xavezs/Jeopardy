@@ -93,9 +93,6 @@ button.pv-skill-btn:disabled::before {
   button.pv-skill-btn { animation: none; }
 }
 
-/* Shop "Power" tab copy */
-.power-tab-intro { margin: 0 0 12px; opacity: 0.8; font-size: 0.72rem; }
-
 /* Player's own granted power-ups (given when the host applies the spin) */
 .pv-powerup-chips {
   position: fixed;
@@ -234,7 +231,6 @@ button.pv-powerup-cancel { background: transparent; border-color: rgba(255, 255,
   cursor: pointer;
   animation: pu-notice-in 0.25s ease-out;
 }
-.pu-notice-icon { font-size: 1.3rem; }
 @keyframes pu-notice-in {
   from { opacity: 0; transform: translate(-50%, -12px); }
   to   { opacity: 1; transform: translate(-50%, 0); }

@@ -513,7 +513,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
           <input
             className="final-category-input"
             value={rd.category}
-            placeholder="Final Jeopardy category…"
+            placeholder="Final category…"
             disabled={!editMode}
             onChange={(e) => final.setCategory(e.target.value)}
           />
