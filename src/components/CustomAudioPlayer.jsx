@@ -11,9 +11,6 @@ export default function CustomAudioPlayer({
   currentTime: externalCurrentTime, 
   disablePlayPause = false, 
   disableSeeking = false,
-  // Per-clue "stop after N seconds" cutoff (see useClueEditor.js's
-  // mediaClipSeconds/answerMediaClipSeconds) — undefined/null/0 means play
-  // in full. Built for "1-second music round"-style clues.
   clipSeconds = null,
 }) {
   const audioRef = useRef(null);
@@ -24,14 +21,7 @@ export default function CustomAudioPlayer({
   const [volume, setVolume] = useState(0.8); // Default 80% volume
   const [isMuted, setIsMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(0.8);
-  // Same class of autoplay-policy issue as the video player, just less
-  // likely to hit in practice for audio-only elements. Tracked so we can
-  // surface a tap-to-unlock affordance instead of silently stalling.
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
-  // Same reasoning as the video player: Discord's Activity proxy doesn't
-  // reliably forward Range-request streaming for larger files, so we fetch
-  // once as a whole blob and play from a local blob URL instead of letting
-  // the <audio> element stream the proxied URL directly.
   const { resolvedSrc, prefetching, prefetchError, retry } = useMediaSource(src, {
     label: 'Audio',
     logPrefix: '[CustomAudioPlayer]',
@@ -40,7 +30,6 @@ export default function CustomAudioPlayer({
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
   const clipCutoff = useClipCutoff(clipSeconds, isPlaying, audioRef);
 
-  // Keep audio volume in sync with React state
   useEffect(() => {
     if (audioRef.current) {
       audioRef.current.volume = isMuted ? 0 : toPerceptualVolume(volume);
@@ -61,20 +50,10 @@ export default function CustomAudioPlayer({
       audioRef.current.pause();
       setAutoplayBlocked(false);
     }
-    // Keep the internal toggle-button state lined up with whatever the
-    // parent just forced (e.g. auto-pausing on a buzz-in). Without this,
-    // internalIsPlaying goes stale after an external override, and the
-    // play/pause button's own click handler (which only reads
-    // internalIsPlaying, not the external prop) ends up doing nothing —
-    // or the opposite of what the icon shows — on the next click.
     setInternalIsPlaying(externalIsPlaying);
   }, [externalIsPlaying, resolvedSrc]);
 
-  // Sync external currentTime from host (corrects drift). The tolerance
-  // scales down for short clips — a fixed 0.5s snap is imperceptible on a
-  // 3-minute track but is ~12% of a 4-second clue clip, so every
-  // correction reads as a visible stutter. Floor of 0.15s keeps it from
-  // getting so tight it fights normal network jitter.
+  // Sync external currentTime from host (corrects drift)
   useEffect(() => {
     if (!audioRef.current || !resolvedSrc || externalCurrentTime === undefined) return;
     const driftTolerance = duration > 0 ? Math.max(0.15, Math.min(0.5, duration * 0.08)) : 0.5;
@@ -85,25 +64,12 @@ export default function CustomAudioPlayer({
     }
   }, [externalCurrentTime, resolvedSrc, duration]);
 
-  // Native range inputs don't let the thumb travel the full 100% of the
-  // track — it's confined to (trackWidth - thumbWidth) so it never pokes
-  // out past either end. A gradient stop set to raw `percent%` ignores
-  // that inset, so it visibly drifts from the thumb's real center as you
-  // approach either edge. Mixing in a px offset (derived from the CSS
-  // thumb width below) corrects for it. Must match .player-slider
-  // ::-webkit-slider-thumb / ::-moz-range-thumb width in board.css.
   const THUMB_SIZE_PX = 14;
   function trackFillPosition(percent) {
     const offsetPx = THUMB_SIZE_PX * (0.5 - percent / 100);
     return `calc(${percent}% + ${offsetPx}px)`;
   }
 
-  // Writes both the thumb position and the gradient fill straight to the
-  // slider DOM node. Used everywhere the timeline needs to move (the rAF
-  // loop, seeking, external sync, load, end) so the slider stays
-  // uncontrolled by React — a controlled `value` prop would fight these
-  // direct writes every time React re-renders with a slightly-stale
-  // `currentTime`, undoing the smoothing this is meant to provide.
   function paintTimeline(time) {
     const slider = timelineRef.current;
     if (!slider) return;
@@ -112,15 +78,6 @@ export default function CustomAudioPlayer({
     slider.style.background = `linear-gradient(to right, #f59e0b 0%, #f59e0b ${trackFillPosition(pct)}, #1e293b ${trackFillPosition(pct)}, #1e293b 100%)`;
   }
 
-  // Drive the visible progress (slider thumb + track fill) off a rAF loop
-  // that writes straight to the DOM node, instead of calling setState
-  // every frame. A setState-per-frame approach re-renders this whole
-  // component (and re-runs every inline style computation) up to 60x/sec,
-  // which is exactly the kind of overhead that shows up as a stuttering
-  // thumb rather than a smooth glide — especially once this sits inside a
-  // larger board tree. React's `currentTime` state is still updated, just
-  // throttled to a few times a second — plenty for the digits label and
-  // for handleSeek's baseline, without needing 60 renders/sec.
   useEffect(() => {
     if (!isPlaying) return;
     let rafId;
@@ -163,9 +120,6 @@ export default function CustomAudioPlayer({
     }
   };
 
-  // Heartbeat: periodically re-broadcast current position while playing, so
-  // late-joining or drifted players get corrected without needing a fresh
-  // play/pause/seek event to happen first.
   useEffect(() => {
     if (!isPlaying || !onPlayStateChange) return;
     const id = setInterval(() => {
@@ -178,10 +132,7 @@ export default function CustomAudioPlayer({
 
   const handleTimeUpdate = () => {
     if (!audioRef.current) return;
-    // Clip cutoff — checked before the normal state update below so a
-    // cut clip never briefly shows a currentTime past the limit. Unlike
-    // the browser's own `ended` event, hitting this doesn't pause the
-    // element automatically, so handleClipEnd does that explicitly.
+    // Clip cutoff
     if (clipCutoff.hasReachedCutoff(audioRef.current.currentTime)) {
       handleClipEnd();
       return;
@@ -190,13 +141,6 @@ export default function CustomAudioPlayer({
     paintTimeline(audioRef.current.currentTime);
   };
 
-  // Same externally-visible effect as handleEnded below (pause, notify
-  // parent) but for a clip hitting its configured limit rather than the
-  // media's own natural end — the native `ended` event never fires here,
-  // so this has to pause the element itself. Unlike handleEnded, this
-  // rewinds to where the clip *started* (clipCutoff.clipStartTime())
-  // rather than to 0, so replaying the clue replays the same clip instead
-  // of the start of the whole file.
   const handleClipEnd = () => {
     const startTime = clipCutoff.clipStartTime();
     audioRef.current.pause();

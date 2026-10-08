@@ -1,19 +1,27 @@
-// Socket handlers: scoring. Registered per-connection from handlers/index.js.
+// Socket handlers: scoring
+const { identityOf, isMemberOf } = require('./guards');
+
 module.exports = function registerScoringHandlers(socket, ctx) {
-  const { MAX_ROOM_CODE_LENGTH, OPEN_CONTROL, emitControlState, gameRooms, io } = ctx;
+  const { MAX_ROOM_CODE_LENGTH, OPEN_CONTROL, currentRound, emitControlState, gameRooms, hostLocks, io, teamOfPlayer } = ctx;
+
+  function sendFinalSubmissionToHost(roomCode, event, payload) {
+    const hostLock = hostLocks.get(roomCode);
+    const hostSocket = hostLock && io.sockets?.sockets?.get(hostLock.socketId);
+    if (!hostSocket?.isHost || hostSocket.gameRoomCode !== roomCode) return;
+    io.to(hostLock.socketId).emit(event, payload);
+  }
+
+  function finalSubmissionBlocked(room, discordUserId, phases, field, closedMessage) {
+    const rd = currentRound(room);
+    if (!rd || rd.type !== 'final' || !phases.includes(rd.phase)) return closedMessage;
+    const teamId = teamOfPlayer(room, discordUserId);
+    if (teamId && rd[field] && rd[field][teamId] != null) return 'Your team has already locked this in.';
+    return null;
+  }
 
 
-  // Player-submitted Daily Double wager. Same trust model as selectClue:
-  // never take the client's word for whose turn it is, re-check against
-  // room.controlDiscordUserId. Unlike selectClue, OPEN_CONTROL does NOT
-  // bypass this — a wager belongs to one specific player, so "anyone can
-  // pick" mode has no valid wagerer and must fall back to the host's
-  // manual entry (see ClueModal.jsx). Deliberately does not clamp `amount`
-  // against 2x the clue's value — the server has no notion of "which
-  // clue/value is currently open" beyond the host's own local clueEditor
-  // state, and the host's UI already applies that clamp identically for
-  // both this path and its manual fallback (see ClueModal's maxWager).
-  socket.on('submitWager', ({ roomCode: rawRoomCode, amount, discordUserId }) => {
+  // Player-submitted Daily Double wager
+  socket.on('submitWager', ({ roomCode: rawRoomCode, amount, discordUserId: claimedId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
@@ -21,8 +29,9 @@ module.exports = function registerScoringHandlers(socket, ctx) {
     const room = gameRooms.get(roomCode);
     if (!room) return;
 
+    const discordUserId = identityOf(socket, claimedId);
     const isRegisteredPlayer =
-      !!discordUserId && room.players?.some((p) => p.discordUserId === discordUserId);
+      !!discordUserId && isMemberOf(socket, roomCode) && room.players?.some((p) => p.discordUserId === discordUserId);
     if (
       !room.controlDiscordUserId ||
       room.controlDiscordUserId === OPEN_CONTROL ||
@@ -39,15 +48,8 @@ module.exports = function registerScoringHandlers(socket, ctx) {
     io.to(roomCode).emit('wagerSubmitted', { discordUserId, amount: parsedAmount });
   });
 
-  // Final Jeopardy wager — ALL players submit in PARALLEL (unlike Daily
-  // Double's single control-holder wager above), so this does NOT gate on
-  // room.controlDiscordUserId at all — just checks the sender is a
-  // registered player in this room. The host resolves discordUserId ->
-  // team (via useTeams' resolveTeamForDiscordUser) and clamps the amount
-  // against that team's current score before writing it into
-  // round.wagers — this handler is only the relay, same division of
-  // responsibility selectClue/submitWager already use.
-  socket.on('submitFinalWager', ({ roomCode: rawRoomCode, amount, discordUserId }) => {
+  // Final Jeopardy wager
+  socket.on('submitFinalWager', ({ roomCode: rawRoomCode, amount, discordUserId: claimedId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
@@ -55,23 +57,28 @@ module.exports = function registerScoringHandlers(socket, ctx) {
     const room = gameRooms.get(roomCode);
     if (!room) return;
 
+    const discordUserId = identityOf(socket, claimedId);
     const isRegisteredPlayer =
-      !!discordUserId && room.players?.some((p) => p.discordUserId === discordUserId);
+      !!discordUserId && isMemberOf(socket, roomCode) && room.players?.some((p) => p.discordUserId === discordUserId);
     if (!isRegisteredPlayer) {
       socket.emit('errorMsg', 'Not registered in this room.');
+      return;
+    }
+
+    const blockedWager = finalSubmissionBlocked(room, discordUserId, ['wager'], 'wagers', 'Wagers are not open right now.');
+    if (blockedWager) {
+      socket.emit('errorMsg', blockedWager);
       return;
     }
 
     const parsedAmount = Number(amount);
     if (!Number.isFinite(parsedAmount) || parsedAmount < 0) return;
 
-    io.to(roomCode).emit('finalWagerSubmitted', { discordUserId, amount: parsedAmount });
+    sendFinalSubmissionToHost(roomCode, 'finalWagerSubmitted', { discordUserId, amount: parsedAmount });
   });
 
-  // Final Jeopardy answer — same parallel-submission trust model as the
-  // wager above: any registered player may submit, no control-holder
-  // gate, no "is it your turn" check.
-  socket.on('submitFinalAnswer', ({ roomCode: rawRoomCode, answer, discordUserId }) => {
+  // Final Jeopardy answer
+  socket.on('submitFinalAnswer', ({ roomCode: rawRoomCode, answer, discordUserId: claimedId }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
     if (!roomCode || roomCode.length > MAX_ROOM_CODE_LENGTH) return;
@@ -79,8 +86,9 @@ module.exports = function registerScoringHandlers(socket, ctx) {
     const room = gameRooms.get(roomCode);
     if (!room) return;
 
+    const discordUserId = identityOf(socket, claimedId);
     const isRegisteredPlayer =
-      !!discordUserId && room.players?.some((p) => p.discordUserId === discordUserId);
+      !!discordUserId && isMemberOf(socket, roomCode) && room.players?.some((p) => p.discordUserId === discordUserId);
     if (!isRegisteredPlayer) {
       socket.emit('errorMsg', 'Not registered in this room.');
       return;
@@ -88,13 +96,15 @@ module.exports = function registerScoringHandlers(socket, ctx) {
 
     if (typeof answer !== 'string') return;
 
-    io.to(roomCode).emit('finalAnswerSubmitted', { discordUserId, answer: answer.slice(0, 500) });
+    const blockedAnswer = finalSubmissionBlocked(room, discordUserId, ['clue', 'answer'], 'answers', 'Answers are not open right now.');
+    if (blockedAnswer) {
+      socket.emit('errorMsg', blockedAnswer);
+      return;
+    }
+
+    sendFinalSubmissionToHost(roomCode, 'finalAnswerSubmitted', { discordUserId, answer: answer.slice(0, 500) });
   });
 
-  // Host (or whatever judges the answer) reports the outcome. Control only
-  // moves on a correct answer, to whoever answered it — everything else
-  // (wrong / nobody answered) leaves controlDiscordUserId exactly as-is, so
-  // the same player keeps the board until someone actually gets one right.
   socket.on('judgeAnswer', ({ roomCode: rawRoomCode, discordUserId, correct }) => {
     if (typeof rawRoomCode !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();
@@ -108,12 +118,6 @@ module.exports = function registerScoringHandlers(socket, ctx) {
     const room = gameRooms.get(roomCode);
     if (!room) return;
 
-    // Track per-player correct/wrong counts for end-game stats, keyed by
-    // discordUserId — same convention as team/control state, since
-    // socket.id changes on every reconnect. judgeAnswer doesn't carry the
-    // clue's point value, so this is a count of attempts, not a point
-    // total; if a points-based stat is ever needed, the client will need
-    // to start sending `value` alongside discordUserId/correct.
     if (discordUserId) {
       room.playerStats = room.playerStats || {};
       const stats = room.playerStats[discordUserId] || { correct: 0, wrong: 0 };

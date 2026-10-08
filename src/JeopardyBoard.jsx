@@ -44,33 +44,21 @@ import { SessionStore } from "./lib/storage";
 import { playCatRevealSfx, subscribeSfxDucking, loadFinalStandingsVolume, setFinalStandingsVolume } from "./lib/boardSfx";
 
 export default function JeopardyBoard({ onBack }) {
-  // Host's own Discord identity — available via DiscordContext (set by
-  // LoginGate after OAuth). Used to scope the shop wallet to this user.
+  // Host's own Discord identity
   const discordAuth = useContext(DiscordContext);
   const hostDiscordUserId = discordAuth?.user?.id ?? null;
   const [editMode, setEditMode] = useState(false);
   const [view, setView] = useState("board"); // "board" | "randomizer"
-  // Buzzer is always on now — the enable/disable toggle was removed since
-  // this app always runs with buzzing live.
+  // Buzzer is always on now
   const buzzerEnabled = true;
   const [questionFlipped, setQuestionFlipped] = useState(false);
-  // Lifted the same way as questionFlipped/revealed — lets the locked-in
-  // wager amount survive re-renders and (later, if you wire useClueSync
-  // to include it) get broadcast to PlayerView the same way revealed/
-  // flipped already are.
+  // Lifted the same way as questionFlipped/revealed
   const [dailyDoubleWager, setDailyDoubleWager] = useState(null);
 
-  // Mirrors boardSfx.js's ducking bus — separate from clueEditor.duckMusic
-  // (which only tracks clue audio/video playback). Final Standings' 
-  // celebration sound fires from deep inside FinalJeopardyBoard with no
-  // path back to this component's props, so it signals through this bus
-  // instead. Either source ducking is enough to duck the BGM.
   const [sfxDucking, setSfxDucking] = useState(false);
   useEffect(() => subscribeSfxDucking(setSfxDucking), []);
 
-  // Final Standings celebration sound's volume — separate from BGM's own
-  // volume (bgmSettings.volume), see boardSfx.js. Hydrated once from
-  // storage on mount; 1 (full/unchanged) until that resolves.
+  // Final Standings celebration sound's volume
   const [finalStandingsVolume, setFinalStandingsVolumeState] = useState(1);
   useEffect(() => {
     let cancelled = false;
@@ -88,13 +76,6 @@ export default function JeopardyBoard({ onBack }) {
 
   const { dialog, appConfirm, appAlert, resolveDialog } = useConfirmDialog();
 
-  // Bridge for useSessionManager's initBgm callback: useBgmSettings needs
-  // to know the active roundKey, which comes from session.data — but
-  // session.data doesn't exist until AFTER useSessionManager is called,
-  // and useSessionManager needs an initBgm function AT construction time.
-  // Assigning a ref synchronously during render (not inside an effect)
-  // means this is always up to date by the time anything actually calls
-  // it, without the two hooks needing to depend on each other's output.
   const bgmApiRef = useRef({});
   function initBgmBridge(loadedSessionData) {
     return bgmApiRef.current.initBgm?.(loadedSessionData);
@@ -152,11 +133,6 @@ export default function JeopardyBoard({ onBack }) {
     appConfirm,
   });
 
-  // Which round's track is "active" for BGM purposes right now — mirrors
-  // the rd.type === "final" check used everywhere else in this file.
-  // Computed straight from session.data (not the `data`/`rd` locals
-  // below, which don't exist yet until after the loading-guard return)
-  // so this stays a plain, always-called hook input.
   const sessionData = session.data;
   const activeRd = sessionData?.rounds?.[sessionData.currentRound] || sessionData?.rounds?.[0];
   const roundKey = activeRd?.type === "final" ? "final" : String(sessionData?.currentRound ?? 0);
@@ -186,16 +162,10 @@ export default function JeopardyBoard({ onBack }) {
           throw new Error("The server did not return a room code.");
         }
 
-        // The room code is returned as session metadata, not board data.
-        // Copy it into the loaded session so every socket hook can join the
-        // same room and the existing host reconnect path can re-announce the
-        // board after a reload.
         session.session.roomCode = persistentRoomCode;
         persistence.touch();
       })
       .catch((err) => {
-        // Keep the board visible if the invite endpoint is temporarily
-        // unavailable; the next render/retry can attempt it again.
         if (roomCodeRequestRef.current === sessionId) roomCodeRequestRef.current = null;
         console.error("Unable to create or restore the persistent room code:", err);
       });
@@ -205,16 +175,6 @@ export default function JeopardyBoard({ onBack }) {
 
   const { publishActiveClue } = useClueSync(roomCode);
 
-  // Board control: who's allowed to pick the next clue. The host itself
-  // always has free pick (that's the inline board grid below, unchanged);
-  // this is what lets a PLAYER'S pick actually open something. When a
-  // player's selectClue is validated server-side, it comes back here as
-  // `clueSelected`, and the host responds by opening its own clueEditor
-  // modal exactly as if it had clicked the cell itself — the host's local
-  // state stays the single source of truth for reveal/timer/judging, a
-  // player pick is just a remote trigger for it. `judgeAnswer` is handed
-  // to ClueModal below so scoring a correct, buzzed-in answer transfers
-  // control to that player.
   const { controlDiscordUserId, judgeAnswer, hostSetControl } = useControlSync(roomCode, null, {
     onClueSelected: ({ catId, value }) => {
       const data = session.data;
@@ -231,14 +191,6 @@ export default function JeopardyBoard({ onBack }) {
       persistence.persist();
     },
   });
-  // Daily Double wager, submitted by whoever currently holds board control
-  // (the player who picked the clue) from their own device. The server
-  // already validated discordUserId === controlDiscordUserId before
-  // relaying this — the check here is just a defensive re-confirm against
-  // whatever this tab currently thinks controlDiscordUserId is, in case
-  // control moved on (e.g. host used the manual fallback, then a stale/
-  // duplicate event from the player arrives a moment later) between the
-  // clue opening and this event landing.
   const { submitWager } = useWagerSync(roomCode, null, {
     onWagerSubmitted: ({ discordUserId, amount }) => {
       if (discordUserId !== controlDiscordUserId) return;
@@ -246,26 +198,18 @@ export default function JeopardyBoard({ onBack }) {
     },
   });
 
-  // Final Jeopardy wager/answer submitted from a player's own device —
-  // parallel across all teams, no control-holder gate (see useFinalSync).
-  // Resolves discordUserId -> team the same way judgeAnswer's buzz race
-  // does (teams.resolveTeamForDiscordUser), then clamps the wager against
-  // that team's current score before writing it in, same clamp
-  // FinalJeopardyBoard's own manual input applies. A team already below
-  // $0 may wager up to the size of its debt (so a correct answer brings
-  // it exactly back to $0), rather than being floored to a $0 max.
   useFinalSync(roomCode, null, {
     onFinalWagerSubmitted: ({ discordUserId, amount }) => {
       const team = teams.resolveTeamForDiscordUser(discordUserId);
       if (!team) return;
       const maxWager = team.score < 0 ? Math.abs(team.score) : team.score;
       const clamped = Math.max(0, Math.min(maxWager, Number(amount) || 0));
-      final.setWager(team.id, clamped);
+      final.submitWagerFromPlayer(team.id, clamped);
     },
     onFinalAnswerSubmitted: ({ discordUserId, answer }) => {
       const team = teams.resolveTeamForDiscordUser(discordUserId);
       if (!team) return;
-      final.setAnswer(team.id, answer);
+      final.submitAnswerFromPlayer(team.id, answer);
     },
   });
 
@@ -275,31 +219,19 @@ export default function JeopardyBoard({ onBack }) {
   const { publishRandomizer } = useRandomizerSync(roomCode);
   const { playerStats } = useStatsSync(roomCode);
 
-  // Skills (e.g. Domain Expansion): every client plays the cutscene; the host
-  // applies the server-computed score deltas when it ends, since the host owns
-  // scores. Same mutate-then-persist pattern usePersistence uses for teams.
+  // Skills (e.g
   const {
     activeSkill, clearActiveSkill, powerDrawResult, runPowerDraw, runPowerApply, clearPowerDrawResult,
     armedPowerups, frozenTeams, powerupNotice, clearPowerupNotice, consumeArmed,
     pendingSkillDeltas, ackSkillDeltas,
   } = useSkillSync(roomCode, null);
-  // Scores are applied on a plain timer (timed to the cutscene's hit moment) instead of
-  // when the animation ends: the cutscene runs on requestAnimationFrame, which browsers
-  // pause when the host window is in the background, so the points used to wait until
-  // the host alt-tabbed back. Timers still run in the background.
-  //
-  // Applying is idempotent per server `eventId`: ids already applied are kept in the
-  // session data itself (data.appliedSkillEvents), so neither a refresh nor a server
-  // resend (skillDeltasPending, sent when the host rejoins) can double-apply. The
-  // server keeps the deltas until we acknowledge, so damage is never lost if the host
-  // was away when the skill landed.
   const appliedSkillRef = useRef(null);
   const applySkillDeltas = (eventId, deltas) => {
     const current = persistence.sessionRef.current;
-    if (!current?.data?.teams) return; // session not loaded yet: stay pending, retried on rejoin
+    if (!current?.data?.teams) return;
     const applied = current.data.appliedSkillEvents || [];
     if (eventId && applied.includes(eventId)) {
-      ackSkillDeltas(eventId); // applied earlier but the ack never reached the server
+      ackSkillDeltas(eventId);
       return;
     }
     for (const { teamId, delta } of deltas || []) {
@@ -317,12 +249,11 @@ export default function JeopardyBoard({ onBack }) {
     const skill = activeSkill;
     if (!skill?.deltas?.length || appliedSkillRef.current === skill) return;
     appliedSkillRef.current = skill;
-    setTimeout(() => { // no cleanup on purpose: clearing activeSkill must not cancel it
+    setTimeout(() => {
       applySkillDeltasRef.current(skill.eventId, skill.deltas);
     }, HIT_AT + 600);
   }, [activeSkill]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Deltas the server resent because we weren't around to acknowledge them.
   useEffect(() => {
     for (const entry of pendingSkillDeltas || []) {
       applySkillDeltasRef.current(entry.id, entry.deltas);
@@ -330,10 +261,6 @@ export default function JeopardyBoard({ onBack }) {
   }, [pendingSkillDeltas]);
   const handleSkillDone = () => clearActiveSkill();
 
-  // Clear the synced randomizer state for players whenever the host leaves
-  // the randomizer screen (Back to Board, or applying an order — see
-  // applyRandomizerOrder below, which also clears it after broadcasting
-  // the final result).
   useEffect(() => {
     if (view !== "randomizer") publishRandomizer(null);
   }, [view, publishRandomizer]);
@@ -342,13 +269,6 @@ export default function JeopardyBoard({ onBack }) {
     publishRevealedCats(Array.from(board.revealedCats));
   }, [board.revealedCats, publishRevealedCats]);
 
-  // Mirrors the round-switch banner (RoundTabs' pop-up "DOUBLE JEOPARDY!"
-  // announcement) to players in real time — board.roundBanner already
-  // drives the host's own banner render, this just relays the same value.
-  // PlayerView uses this SAME signal (not a separate broadcast) to also
-  // time its own local flip-ripple choreography, since a second broadcast
-  // for boardFlip would race against boardUpdate over a different socket
-  // with no ordering guarantee between the two.
   useEffect(() => {
     publishRoundBanner(board.roundBanner);
   }, [board.roundBanner, publishRoundBanner]);
@@ -392,22 +312,12 @@ export default function JeopardyBoard({ onBack }) {
     );
   }
 
-  // Click/hover sfx is installed once at the App root (covers every
-  // screen: RoleSelect, LoginGate, and this board) — see App.jsx, not here.
-
   async function resetRound() {
     if (!(await appConfirm("Reset all scores to 0 and mark all clues unused (both rounds)? Your questions/answers/media stay."))) return;
     board.resetRoundClues();
     teams.resetAllScores();
   }
 
-  // Snapshots this playthrough into saved_games (see boards.js's POST
-  // /:id/games) — teams' final scores, a derived ranking, and the
-  // correct/wrong counts useStatsSync has been collecting from the
-  // server all game. discordUserId -> username/teamId is resolved here
-  // against persistence.players (the live roster), since the server-side
-  // playerStats blob only carries correct/wrong counts, not identity —
-  // see useStatsSync's comment for why.
   async function handleEndGame() {
     if (!(await appConfirm("End the game and save final standings? This can't be undone."))) return;
 
@@ -450,9 +360,7 @@ export default function JeopardyBoard({ onBack }) {
     persistence.persist();
   }
 
-  // On by default — the buzzer opens for everyone on Daily Doubles.
-  // Boards that existed before this setting was added are migrated to true
-  // by migrateClueSchemaIfNeeded in sessionStore.js.
+  // On by default
   function toggleDdBuzzerEnabled() {
     const d = session.data;
     d.settings.ddBuzzerEnabled = !d.settings.ddBuzzerEnabled;
@@ -460,11 +368,6 @@ export default function JeopardyBoard({ onBack }) {
     persistence.persist();
   }
 
-  // Off by default (undefined -> !undefined -> true on first toggle, same
-  // as toggleDdBuzzerEnabled) — preserves the original house rule (min
-  // wager = the clue's own value, so the range is value..2x) for every
-  // board that hasn't explicitly opted into allowing a $0 minimum. When
-  // on, teams can wager anywhere from $0 up to 2x the clue's value.
   function toggleDdMinWagerZero() {
     const d = session.data;
     d.settings.ddMinWagerZero = !d.settings.ddMinWagerZero;
@@ -472,16 +375,6 @@ export default function JeopardyBoard({ onBack }) {
     persistence.persist();
   }
 
-  // Off by default (undefined -> !undefined -> true on first toggle, same
-  // pattern as the two toggles above) — preserves the original house rule
-  // (max wager = 2x the clue's own value) for every board that hasn't
-  // explicitly opted in. When on, the max wager is based on the wagering
-  // team's own current score instead of the clue's value — combined with
-  // ddMinWagerZero this gives 4 total wager-range combinations:
-  //   min 0        + max card value  (original default)
-  //   min face val + max card value  (ddMinWagerZero off, this off)
-  //   min 0        + max team score  (ddMinWagerZero on,  this on)
-  //   min face val + max team score  (ddMinWagerZero off, this on)
   function toggleDdWagerBasisPlayerScore() {
     const d = session.data;
     d.settings.ddWagerBasisPlayerScore = !d.settings.ddWagerBasisPlayerScore;
@@ -516,9 +409,6 @@ export default function JeopardyBoard({ onBack }) {
     );
   }
 
-  // Final Jeopardy has no categories/values grid at all (see
-  // sessionStore.js's blankFinalRound) — these all fall back to safe
-  // defaults for that round rather than crashing on rd.categories.length.
   const nCats = rd.type === "final" ? 0 : rd.categories.length;
   const nRows = rd.type === "final" ? 0 : rd.values.length;
   const boardGridStyle =
@@ -532,14 +422,6 @@ export default function JeopardyBoard({ onBack }) {
   const activeClueObj = activeCat && clueEditor.activeClue ? activeCat.clues[clueEditor.activeClue.value] : null;
   const editingCat = rd.type !== "final" && clueEditor.editingTarget ? rd.categories.find((c) => c.id === clueEditor.editingTarget.catId) : null;
 
-  // Applies the randomized order to the board (same as before), then hands
-  // board control to whichever discordUserId is attached to the 1st-place
-  // team, so that team can immediately pick the first clue without the
-  // host needing a separate manual "Board control" step. Falls back to
-  // OPEN_CONTROL (anyone may pick) if the winning team has nobody's
-  // Discord account linked yet, rather than leaving control locked to
-  // nobody. Also clears the synced randomizer state so players' screens
-  // drop back out of the randomizer view once the host is done with it.
   function applyRandomizerOrder(order) {
     teams.applyTeamOrder(order);
     const firstDiscordId = order[0]?.discordUserIds?.[0] || null;

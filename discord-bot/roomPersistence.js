@@ -1,19 +1,8 @@
-// Saves live room state to Supabase (table: game_rooms, see
-// migrations/001_game_rooms.sql) and restores it on startup, so a restart
-// or redeploy doesn't wipe scores and teams mid-game.
-//
-// Deliberately non-invasive: handlers keep mutating the in-memory Map as
-// before. A timer notices which rooms changed and saves only those, so no
-// handler needs to know persistence exists. If Supabase is unreachable or
-// the table is missing, the game keeps running purely in memory.
-
 const SAVE_INTERVAL_MS = 5000;
-const ROOM_TTL_MS = 12 * 60 * 60 * 1000;      // restore / keep rooms active in the last 12h
-const PURGE_AFTER_MS = 3 * 24 * 60 * 60 * 1000; // delete rows untouched for 3 days
+const ROOM_TTL_MS = 12 * 60 * 60 * 1000;
+const PURGE_AFTER_MS = 3 * 24 * 60 * 60 * 1000;
 const TABLE = 'game_rooms';
 
-// Only durable game state. Sockets, timers, live audio/animation state
-// (bgm, randomizer, buzzer, skillBusyUntil) are meaningless after a restart.
 function serializeRoom(room) {
   if (!room?.board) return null; // nothing worth saving yet
   return {
@@ -29,8 +18,6 @@ function serializeRoom(room) {
     armedPowerups: room.armedPowerups ?? null,
     frozenTeams: room.frozenTeams ?? null,
     pendingDraw: room.pendingDraw ?? null,
-    // No socket survives a restart; players come back as "disconnected"
-    // and re-attach by discordUserId when they rejoin (joinAsPlayer).
     players: (room.players || []).map((p) => ({ ...p, socketId: null, connected: false })),
   };
 }
@@ -44,7 +31,7 @@ function reviveRoom(state) {
 }
 
 function createRoomPersistence({ supabase, gameRooms, log = console }) {
-  const lastSaved = new Map(); // roomCode -> JSON string last written
+  const lastSaved = new Map();
   let enabled = !!supabase;
   let timer = null;
   let saving = false;
@@ -104,7 +91,6 @@ function createRoomPersistence({ supabase, gameRooms, log = console }) {
     } finally { saving = false; }
   }
 
-  // Call when a room code is retired (rotateRoomCode) so the old row doesn't resurrect.
   function forget(code) {
     lastSaved.delete(code);
     if (enabled) supabase.from(TABLE).delete().eq('room_code', code).then(() => {}, () => {});

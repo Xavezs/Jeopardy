@@ -29,7 +29,7 @@ function makeCtx(overrides = {}) {
     gameRooms, hasEquippedSkill: () => true,
     io: { to: (code) => ({ emit: (ev, payload) => broadcasts.push([code, ev, payload]) }) },
     emitControlState: () => {}, invalidatedRoomCodes: new Set(), sendRoomState: () => {},
-    hostAuth: { canHost: () => ({ ok: true }) },
+    hostAuth: { canHost: () => ({ ok: true }) }, hostLocks: new Map(), roomCodeExists: () => true,
     ...overrides,
   };
   return { ctx, broadcasts, gameRooms };

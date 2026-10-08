@@ -8,85 +8,20 @@ import {
   getFinalStandingsVolume,
 } from "../lib/boardSfx";
 
-/* =========================================================================
-   PLAYER BGM WIDGET
-   Read-only mirror of the host's BackgroundMusicPlayer — a player can't
-   start/stop/skip the track (that's the host's call, synced via
-   useBgmSync -> usePlayerSync's `bgm`), but they DO get their own
-   independent volume, stored locally (per room) and never sent anywhere.
-
-   Track source: a plain <audio> element playing whatever the host has
-   loaded (uploaded file or direct audio URL).
-
-   NOTE: SoundCloud mirroring was removed — see lib/soundcloud.js and
-   BackgroundMusicPlayer.jsx for why. If `bgm.source` is still
-   "soundcloud" from data saved before this change, it's just treated as
-   no track (falls back to bgm.fileRef, which will be empty).
-
-   Final Standings celebration sound volume: same "local, per-device,
-   never synced" pattern as the BGM volume above, just backed by
-   boardSfx.js's own storage key (jp_final_standings_volume) instead of
-   this file's own localStorage key. playStandingsCelebration() is
-   triggered independently on every client (host + each player), and
-   each one reads finalStandingsVolume from boardSfx.js's local module
-   state at play time — so hydrating/setting it here is enough to control
-   this player's own copy of the celebration sound, with no server
-   round-trip needed.
-
-   Position sync: `bgm.positionSeconds` + `bgm.updatedAt` (a server-clock
-   timestamp) let us compute where the track should actually be right now
-   — positionSeconds, plus elapsed wall-clock time since updatedAt if
-   still playing — without needing a continuous position stream. We only
-   nudge currentTime when drift exceeds DRIFT_TOLERANCE_S, so small clock
-   differences between client/server don't cause constant choppy seeking.
-
-   Rendering: this widget is `position: fixed`, but PlayerView's root
-   (.pv-root) sets `overflow-x: hidden`, which per spec forces
-   overflow-y to a non-visible value too — and a non-visible overflow
-   ancestor clips ALL descendants during paint, including fixed-position
-   ones, regardless of their actual containing block. Left alone, that
-   clips this widget to .pv-root's box instead of floating freely over
-   the whole viewport like the host's BackgroundMusicPlayer does.
-   Portalling straight to document.body sidesteps that entirely — same
-   fix pattern as any fixed-position overlay nested inside a clipped
-   ancestor.
-
-   Browser autoplay policies block audio.play() until the page has seen a
-   user gesture. Since playback here is triggered by an incoming socket
-   event rather than a click, the first attempt after a fresh page load
-   commonly gets rejected — needsGesture surfaces a one-tap "Enable sound"
-   prompt for that case rather than silently failing forever.
-   ========================================================================= */
+// PLAYER BGM WIDGET
 const DRIFT_TOLERANCE_S = 1.5;
-// Master ceiling for the BGM source itself — even at slider max, actual
-// gain never exceeds this. Lower this if the track is just too loud
-// overall regardless of anyone's individual slider setting.
+// Master ceiling for the BGM source itself
 const MASTER_BGM_GAIN = 0.6;
-// How much quieter the track gets while ducked (Daily Double, Final
-// Standings celebration, Final Jeopardy media, clue video/audio, etc. —
-// see subscribeSfxDucking below). 0 = fully silent. Keep in sync with
-// BackgroundMusicPlayer.jsx's DUCK_LEVEL so host and players mute by
-// the same amount.
 const DUCK_LEVEL = 0;
 const DUCK_FADE_MS = 700;
-// How long the fade-in takes whenever playback actually starts (player
-// just joined mid-song, or the host just hit play). Without this, the
-// track snaps straight to full gain the instant it starts, which reads
-// as a sudden loud "jolt" even when the steady-state volume is fine.
 const FADE_IN_MS = 900;
-// How long the OLD track fades out before the host switching rounds
-// (perRound mode) swaps bgm.fileRef to the new round's track. Keep in
-// sync with BackgroundMusicPlayer.jsx's identical constant.
 const ROUND_FADE_OUT_MS = 500;
 
 function calcGain(sliderVolume) {
   return sliderVolume * sliderVolume * MASTER_BGM_GAIN;
 }
 
-// Applies ducking on top of calcGain's taper — same combination
-// BackgroundMusicPlayer.jsx uses, just factored out here since this file
-// needs it at more call sites (drift-correction re-sync, fade targets,
-// and the ducking toggle itself).
+// Applies ducking on top of calcGain's taper
 function calcDuckedGain(sliderVolume, ducking) {
   return calcGain(ducking ? sliderVolume * DUCK_LEVEL : sliderVolume);
 }
@@ -99,20 +34,13 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
   const [open, setOpen] = useState(false);
   const [mediaUrl, setMediaUrl] = useState("");
   const [needsGesture, setNeedsGesture] = useState(false);
-  // Ducked while boardSfx.js's ducking bus is active (currently just
-  // Final Standings' celebration sound) — separate from the host's own
-  // ducking, since that only affects the host's copy of the BGM audio.
-  // Each player's client plays its own independent BGM audio element, so
-  // each one needs to duck itself in response to the same bus.
   const [ducking, setDucking] = useState(false);
   useEffect(() => subscribeSfxDucking(setDucking), []);
   const [volume, setVolume] = useState(() => {
     const saved = parseFloat(localStorage.getItem(volumeKey(roomCode)));
     return Number.isFinite(saved) ? Math.max(0, Math.min(1, saved)) : 0.15;
   });
-  // Celebration-sound volume — starts from boardSfx.js's in-memory
-  // default and gets hydrated from storage on mount, same as
-  // JeopardyBoard does on the host side.
+  // Celebration-sound volume
   const [fsVolume, setFsVolume] = useState(getFinalStandingsVolume());
   useEffect(() => {
     let cancelled = false;
@@ -130,23 +58,12 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
   const audioRef = useRef(null);
   const fadeRafRef = useRef(null);
   const prevPlayingRef = useRef(false);
-  // Live-value mirrors of `ducking`/`volume` for the async .then()
-  // callbacks below (after audio.play() resolves) — by the time those
-  // fire, the values captured in the effect's closure at the moment it
-  // started could already be stale if ducking flipped in between. Same
-  // fix as BackgroundMusicPlayer.jsx's identical refs.
   const duckingRef = useRef(ducking);
   const volumeRef = useRef(volume);
   useEffect(() => {
     duckingRef.current = ducking;
     volumeRef.current = volume;
   });
-  // Set right before swapping to a new round's track (see the
-  // bgm.fileRef effect below) whenever we just faded the previous track
-  // out — forces the play/pause-mirroring effect further down to treat
-  // this as a fresh fade-in even though `bgm.playing` never actually
-  // went false across the switch (the host kept "playing" continuously
-  // through the round change; only the track itself changed).
   const forceFadeInRef = useRef(false);
 
   function cancelFade() {
@@ -182,12 +99,6 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
 
   useEffect(() => cancelFade, []);
 
-  // Resolve the current track's fileRef into a playable URL. If the
-  // previous track was actually playing, fade it out first instead of
-  // letting the <audio> src swap out from under it silently mid-note —
-  // mirrors BackgroundMusicPlayer.jsx's identical fix on the host side,
-  // so a round change (perRound mode) sounds like "duck out, swap,
-  // bloom back in" for players too, not a hard cut.
   useEffect(() => {
     let cancelled = false;
 
@@ -221,35 +132,17 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgm?.fileRef]);
 
-  // Keep this player's own volume local-only — saved per room so it
-  // survives a reload, but never sent to the server or anyone else.
-  //
-  // Human hearing perceives loudness roughly logarithmically, while
-  // <audio>.volume is linear — so a raw slider value of e.g. 0.3 sounds
-  // much louder than "30% as loud" would suggest. Squaring the slider
-  // value before assigning it as gain (a common taper approximation)
-  // makes the low end of the slider actually feel quiet.
+  // Keep this player's own volume local-only
   useEffect(() => {
     cancelFade();
     if (audioRef.current) audioRef.current.volume = calcDuckedGain(volume, ducking);
     try {
       localStorage.setItem(volumeKey(roomCode), String(volume));
     } catch {
-      /* private-browsing localStorage can throw — losing the saved
-         preference isn't worth surfacing an error for */
     }
-    // `ducking` is deliberately excluded below: it's still read inside
-    // this effect (so a manual volume-slider drag while ducked respects
-    // the ducked level), but ducking *transitions* are handled by the
-    // dedicated fade effect right after this one. If both effects reacted
-    // to `ducking`, this one's instant snap would win the race and
-    // cancel out the other's fade.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [volume, roomCode]);
 
-  // Smoothly fade in/out when ducking toggles, rather than snapping —
-  // mirrors BackgroundMusicPlayer.jsx's identical effect on the host
-  // side, just reading `ducking` from the bus instead of a prop.
   useEffect(() => {
     if (!audioRef.current) return;
     fadeVolumeTo(calcDuckedGain(volume, ducking), DUCK_FADE_MS);
@@ -257,7 +150,6 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ducking]);
 
-  // Mirror the host's play/pause + position whenever bgm state changes.
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio || !mediaUrl || !bgm) return;

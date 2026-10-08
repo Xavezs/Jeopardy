@@ -6,14 +6,9 @@ import stopSound     from "../assets/slot-stop.mp3";
 import winSound      from "../assets/slot-win.mp3";
 import wheelSpinSound from "../assets/spinning-wheel.mp3";
 
-/* =========================================================================
-   RANDOMIZER — two modes:
-     "order"   — spin wheel (spinning-wheel.mp3 drives duration), picks who
-                 goes first
-     "powerup" — slot machine with lever, assigns a random power-up per team
-   ========================================================================= */
+// RANDOMIZER
 
-/* ── Slot constants (powerup tab) ── */
+// Slot constants (powerup tab)
 const CELL_HEIGHT   = 92;
 const LOOPS         = 7;
 const BASE_DURATION = 2350;
@@ -22,10 +17,10 @@ const LEVER_TRAVEL         = 216;
 const LEVER_PULL_THRESHOLD = 0.6;
 const LEVER_TAP_DISTANCE   = 8;
 
-/* ── Wheel constants ── */
+// Wheel constants
 const WHEEL_SPIN_ROTATIONS = 30; // full extra rotations before landing
 
-/* ── Power-up catalog ── */
+// Power-up catalog
 const POWERUPS = [
   { id: "double", label: "2x Points", desc: "Next correct answer scores double" },
   { id: "shield", label: "Shield",    desc: "Negate one wrong-answer penalty" },
@@ -33,21 +28,19 @@ const POWERUPS = [
   { id: "freeze", label: "Freeze",    desc: "Skip an opposing team's next turn" },
   { id: "hint",   label: "Hint",      desc: "Eliminate one wrong option on a clue" },
   { id: "rebuzz", label: "Re-Buzz",   desc: "Override the buzzer queue — jump to front" },
-  // Skill from the shop. NOT handed out by the random shuffle: whether a player
-  // lands on it is decided by the server's per-player grantChance roll (see
-  // `onPowerDraw` in PowerupSlot), which also unlocks the in-game button.
+  // Skill from the shop
   { id: "domain", label: "Domain Expansion", desc: "Every other team loses 20% of its score (max 1000). One use per win; spin again to win it back." },
 ];
 const DOMAIN_LABEL = "Domain Expansion";
 const FILLER_POWERUPS = POWERUPS.filter((p) => p.label !== DOMAIN_LABEL);
 
-/* ── Wheel segment colours ── */
+// Wheel segment colours
 const SEGMENT_COLORS = [
   "#1c2f9e","#0f5e6e","#6b2090","#8a3020",
   "#1a6b2e","#7a6200","#1a4a8a","#5a1a5a",
 ];
 
-/* ── Audio ── */
+// Audio
 const startAudio    = new Audio(startSound);
 const spinningAudio = new Audio(spinningSound);
 const stopAudio     = new Audio(stopSound);
@@ -65,7 +58,7 @@ function getAudioCtx() {
   return sharedAudioCtx;
 }
 
-/* Slot-tab audio helpers */
+// Slot-tab audio helpers
 function playStartAndSpinOnce() {
   try {
     getAudioCtx();
@@ -80,7 +73,7 @@ function playWin() {
   try { getAudioCtx(); winAudio.currentTime = 0; winAudio.volume = 0.7; winAudio.play(); } catch (_) {}
 }
 
-/* ── Utilities ── */
+// Utilities
 function shuffle(arr) {
   const a = arr.slice();
   for (let i = a.length - 1; i > 0; i--) {
@@ -95,7 +88,7 @@ function escapeHtml(str) {
     (c) => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 }
 
-/* ── Shared slot reel engine ── */
+// Shared slot reel engine
 function buildStrip(items, targetItem) {
   const strip = [];
   for (let l = 0; l < LOOPS; l++) strip.push(...shuffle(items));
@@ -121,7 +114,7 @@ function animateReel({ trackEl, strip, duration, onDone, cellClass = "", cellHei
   return () => { if (rafId) cancelAnimationFrame(rafId); };
 }
 
-/* ── Lever (powerup tab) ── */
+// Lever (powerup tab)
 function Lever({ canPull, handleRef, onPointerDown, onPointerMove, onPointerUp, onKeyDown }) {
   return (
     <div className="lever-col">
@@ -144,12 +137,7 @@ function Lever({ canPull, handleRef, onPointerDown, onPointerMove, onPointerUp, 
   );
 }
 
-/* =========================================================================
-   SPIN WHEEL — SVG pie, one segment per team, pointer at top.
-   Duration = however long spinning-wheel.mp3 plays. rAF drives the
-   rotation with easeOutCubic over the last 30% of the audio so it
-   visually decelerates before the 'ended' event snaps it to the winner.
-   ========================================================================= */
+// SPIN WHEEL
 function segmentPath(cx, cy, r, startAngle, endAngle) {
   const toRad = (d) => (d * Math.PI) / 180;
   const x1 = cx + r * Math.cos(toRad(startAngle));
@@ -193,17 +181,14 @@ function WheelSVG({ teams, rotation }) {
         const endA   = startA + segAngle;
         const midA   = startA + segAngle / 2;
         const toRad  = (d) => (d * Math.PI) / 180;
-        // Centre the label in the free band between the hub cap and the rim,
-        // so the text is balanced instead of hugging the outer edge.
         const bandInner = 28 + 16;   // cap radius + gap
         const bandOuter = r - 14;    // rim minus padding
         const textR  = (bandInner + bandOuter) / 2;
         const tx = cx + textR * Math.cos(toRad(midA));
         const ty = cy + textR * Math.sin(toRad(midA));
         const color = SEGMENT_COLORS[i % SEGMENT_COLORS.length];
-        // Shrink the font to fit the radial band; truncate only as a last resort.
         const bandLen  = bandOuter - bandInner;
-        const CHAR_W   = 0.7;        // approx. Arial Black glyph width / font size
+        const CHAR_W   = 0.7;
         const MIN_FONT = 11;
         let fontSize = Math.max(MIN_FONT, Math.min(20, 180 / n));
         let label = team.name;
@@ -271,11 +256,6 @@ function SpinWheel({ teams, readOnly, syncedState, onSpun }) {
     if (targetIndex < 0) { setSpinning(false); return; }
 
     const segAngle   = 360 / n;
-    // Segments are drawn starting at (i * segAngle - 90) degrees in SVG space.
-    // The centre of segment i is therefore at (i * segAngle - 90 + segAngle/2).
-    // The pointer sits at the top of the container = 270° in CSS rotate space.
-    // To land segment i under the pointer, rotate the wheel so that
-    // segCentre aligns with 270°.
     const segCentre  = targetIndex * segAngle - 90 + segAngle / 2;
     const landing    = (270 - segCentre + 360) % 360;
     const startRot   = rotationRef.current % 360;
@@ -284,7 +264,6 @@ function SpinWheel({ teams, readOnly, syncedState, onSpun }) {
     const startRaw   = rotationRef.current;
     const endRot     = startRaw + totalDelta;
 
-    // Snap wheel to final position and mark done
     function land() {
       rotationRef.current = endRot;
       setRotation(endRot);
@@ -292,27 +271,19 @@ function SpinWheel({ teams, readOnly, syncedState, onSpun }) {
       setWinner(targetTeam);
     }
 
-    // The wheel spins for exactly as long as the audio plays.
-    // 'ended' fires when the mp3 finishes — that's when we land.
     function onEnded() {
       if (rafRef.current) { cancelAnimationFrame(rafRef.current); rafRef.current = null; }
       land();
     }
 
-    // rAF loop — runs until onEnded cancels it.
-    // Uses the audio element's currentTime so the easing mirrors the
-    // actual playback position even if the audio stutters slightly.
     const startTime = performance.now();
     function step(now) {
       const audioDuration = (wheelAudio.duration && isFinite(wheelAudio.duration))
         ? wheelAudio.duration * 1000
-        : 4000; // fallback if metadata not yet loaded
+        : 4000;
       const elapsed  = now - startTime;
       const rawT = Math.min(0.99, elapsed / audioDuration);
-      // Single continuous curve — no piecewise join, no velocity jump.
-      // easeOutQuart: starts very fast (slope 4 at t=0), decelerates
-      // smoothly all the way to a dead stop at t=1.
-      // f(t) = 1 - (1-t)^4
+      // Single continuous curve
       const t = 1 - Math.pow(1 - rawT, 4);
       setRotation(startRaw + t * totalDelta);
       rafRef.current = requestAnimationFrame(step);
@@ -323,7 +294,7 @@ function SpinWheel({ teams, readOnly, syncedState, onSpun }) {
     wheelAudio.volume = 0.7;
     wheelAudio.addEventListener("ended", onEnded, { once: true });
     wheelAudio.play().catch(() => {
-      // Autoplay blocked — use a 4 s fallback with the same easing
+      // Autoplay blocked
       wheelAudio.removeEventListener("ended", onEnded);
       const fallback = 4000;
       const st = performance.now();
@@ -414,30 +385,21 @@ function SpinWheel({ teams, readOnly, syncedState, onSpun }) {
   );
 }
 
-/* =========================================================================
-   POWER-UP SLOT — redesigned:
-     • One column PER PLAYER (not per team), with slotCount reels each
-     • Host sees all players; player in readOnly sees only their own column
-     • Host controls slotCount (1–3) via a +/- picker before spinning
-     • Broadcast: playerPowerups: { [discordUserId]: string[] }, slotCount
-   ========================================================================= */
+// POWER-UP SLOT
 function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, onPowerDraw }) {
   const [applying, setApplying] = useState(false);
   const [slotCount,  setSlotCount]  = useState(syncedState?.slotCount ?? 1);
   const [spinning,   setSpinning]   = useState(false);
   const [finished,   setFinished]   = useState(false);
   const [resultMap,  setResultMap]  = useState(null);
-  const [drawing,    setDrawing]    = useState(false); // waiting on the server's grant roll
+  const [drawing,    setDrawing]    = useState(false);
   const [drawError,  setDrawError]  = useState(null);
 
-  // Flat array of refs — index = playerIndex * slotCount + itemIndex
-  // Stored as a plain object so we can assign by key without re-creating the ref
+  // Flat array of refs
   const trackRefs    = useRef({});
   const cancelFns    = useRef({});
   const lastHandledAt = useRef(null);
 
-  // Stable ref to the current visible player list so runSpin always sees
-  // the latest value without needing to be in its dep array
   const visiblePlayersRef = useRef([]);
   const visiblePlayers = readOnly && myDiscordUserId
     ? players.filter((p) => p.discordUserId === myDiscordUserId)
@@ -451,7 +413,6 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
   }, []);
   useEffect(() => stopAll, [stopAll]);
 
-  // runSpin reads visiblePlayersRef.current at call time — no stale closure
   const runSpin = useCallback((playerPowerups, sc) => {
     if (!playerPowerups || Object.keys(playerPowerups).length === 0) return;
     const vp = visiblePlayersRef.current;
@@ -461,7 +422,6 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
     setSpinning(true);
     playStartAndSpinOnce();
 
-    // Build a flat list of { label, key } for every reel we need to animate
     const reels = [];
     vp.forEach((player, pi) => {
       const labels = playerPowerups[player.discordUserId] || [];
@@ -498,12 +458,9 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
     });
 
     setTimeout(() => setFinished(true), BASE_DURATION + (totalReels - 1) * STAGGER + 50);
-  }, [stopAll]);  // only stopAll — reads visiblePlayersRef at call time
+  }, [stopAll]);
 
   // Host spin
-  // The server rolls each eligible player's Domain Expansion chance first;
-  // winners get it in one of their slots, everyone else gets ordinary
-  // power-ups only. The finished result is then broadcast to all players.
   const spin = useCallback(async () => {
     if (players.length < 1 || spinning || drawing) return;
     setDrawError(null);
@@ -533,7 +490,7 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
     runSpin(playerPowerups, slotCount);
   }, [players, slotCount, spinning, drawing, onSpun, onPowerDraw, runSpin]);
 
-  // Player replay — live spin
+  // Player replay
   useEffect(() => {
     if (!readOnly || !syncedState?.spinning || !syncedState.playerPowerups) return;
     if (lastHandledAt.current === syncedState.startedAt) return;
@@ -567,7 +524,7 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [readOnly, syncedState]);
 
-  /* Lever */
+  // Lever
   const handleRef   = useRef(null);
   const draggingRef = useRef(false);
   const startYRef   = useRef(0);
@@ -615,7 +572,7 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
 
   return (
     <>
-      {/* Slot count picker — host only */}
+      {/* Slot count picker */}
       {!readOnly && (
         <div className="pu-slot-count-row">
           <span className="pu-slot-count-label">Items per player</span>
@@ -738,25 +695,22 @@ function PowerupSlot({ players, myDiscordUserId, readOnly, syncedState, onSpun, 
 }
 
 
-/* =========================================================================
-   TOP-LEVEL EXPORT
-   ========================================================================= */
+// TOP-LEVEL EXPORT
 export default function TeamRandomizer({
   teams,
-  players,           // roster: [{ discordUserId, discordUsername, teamId, ... }]
-  myDiscordUserId,   // current player's id — null on host
+  players,
+  myDiscordUserId,
   onApplyOrder,
   onClose,
   onBroadcast,
-  onPowerDraw,       // host only: () => Promise<{ winners } | { error }> — server grant roll (preview only)
-  onPowerApply,      // host only: (playerPowerups) => Promise<{ ok } | { error }> — commits the grants
+  onPowerDraw,
+  onPowerApply,
   readOnly = false,
   syncedState = null,
 }) {
   const [mode, setMode] = useState("order");
   const activeMode = readOnly ? (syncedState?.mode ?? "order") : mode;
 
-  // Normalise players: filter to those with a Discord id, deduplicate
   const playerList = useMemo(() => {
     const seen = new Set();
     return (players || []).filter((p) => {
@@ -793,8 +747,7 @@ export default function TeamRandomizer({
     }
   }
 
-  // Spinning is only a preview. Nothing is granted until the host confirms with
-  // "Apply Power-ups", which asks the server to hand out every item.
+  // Spinning is only a preview
   async function handlePowerupSpun({ playerPowerups, slotCount }, apply) {
     if (!apply) {
       onBroadcast?.({ active: true, mode: "powerup", spinning: true, order: null, playerPowerups, slotCount, startedAt: Date.now() });

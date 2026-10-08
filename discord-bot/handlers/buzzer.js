@@ -1,37 +1,51 @@
-// Socket handlers: buzzer. Registered per-connection from handlers/index.js.
+// Socket handlers: buzzer
+const { roomCodeOf, isHostOf, isMemberOf, identityOf } = require('./guards');
+
+const MAX_QUEUE = 100;
+
 module.exports = function registerBuzzerHandlers(socket, ctx) {
   const { gameRooms, io, teamOfPlayer } = ctx;
 
-  function updateBuzzer(rawRoomCode, update) {
-    if (typeof rawRoomCode !== 'string') return;
-    const roomCode = rawRoomCode.trim().toUpperCase();
+  // Buzzer CONTROLS are host-only
+  function hostUpdateBuzzer(rawRoomCode, update) {
+    const roomCode = roomCodeOf(rawRoomCode);
     if (!roomCode) return;
+    if (!isHostOf(socket, roomCode)) {
+      socket.emit('errorMsg', 'Only the host can control the buzzer.');
+      return;
+    }
     const room = gameRooms.get(roomCode) || {};
     room.buzzer = update(room.buzzer || { live: false, queue: [], activeIndex: -1 });
     gameRooms.set(roomCode, room);
     io.to(roomCode).emit('buzzerState', room.buzzer);
   }
 
+  socket.on('armBuzzer', (r) => hostUpdateBuzzer(r, (buzzer) => ({ ...buzzer, live: true, queue: [], activeIndex: -1 })));
+  socket.on('resetBuzzer', (r) => hostUpdateBuzzer(r, () => ({ live: false, queue: [], activeIndex: -1 })));
+  socket.on('nextBuzzer', (r) => hostUpdateBuzzer(r, (buzzer) => ({ ...buzzer, activeIndex: buzzer.activeIndex + 1 })));
+  socket.on('prevBuzzer', (r) => hostUpdateBuzzer(r, (buzzer) => ({ ...buzzer, activeIndex: Math.max(-1, buzzer.activeIndex - 1) })));
 
-  socket.on('armBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, (buzzer) => ({ ...buzzer, live: true, queue: [], activeIndex: -1 })));
-  socket.on('resetBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, () => ({ live: false, queue: [], activeIndex: -1 })));
-  socket.on('nextBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, (buzzer) => ({ ...buzzer, activeIndex: buzzer.activeIndex + 1 })));
-  socket.on('prevBuzzer', (rawRoomCode) => updateBuzzer(rawRoomCode, (buzzer) => ({ ...buzzer, activeIndex: Math.max(-1, buzzer.activeIndex - 1) })));
-  
-  socket.on('buzz', ({ roomCode: rawRoomCode, player }) => {
-    if (!player?.id) return;
-    if (typeof rawRoomCode === 'string') {
-      const r = gameRooms.get(rawRoomCode.trim().toUpperCase());
-      const tid = r ? teamOfPlayer(r, player.id) : null;
-      if (tid && r.frozenTeams?.[tid]?.live) {
-        socket.emit('errorMsg', 'Your team is frozen for this clue.');
-        return;
-      }
+  socket.on('buzz', (payload) => {
+    const roomCode = roomCodeOf(payload?.roomCode);
+    if (!roomCode || !isMemberOf(socket, roomCode)) return;
+    const room = gameRooms.get(roomCode);
+    const uid = identityOf(socket, payload?.player?.id);
+    const me = uid && room?.players?.find((p) => p.discordUserId === uid);
+    if (!me) return;
+
+    const tid = teamOfPlayer(room, uid);
+    if (tid && room.frozenTeams?.[tid]?.live) {
+      socket.emit('errorMsg', 'Your team is frozen for this clue.');
+      return;
     }
-    updateBuzzer(rawRoomCode, (buzzer) => {
-      if (!buzzer.live || buzzer.queue.some((entry) => entry.id === player.id)) return buzzer;
-      const queue = [...buzzer.queue, player];
-      return { ...buzzer, queue, activeIndex: buzzer.activeIndex === -1 ? 0 : buzzer.activeIndex };
-    });
+    const entry = { id: uid, username: me.discordUsername || uid, avatarUrl: me.discordAvatarUrl || null };
+
+    room.buzzer = room.buzzer || { live: false, queue: [], activeIndex: -1 };
+    const b = room.buzzer;
+    if (!b.live || b.queue.length >= MAX_QUEUE || b.queue.some((e) => e.id === uid)) return;
+    const queue = [...b.queue, entry];
+    room.buzzer = { ...b, queue, activeIndex: b.activeIndex === -1 ? 0 : b.activeIndex };
+    gameRooms.set(roomCode, room);
+    io.to(roomCode).emit('buzzerState', room.buzzer);
   });
 };

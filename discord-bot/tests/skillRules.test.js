@@ -1,7 +1,4 @@
-// Rules: one use per WIN. A player who holds an unused skill does not roll
-// again; a player who has spent it rolls again on the next spin, and winning
-// re-arms it. Another player's use never blocks yours; the host may spin as
-// often as they like.
+// Rules: one use per WIN
 const test = require('node:test');
 const assert = require('node:assert');
 const registerSkills = require('../handlers/skills');
@@ -78,7 +75,7 @@ test('the same player cannot use it twice without winning it again', () => {
 test('a player holding an unused skill does not roll again', () => {
   const s = setup({ equipped: ['u1'] });
   assert.equal(s.spinAndApply().winners.length, 1);   // u1 wins
-  assert.equal(s.spinAndApply().winners.length, 0);   // still holding it unused: no roll
+  assert.equal(s.spinAndApply().winners.length, 0);
   assert.deepEqual(s.room().skillsGranted, { u1: [SKILL] });
 });
 
@@ -91,7 +88,7 @@ test('after using it, a later spin can give it to the same player again', () => 
   assert.equal(s.spinAndApply().winners.length, 1);               // rolls again and wins
   assert.deepEqual(s.room().skillsUsed, { u1: [] });              // re-armed
   s.room().skillBusyUntil = 0;
-  assert.ok(!s.use('u1').some(([ev]) => ev === 'errorMsg'));      // can use it a second time
+  assert.ok(!s.use('u1').some(([ev]) => ev === 'errorMsg'));
   assert.deepEqual(s.room().skillsUsed, { u1: [SKILL] });
 });
 

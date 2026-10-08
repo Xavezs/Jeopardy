@@ -1,14 +1,8 @@
-// Socket handlers: powerups. Registered per-connection from handlers/index.js.
+// Socket handlers: powerups
 module.exports = function registerPowerupsHandlers(socket, ctx) {
   const { MAX_ROOM_CODE_LENGTH, POWERUP_KINDS, broadcastGrants, broadcastPowerupState, buildAnswerHint, currentRound, emitControlState, findActiveClue, gameRooms, getEquippedSkills, io, teamOfPlayer } = ctx;
 
 
-  // Host lever pull on the Randomizer's Power-ups tab. Every connected,
-  // teamed player with a skill equipped (and not yet granted it) rolls that
-  // skill's grantChance. Winners are added to room.skillsGranted, which is
-  // what unlocks the in-game button. The roll happens here; the host's client
-  // gets the winners back through the socket ack and builds the slot-machine
-  // result from them (the spin is then broadcast via `randomizerUpdate`).
   socket.on('hostPowerDraw', ({ roomCode: rawRoomCode } = {}, ack) => {
     const reply = (payload) => { if (typeof ack === 'function') ack(payload); };
     if (typeof rawRoomCode !== 'string') { reply({ error: 'Bad request.' }); return; }
@@ -40,8 +34,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
       if (!uid || !player.teamId || player.connected === false || seen.has(uid)) continue;
       seen.add(uid);
 
-      // Only skip players who are currently holding an UNUSED copy. Once a
-      // player has spent a skill they roll for it again on the next spin.
       const already = room.skillsGranted[uid] || [];
       const spent = room.skillsUsed?.[uid] || [];
       for (const skill of getEquippedSkills(uid)) {
@@ -60,10 +52,7 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
     }
     gameRooms.set(roomCode, room);
 
-    // Nothing is granted yet: this roll is only a preview for the host. The
-    // winners are held here until the host confirms with `hostPowerApply`.
     room.pendingDraw = results.filter((r) => r.won).map((r) => ({ discordUserId: r.discordUserId, skillId: r.skillId }));
-    // Only the winners are needed by the Randomizer (per-skill, per-player).
     reply({
       winners: results
         .filter((r) => r.won)
@@ -71,9 +60,7 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
     });
   });
 
-  // Host clicks "Apply Power-ups" after the spin. Only now does anyone receive
-  // anything: the previewed skill winners are unlocked, and every item shown in
-  // the spin is stored for its player. Each player is sent only their own.
+  // Host clicks "Apply Power-ups" after the spin
   socket.on('hostPowerApply', ({ roomCode: rawRoomCode, playerPowerups } = {}, ack) => {
     const reply = (payload) => { if (typeof ack === 'function') ack(payload); };
     if (typeof rawRoomCode !== 'string') { reply({ error: 'Bad request.' }); return; }
@@ -98,7 +85,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
     for (const w of room.pendingDraw || []) {
       const have = room.skillsGranted[w.discordUserId] || [];
       if (!have.includes(w.skillId)) room.skillsGranted[w.discordUserId] = [...have, w.skillId];
-      // Winning a skill again clears its "used" mark: one use per win.
       const spent = room.skillsUsed?.[w.discordUserId];
       if (spent?.includes(w.skillId)) {
         room.skillsUsed[w.discordUserId] = spent.filter((id) => id !== w.skillId);
@@ -122,9 +108,7 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
     reply({ ok: true });
   });
 
-  // Player activates one of their granted power-ups. Allowed during a clue and
-  // on the board. Validates identity, Final Jeopardy lockout and that the
-  // player actually holds the item, then consumes it and applies its effect.
+  // Player activates one of their granted power-ups
   socket.on('usePowerup', ({ roomCode: rawRoomCode, label, discordUserId, targetTeamId } = {}, ack) => {
     const reply = (payload) => { if (typeof ack === 'function') ack(payload); };
     const fail = (msg) => { socket.emit('errorMsg', msg); reply({ error: msg }); };
@@ -153,7 +137,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
     const teamId = player.teamId;
     let hint = null;
 
-    // ── per-kind validation (nothing is consumed until every check passes) ──
     if (kind === 'double' || kind === 'shield') {
       if ((room.armedPowerups || []).some((a) => a.kind === kind && a.teamId === teamId)) {
         return fail(`Your team already has ${label} ready.`);
@@ -177,7 +160,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
       if (q[room.buzzer.activeIndex]?.id === discordUserId) return fail('You already have the floor.');
     }
 
-    // ── consume ──
     const next = [...held];
     next.splice(heldIdx, 1);
     room.powerupsGranted = { ...(room.powerupsGranted || {}), [discordUserId]: next };
@@ -193,7 +175,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
       targetTeamName: null,
     };
 
-    // ── apply ──
     if (kind === 'double' || kind === 'shield') {
       room.armedPowerups = [
         ...(room.armedPowerups || []),
@@ -207,8 +188,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
       notice.targetTeamId = target.id;
       notice.targetTeamName = target.name;
       room.frozenTeams = { ...(room.frozenTeams || {}), [target.id]: { live: inClue } };
-      // A clue is already running: bump the frozen team's people who are still
-      // waiting in the queue (whoever currently has the floor keeps it).
       if (inClue && room.buzzer?.queue?.length) {
         const b = room.buzzer;
         const queue = b.queue.filter((e, i) => i <= b.activeIndex || teamOfPlayer(room, e.id) !== target.id);
@@ -226,9 +205,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
         avatarUrl: player.discordAvatarUrl,
       };
       const rest = (b.queue || []).filter((e) => e.id !== discordUserId);
-      // Insert at the current floor position; whoever held it moves down one.
-      // (After removing the caster, indices before `at` are unaffected only if
-      // the caster wasn't ahead of it — recompute `at` on the filtered list.)
       const oldIdx = (b.queue || []).findIndex((e) => e.id === discordUserId);
       let at = Math.max(0, b.activeIndex);
       if (oldIdx !== -1 && oldIdx < at) at -= 1;
@@ -245,8 +221,6 @@ module.exports = function registerPowerupsHandlers(socket, ctx) {
     reply({ ok: true });
   });
 
-  // Host reports that an armed effect (2x / Shield) was just applied to a
-  // score, so it is spent. Host-only — players can't clear each other's.
   socket.on('hostConsumeArmed', ({ roomCode: rawRoomCode, id } = {}) => {
     if (typeof rawRoomCode !== 'string' || typeof id !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();

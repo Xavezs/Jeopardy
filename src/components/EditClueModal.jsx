@@ -21,8 +21,6 @@ export default function EditClueModal({
   const isFirstRender = React.useRef(true);
 
   const requestClose = (cb) => {
-    // Flush any pending autosave immediately so a fast close (Esc,
-    // backdrop click, etc.) can't race the debounce and drop an edit.
     if (saveTimeout.current) {
       clearTimeout(saveTimeout.current);
       saveTimeout.current = null;
@@ -32,8 +30,6 @@ export default function EditClueModal({
     setTimeout(() => cb(), 160);
   };
 
-  // Autosave: debounce so we're not firing onSave on every keystroke, but
-  // edits are persisted without needing to click "Save Clue".
   useEffect(() => {
     if (isFirstRender.current) {
       isFirstRender.current = false;
@@ -50,7 +46,7 @@ export default function EditClueModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editForm, mediaState]);
 
-  // Esc closes the same way Cancel/backdrop-click does — no save.
+  // Esc closes the same way Cancel/backdrop-click does
   useEffect(() => {
     const handleKeyDown = (e) => {
       if (e.key === "Escape") requestClose(onClose);

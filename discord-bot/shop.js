@@ -1,23 +1,3 @@
-// discord-bot/shop.js
-//
-// Cosmetics shop API. All routes require a logged-in Discord user via the
-// JWT cookie (requireAuth). The shop is intentionally simple:
-//   - GET  /api/shop/catalog          — full item list with ownership flags
-//   - GET  /api/shop/wallet           — caller's coin balance
-//   - POST /api/shop/buy              — spend coins, add item to inventory
-//                                       (skills are auto-equipped on purchase)
-//   - POST /api/shop/equip            — equip/unequip an owned item
-//   - GET  /api/shop/loadout          — caller's currently equipped items
-//
-// Skills: buying one UNLOCKS it. In-game, the host's Power-ups spin in the Randomizer (socket event
-// `hostPowerDraw`, see bot-server.js) rolls each equipped skill's grantChance
-// per player; only granted skills can be used.
-//
-// Coin economy (enforced in boards.js POST /:id/games):
-//   100 coins per correct answer during a game
-//   +200 bonus for 1st place finish
-//   +100 bonus for 2nd place finish
-
 const express = require('express');
 const db = require('./db');
 const { requireAuth } = require('./auth');
@@ -25,7 +5,7 @@ const { requireAuth } = require('./auth');
 const router = express.Router();
 router.use(requireAuth);
 
-// ── Helpers ──────────────────────────────────────────────────────────────
+// Helpers
 
 function getWallet(userId) {
   const row = db.prepare('SELECT coins FROM player_wallets WHERE user_id = ?').get(userId);
@@ -43,7 +23,7 @@ function itemRow(row) {
   };
 }
 
-// ── Routes ────────────────────────────────────────────────────────────────
+// Routes
 
 // GET /api/shop/wallet
 router.get('/wallet', (req, res) => {
@@ -51,8 +31,6 @@ router.get('/wallet', (req, res) => {
 });
 
 // GET /api/shop/catalog
-// Returns every item in the catalog, each annotated with whether this user
-// owns it and whether it's currently equipped.
 router.get('/catalog', (req, res) => {
   const items = db.prepare('SELECT * FROM shop_items ORDER BY type, price').all();
   const owned = db.prepare(
@@ -71,9 +49,6 @@ router.get('/catalog', (req, res) => {
 });
 
 // GET /api/shop/loadout
-// Returns only the items the caller currently has equipped, keyed by type.
-// Shape: { buzz_sound: { id, name, type, data } | null, ... }
-// Players fetch this on join to know which custom sounds/cosmetics to use.
 router.get('/loadout', (req, res) => {
   const rows = db
     .prepare(
@@ -90,7 +65,6 @@ router.get('/loadout', (req, res) => {
   res.json(loadout);
 });
 
-// POST /api/shop/buy  { itemId }
 router.post('/buy', (req, res) => {
   const { itemId } = req.body;
   if (!itemId) return res.status(400).json({ error: 'itemId required' });
@@ -109,14 +83,11 @@ router.post('/buy', (req, res) => {
 
   const now = Date.now();
 
-  // Deduct coins and add to inventory in one synchronous transaction.
   db.prepare(
     `INSERT INTO player_wallets (user_id, coins, updated_at) VALUES (?, ?, ?)
      ON CONFLICT(user_id) DO UPDATE SET coins = coins - ?, updated_at = ?`
   ).run(req.user.id, -item.price, now, item.price, now);
 
-  // Skills auto-equip on purchase (unequipping any other skill), so the buyer
-  // is immediately eligible for the in-game Power-ups spin.
   const autoEquip = item.type === 'skill';
   if (autoEquip) {
     db.prepare(
@@ -131,16 +102,12 @@ router.post('/buy', (req, res) => {
   res.json({ ok: true, coins: getWallet(req.user.id), itemId, equipped: autoEquip });
 });
 
-// POST /api/shop/equip  { itemId, equipped: true|false }
-// Equipping an item of a given type automatically unequips any other item
-// of the same type — only one buzz sound can be active at a time, etc.
 router.post('/equip', (req, res) => {
   const { itemId, equipped } = req.body;
   if (!itemId || equipped === undefined) {
     return res.status(400).json({ error: 'itemId and equipped required' });
   }
 
-  // Must own the item first.
   const owned = db
     .prepare('SELECT 1 FROM player_inventory WHERE user_id = ? AND item_id = ?')
     .get(req.user.id, itemId);
@@ -150,7 +117,6 @@ router.post('/equip', (req, res) => {
   if (!item) return res.status(404).json({ error: 'Item not found' });
 
   if (equipped) {
-    // Unequip every other item of the same type first.
     db.prepare(
       `UPDATE player_inventory SET equipped = 0
        WHERE user_id = ? AND item_id IN (

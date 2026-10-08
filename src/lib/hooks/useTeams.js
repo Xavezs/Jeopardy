@@ -7,63 +7,26 @@ import { playClickSfx, playCorrectSfx, playIncorrectSfx } from "../boardSfx";
 
 const SCORE_STEP = 50;
 
-/* =========================================================================
-   useTeams
-   Owns team roster actions (rename/score/add/remove/reorder), the Discord
-   voice integration used to decorate team cards, and the number-key +
-   arrow-key scoreboard shortcut.
-
-   `useDiscordMembers` (the raw socket/member feed) is only ever consumed
-   HERE — nothing else in the app should import it directly, so there's a
-   single owner of "how do we match a team to a Discord member".
-   ========================================================================= */
 export function useTeams({ sessionRef, touch, persist, editMode, activeClue, setView, markTeamDeleted, markTeamAdded, players }) {
   const { scorePulse, firePulse } = useScorePulse();
 
-  // "normal" — team cards show the plain, manually-typed team name. No
-  //   Discord lookups happen, no overlay shown.
-  // "discord" — team cards additionally show a small face-pile of whichever
-  //   Discord voice-channel members were manually assigned to that team
-  //   (see toggleTeamDiscordUser below), each with live speaking/mute
-  //   state. A team can have any number of members assigned — there's no
-  //   auto-matching by name; it's all explicit, click-to-add/remove.
   const { members: rawDiscordMembers, connected: discordConnected } = useDiscordMembers(activityChannelId);
 
-  // "Who's talking" comes from a completely different source than the rest
-  // of this member data: rawDiscordMembers is the bot's socket feed (voice
-  // channel roster, mute/deafen state), while speaking state is read
-  // directly off the Discord Activity SDK client-side (see
-  // useSpeakingState). They're merged here, once, so every consumer below
-  // (resolveDiscordMembersForTeam, the discord-mode chip picker, etc.)
-  // just sees a single `speaking` boolean and doesn't need to know there
-  // are two feeds behind it.
   const speakingIds = useSpeakingState();
   const discordMembers = useMemo(
     () => rawDiscordMembers.map((m) => ({ ...m, speaking: speakingIds.has(m.id) })),
     [rawDiscordMembers, speakingIds]
   );
 
-  // Always "discord" now — the normal/discord toggle was removed since
-  // this app is always run inside Discord. Kept as a no-op setter (rather
-  // than removing it from the return value) so Toolbar doesn't need to
-  // change immediately if it still references onToggleDiscordMode.
   const discordDisplayMode = "discord";
   const setDiscordDisplayMode = () => {};
 
-  // Which team's scoreboard number is "armed" for the ↑/↓ +/- shortcut —
-  // click a team's score to select it (gold ring), then Up/Down adjusts it
-  // by SCORE_STEP. Cleared whenever edit mode turns on or a clue modal is
-  // open, since editing uses a free-typed input and the clue modal has its
-  // own copy of this shortcut instead.
   const [selectedScoreTeamId, setSelectedScoreTeamId] = useState(null);
 
   useEffect(() => {
     if (editMode || activeClue) setSelectedScoreTeamId(null);
   }, [editMode, activeClue]);
 
-  // Number keys (1-9) select a team on the main scoreboard, mirroring the
-  // 1-4 "arm a team" shortcut in ClueModal. Only active when we're not in
-  // edit mode, no clue modal is open, and focus isn't inside a text input.
   useEffect(() => {
     const handleScoreKeyDown = (e) => {
       if (editMode || activeClue) return;
@@ -123,10 +86,6 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
     const d = sessionRef.current.data;
     const newTeam = { id: "t_" + Math.random().toString(36).slice(2, 9), name: "Team " + (d.teams.length + 1), score: 0 };
     d.teams.push(newTeam);
-    // Protects this team for a few seconds against the boardUpdate merge
-    // logic in usePersistence, which would otherwise see the server's
-    // stale copy (missing this team, since it hasn't round-tripped yet)
-    // and delete it right back out from under us.
     if (markTeamAdded) markTeamAdded(newTeam.id);
     touch();
     persist();
@@ -146,14 +105,11 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
     setView("board");
   }
 
-  // Manually links (or unlinks) one Discord voice-channel member to/from a
-  // team. A team can hold any number of members — this just toggles one
-  // id in and out of the team's roster. Purely manual, no auto-matching.
   function toggleTeamDiscordUser(team, discordUserId) {
     const current = Array.isArray(team.discordUserIds)
       ? team.discordUserIds
       : team.discordUserId
-      ? [team.discordUserId] // migrate old single-assignment data on first edit
+      ? [team.discordUserId]
       : [];
     const nextIds = current.includes(discordUserId)
       ? current.filter((id) => id !== discordUserId)
@@ -175,11 +131,6 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
     persist();
   }
 
-  // Resolves the live Discord members (if any) for a given team.
-  // Primary source: team.discordUserIds (manually assigned chips).
-  // Fallback: players roster (anyone who joined via PlayerView and was
-  // auto-assigned to this team) — same source the player side uses, so
-  // speaking glow works even when nobody has manually assigned chips.
   function resolveDiscordMembersForTeam(team) {
     if (discordDisplayMode !== "discord") return [];
 
@@ -190,7 +141,6 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
       ? [team.discordUserId]
       : [];
 
-    // 2. Roster-based: players who joined and landed on this team
     const rosterIds = (players || [])
       .filter((p) => p.teamId === team.id && p.discordUserId)
       .map((p) => p.discordUserId);
@@ -211,10 +161,6 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
       .filter(Boolean);
   }
 
-  // Reverse of resolveDiscordMembersForTeam: given a Discord user id (e.g.
-  // whoever won the /buzz race), finds which team they're assigned to.
-  // Works regardless of discordDisplayMode, since buzzing-in is a gameplay
-  // fact, not a display toggle.
   function resolveTeamForDiscordUser(userId) {
     if (!userId) return null;
     const teams = sessionRef.current?.data?.teams || [];

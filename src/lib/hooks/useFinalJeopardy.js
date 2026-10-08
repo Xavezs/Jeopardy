@@ -1,18 +1,6 @@
-// lib/hooks/useFinalJeopardy.js
-/* =========================================================================
-   useFinalJeopardy
-   Owns the Final Jeopardy phase state machine (category -> wager -> clue ->
-   answer -> reveal -> done). Mirrors useBoardGrid's pattern (sessionRef +
-   touch + persist, no local hidden state) so it syncs the same way
-   everything else does — reload/refresh just picks up wherever `phase`
-   currently is, same as boardFlip/currentRound do for the grid rounds.
 
-   Wager/answer VALUES here can come from two places: the host typing them
-   in manually (FinalJeopardyBoard.jsx's inputs), or a player submitting
-   from their own device (relayed through useFinalSync -> JeopardyBoard.jsx
-   -> setWager/setAnswer below) — both paths funnel through the same two
-   functions, so there's exactly one way this data ever changes.
-   ========================================================================= */
+export const DEFAULT_FINAL_TIMER_SECONDS = 0;
+
 export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf }) {
   function currentFinal() {
     const rd = currentRoundOf(sessionRef.current.data);
@@ -35,7 +23,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // category -> wager
   function revealCategory() {
     const rd = currentFinal();
     if (!rd || rd.phase !== "category") return;
@@ -52,16 +39,42 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // wager -> clue
-  function startClue() {
+  // Player-originated wager (relayed from the server)
+  function submitWagerFromPlayer(teamId, amount) {
+    const rd = currentFinal();
+    if (!rd || rd.phase !== "wager") return false;
+    if (rd.wagers[teamId] != null) return false;
+    rd.wagers[teamId] = amount;
+    touch();
+    persist();
+    return true;
+  }
+
+  // Per-board answer-timer length in seconds
+  function setTimerSeconds(seconds) {
+    const rd = currentFinal();
+    if (!rd) return;
+    const n = Math.round(Number(seconds));
+    rd.timerSeconds = Number.isFinite(n) ? Math.max(0, Math.min(300, n)) : DEFAULT_FINAL_TIMER_SECONDS;
+    touch();
+    persist();
+  }
+
+  function startClue(teamsToFill) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "wager") return;
+    if (Array.isArray(teamsToFill)) {
+      teamsToFill.forEach((t) => {
+        if (rd.wagers[t.id] == null) rd.wagers[t.id] = 0;
+      });
+    }
+    const seconds = rd.timerSeconds == null ? DEFAULT_FINAL_TIMER_SECONDS : rd.timerSeconds;
+    rd.clueDeadline = seconds > 0 ? Date.now() + seconds * 1000 : null;
     rd.phase = "clue";
     touch();
     persist();
   }
 
-  // clue -> answer
   function startAnswerPhase() {
     const rd = currentFinal();
     if (!rd || rd.phase !== "clue") return;
@@ -78,10 +91,18 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // answer -> reveal. No fixed order is locked anymore — the host picks
-  // who to reveal next via startRevealBatch below, one or several teams at
-  // a time. revealOrder is kept only as the full set of team ids so
-  // judgeTeam/judgeBatch know when every team has been judged.
+  // Player-originated answer (relayed from the server)
+  function submitAnswerFromPlayer(teamId, text) {
+    const rd = currentFinal();
+    if (!rd || (rd.phase !== "clue" && rd.phase !== "answer")) return false;
+    if (typeof text !== "string") return false;
+    if (rd.answers[teamId] != null) return false;
+    rd.answers[teamId] = text;
+    touch();
+    persist();
+    return true;
+  }
+
   function startReveal(teams) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "answer") return;
@@ -96,10 +117,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // Host confirms a selection from the "pick who's next" list — one team
-  // or several at once (multi-select). Already-judged ids are filtered out
-  // defensively (the picker UI shouldn't offer them in the first place).
-  // A no-op empty selection is ignored rather than clearing the batch.
   function startRevealBatch(teamIds) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal") return;
@@ -111,11 +128,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // Staged reveal for the whole batch currently on screen: wagers first,
-  // then answers — host controls the pace, and since revealStage lives
-  // directly on rd (synced the same way answers/wagers/currentRevealTeamIds
-  // already are), players' screens advance through the same two stages in
-  // lockstep with no separate broadcast needed.
   function revealWager() {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal" || !rd.currentRevealTeamIds?.length) return;
@@ -132,30 +144,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // Judges a single team within the current batch (mixed verdicts across
-  // the batch are fine — this is what lets the host correct one team and
-  // wrong another in the same reveal). Removes the team from
-  // currentRevealTeamIds as it's judged; once the batch empties, revealStage
-  // resets to "hidden" so the host lands back on the picker for the next
-  // batch. Advances to "done" once every team overall has been judged.
-  // Records the verdict in rd.results so PlayerView's reveal screen (and
-  // the host-side recap) can show correct/incorrect for teams already
-  // revealed, not just the score change. "done" starts with
-  // standingsRevealed=false so the host gets a beat to show the correct
-  // answer on its own before advancing to the standings board (see
-  // revealStandings below).
-  //
-  // `amountOverride`: how many points to actually apply, instead of the
-  // team's full wager — the host's Full/Half/Custom preset picker in
-  // FinalJeopardyBoard.jsx feeds this. Undefined/null means "no override,
-  // use the wager as-is", so every existing caller that doesn't pass this
-  // keeps behaving exactly as before.
-  //
-  // Every judgment (here and in judgeBatch below) also pushes an entry
-  // onto rd.judgeHistory — {teamId, delta, advancedToDone} — which is
-  // ALL undoLastJudge needs to cleanly reverse it: reapply -delta to that
-  // team's score, un-mark them as revealed, and if this was the specific
-  // judgment that flipped the round to "done", drop back to "reveal".
   function judgeTeam(team, correct, adjustTeamScore, amountOverride) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal") return;
@@ -181,19 +169,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // Bulk convenience for "reveal bersamaan": judges every still-unjudged
-  // team in the current batch with the SAME verdict in one go (e.g. "Mark
-  // All Correct"). Teams already judged individually before this is
-  // clicked (mixed verdicts) are simply skipped. Shares the exact same
-  // scoring/results/advance-to-"done" logic as judgeTeam, just looped —
-  // including pushing one rd.judgeHistory entry PER team, so "Undo" after
-  // a batch judgment always undoes exactly one team at a time, the same
-  // as after an individual judgment.
-  //
-  // `getAmount(teamId, wager)`: same override idea as judgeTeam's
-  // amountOverride, but per-team since each team in the batch can have its
-  // own Full/Half/Custom preset selected. Omitting it falls back to each
-  // team's own wager, same as before this parameter existed.
   function judgeBatch(teams, correct, adjustTeamScore, getAmount) {
     const rd = currentFinal();
     if (!rd || rd.phase !== "reveal") return;
@@ -223,22 +198,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // Reverses the single most recent judgment (from either judgeTeam or
-  // judgeBatch — see rd.judgeHistory, a flat list either one pushes onto
-  // regardless of which was used). Reapplies -delta to that team's score,
-  // un-marks them as revealed/judged, and puts them back into
-  // currentRevealTeamIds with revealStage="answer" so the host can
-  // immediately re-judge them without re-running the wager/answer reveal
-  // beats. If that judgment was the one that flipped the round to "done",
-  // drops back to "reveal" too (and clears standingsRevealed, though it
-  // should never have been true yet — see the guard below).
-  //
-  // Deliberately refuses once standings are actually showing
-  // (phase "done" && standingsRevealed): by then the host has already
-  // moved on to presenting final results, possibly with saveGameResult
-  // about to fire, and silently rewinding score history under that is
-  // more likely to confuse than help. Undo is for "wait, I misjudged
-  // that" in the moment, not for re-litigating after the fact.
   function undoLastJudge(teams, adjustTeamScore) {
     const rd = currentFinal();
     if (!rd) return;
@@ -262,7 +221,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // done (correct-answer beat) -> done (standings shown)
   function revealStandings() {
     const rd = currentFinal();
     if (!rd || rd.phase !== "done") return;
@@ -271,12 +229,6 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     persist();
   }
 
-  // Custom Final Standings celebration sound (uploaded file ref, direct
-  // URL, or Google Drive link) — lives directly on rd (like rd.clue) so
-  // it's synced to players the same way everything else in Final Jeopardy
-  // is, no separate broadcast needed. Not touched by resetFinal, same as
-  // rd.clue.mediaUrl isn't — it's a per-board customization, not part of
-  // a specific playthrough's progress.
   function setStandingsSfx(patch) {
     const rd = currentFinal();
     if (!rd) return;
@@ -289,6 +241,7 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     const rd = currentFinal();
     if (!rd) return;
     rd.phase = "category";
+    rd.clueDeadline = null;
     rd.wagers = {};
     rd.answers = {};
     rd.revealOrder = [];
@@ -308,9 +261,12 @@ export function useFinalJeopardy({ sessionRef, touch, persist, currentRoundOf })
     setClue,
     revealCategory,
     setWager,
+    submitWagerFromPlayer,
+    setTimerSeconds,
     startClue,
     startAnswerPhase,
     setAnswer,
+    submitAnswerFromPlayer,
     startReveal,
     startRevealBatch,
     revealWager,

@@ -1,24 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 
-/* =========================================================================
-   MARQUEE LIGHTS
-   Generates evenly-spaced "bulb" dots that trace the real perimeter of the
-   nearest positioned ancestor (straight edges + rounded corner arcs),
-   recalculated on resize via ResizeObserver.
-
-   Bulbs are allocated PER SEGMENT (each straight edge, each corner arc)
-   rather than by walking a single global step around the whole perimeter.
-   The four corner arcs are identical in length by construction, so the
-   largest-remainder allocation below always gives them the same bulb
-   count — no phase drift, no bunching/gapping at any one corner (the old
-   global-step approach could drift out of phase with segment boundaries
-   depending on the box's exact aspect ratio, which is what caused the
-   top corners to look uneven while the bottom happened to line up).
-
-   Shared by the title marquee (JeopardyBoard.jsx) and the Team Randomizer
-   slot machine border (TeamRandomizer.jsx) — drop it in as the first
-   child of any `position: relative` box and it'll trace that box's edge.
-   ========================================================================= */
+// MARQUEE LIGHTS
 export default function MarqueeBulbs({ inset = 6, radius = 14, spacing = 20, size = 7 }) 
 {  const wrapRef = useRef(null);
   const [bulbs, setBulbs] = useState([]);
@@ -43,7 +25,6 @@ export default function MarqueeBulbs({ inset = 6, radius = 14, spacing = 20, siz
 
       const totalCount = Math.max(8, Math.round(perimeter / spacing));
 
-      // Walk clockwise from the top-left corner's start of the top edge.
       const segments = [
         { len: straightW, type: "top" },
         { len: cornerArc, type: "corner", cx: w - r, cy: r, start: -Math.PI / 2 },
@@ -55,12 +36,6 @@ export default function MarqueeBulbs({ inset = 6, radius = 14, spacing = 20, siz
         { len: cornerArc, type: "corner", cx: r, cy: r, start: Math.PI },
       ];
 
-      // Largest-remainder allocation: give each segment floor(share) bulbs,
-      // then hand out the leftover bulbs to the segments with the biggest
-      // fractional remainder until the total matches totalCount exactly.
-      // Because all four corner arcs share the same length, they always
-      // receive the same base share and (with symmetric remainders) the
-      // same final count — keeping every corner visually identical.
       const raw = segments.map((s) => (s.len / perimeter) * totalCount);
       const base = raw.map(Math.floor);
       let assigned = base.reduce((a, b) => a + b, 0);
@@ -73,7 +48,6 @@ export default function MarqueeBulbs({ inset = 6, radius = 14, spacing = 20, siz
         assigned++;
         k++;
       }
-      // Make sure no non-zero-length segment ends up with 0 bulbs.
       for (let i = 0; i < segments.length; i++) {
         if (segments[i].len > 0 && base[i] === 0) {
           let maxIdx = base.reduce((m, v, j) => (v > base[m] ? j : m), 0);

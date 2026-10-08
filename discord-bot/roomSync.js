@@ -1,14 +1,6 @@
-// Sends a room's current state to ONE socket, using the existing per-event
-// names so every client hook keeps working unchanged. This replaces three
-// hand-copied blocks (joinRoom, joinAsPlayer reconnect, joinAsPlayer fresh
-// join) that had already drifted apart. Moving the client to a single
-// `stateSync` event later only means changing this one function.
-//
-// opts.board / opts.players: pass false when the caller already broadcast
-// that event to the whole room (so this socket would get it twice).
-module.exports = function createSendRoomState({ randomizerFor, sendGrantsTo }) {
+module.exports = function createSendRoomState({ randomizerFor, sendGrantsTo, boardFor }) {
   return function sendRoomState(socket, room, { board = true, players = true } = {}) {
-    if (board && room?.board) socket.emit('boardUpdate', room.board);
+    if (board && room?.board) socket.emit('boardUpdate', boardFor ? boardFor(room, socket) : room.board);
     if (room?.buzzer) socket.emit('buzzerState', room.buzzer);
     if (room?.activeClue !== undefined) socket.emit('activeClueUpdate', room.activeClue);
     if (room?.revealedCats) socket.emit('revealedCatsUpdate', room.revealedCats);

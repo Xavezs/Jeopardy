@@ -33,9 +33,14 @@ test('room code match is case-insensitive', () => {
   assert.equal(auth().canHost(sock(), 'room1', ticketFor('owner1')).ok, true);
 });
 
-test('an editor may host; a viewer may not', () => {
-  assert.equal(auth().canHost(sock(), 'ROOM1', ticketFor('editor1')).ok, true);
+test('by default only the owner may host: editors and viewers are refused', () => {
+  assert.equal(auth().canHost(sock(), 'ROOM1', ticketFor('editor1')).ok, false);
   assert.equal(auth().canHost(sock(), 'ROOM1', ticketFor('viewer1')).ok, false);
+});
+
+test('editors may host only when allowEditorHost is on', () => {
+  assert.equal(auth({ allowEditorHost: true }).canHost(sock(), 'ROOM1', ticketFor('editor1')).ok, true);
+  assert.equal(auth({ allowEditorHost: true }).canHost(sock(), 'ROOM1', ticketFor('viewer1')).ok, false);
 });
 
 test('a logged-in stranger cannot host someone else\'s room', () => {
@@ -80,7 +85,6 @@ test('ALLOW_UNVERIFIED_HOST escape hatch lets anyone host', () => {
   assert.equal(auth({ allowUnverified: true }).canHost(sock(), 'ANY', undefined).ok, true);
 });
 
-// ---- joinRoom integration ----
 function fakeSocket(handshake) {
   const handlers = {}; const emitted = [];
   return { id: 's1', isHost: false, handshake: handshake || { headers: {} }, emitted,
@@ -88,7 +92,7 @@ function fakeSocket(handshake) {
     join() {}, leave() {}, trigger: (ev, p, ack) => handlers[ev](p, ack) };
 }
 function joinCtx(hostAuth) {
-  return { MAX_ROOM_CODE_LENGTH: 12, gameRooms: new Map(), invalidatedRoomCodes: new Set(), sendRoomState() {}, hostAuth };
+  return { MAX_ROOM_CODE_LENGTH: 12, gameRooms: new Map(), invalidatedRoomCodes: new Set(), sendRoomState() {}, hostAuth, hostLocks: new Map(), roomCodeExists: () => true, io: { sockets: { sockets: new Map() } } };
 }
 
 test('joinRoom: a forged host claim is refused but still joins as a viewer', () => {
@@ -114,4 +118,32 @@ test('joinRoom: a plain room-code join never changes host status', () => {
   s.trigger('joinRoom', { roomCode: 'ROOM1', role: 'host', ticket: ticketFor('owner1') });
   s.trigger('joinRoom', 'ROOM1');
   assert.equal(s.isHost, true);
+});
+
+test('joinRoom: host status does not carry over to a different room', () => {
+  const s = fakeSocket();
+  registerRoom(s, joinCtx(auth()));
+  s.trigger('joinRoom', { roomCode: 'ROOM1', role: 'host', ticket: ticketFor('owner1') });
+  assert.equal(s.isHost, true);
+  s.trigger('joinRoom', 'OTHER');
+  assert.equal(s.isHost, false);
+});
+
+test('joinRoom: a second user cannot take over a live host; the same user can', () => {
+  const ctx = joinCtx(auth({ allowEditorHost: true }));
+  const sockets = new Map();
+  ctx.io = { sockets: { sockets } };
+  const a = fakeSocket(); a.id = 'a'; sockets.set('a', a);
+  const b = fakeSocket(); b.id = 'b'; sockets.set('b', b);
+  const c = fakeSocket(); c.id = 'c'; sockets.set('c', c);
+  for (const s of [a, b, c]) registerRoom(s, ctx);
+  a.trigger('joinRoom', { roomCode: 'ROOM1', role: 'host', ticket: ticketFor('owner1') });
+  assert.equal(a.isHost, true);
+  a.gameRoomCode = 'ROOM1';
+  b.trigger('joinRoom', { roomCode: 'ROOM1', role: 'host', ticket: ticketFor('editor1') });
+  assert.equal(b.isHost, false);
+  assert.ok(b.emitted.some(([ev, m]) => ev === 'errorMsg' && /already has a host/.test(m)));
+  c.trigger('joinRoom', { roomCode: 'ROOM1', role: 'host', ticket: ticketFor('owner1') });
+  assert.equal(c.isHost, true);
+  assert.equal(a.isHost, false);
 });

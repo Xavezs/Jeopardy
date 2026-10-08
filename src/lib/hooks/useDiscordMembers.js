@@ -1,4 +1,3 @@
-// src/lib/hooks/useDiscordMembers.js
 import { useEffect, useState, useRef } from "react";
 import { useSocket } from "../SocketContext";
 

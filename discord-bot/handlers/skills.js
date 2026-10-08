@@ -1,4 +1,4 @@
-// Socket handlers: skills. Registered per-connection from handlers/index.js.
+// Socket handlers: skills
 const { randomUUID } = require('node:crypto');
 const { computeCleaveDeltas } = require('../skillMath');
 
@@ -8,9 +8,7 @@ module.exports = function registerSkillsHandlers(socket, ctx) {
   const { CLEAVE_MAX_LOSS, CLEAVE_PERCENT, MAX_ROOM_CODE_LENGTH, SKILL_ANIMATION_MS, SKILL_DOMAIN_EXPANSION, gameRooms, hasEquippedSkill, io } = ctx;
 
 
-  // Player uses an equipped skill. Validates identity (the roster entry must
-  // belong to THIS socket), Final Jeopardy lockout, ownership + equipped
-  // state, one use per win (a new Power-ups win re-arms it), and no overlapping cutscenes.
+  // Player uses an equipped skill
   socket.on('useSkill', ({ roomCode: rawRoomCode, skillId, discordUserId }) => {
     if (typeof rawRoomCode !== 'string' || typeof skillId !== 'string' || !discordUserId) return;
     const roomCode = rawRoomCode.trim().toUpperCase();
@@ -68,10 +66,6 @@ module.exports = function registerSkillsHandlers(socket, ctx) {
       maxLoss: CLEAVE_MAX_LOSS,
     });
 
-    // The host owns scores and applies these deltas itself. Remember them
-    // until the host acknowledges (skillDeltasApplied) so a host that was
-    // disconnected or closed its tab mid-cutscene still gets the damage when
-    // it rejoins — see handlers/room.js (skillDeltasPending).
     const eventId = randomUUID();
     if (deltas.length) {
       room.pendingSkillDeltas = [...(room.pendingSkillDeltas || []), { id: eventId, deltas }]
@@ -94,7 +88,6 @@ module.exports = function registerSkillsHandlers(socket, ctx) {
     });
   });
 
-  // Host confirms it applied (and persisted) a skill's score deltas.
   socket.on('skillDeltasApplied', ({ roomCode: rawRoomCode, eventId }) => {
     if (typeof rawRoomCode !== 'string' || typeof eventId !== 'string') return;
     const roomCode = rawRoomCode.trim().toUpperCase();

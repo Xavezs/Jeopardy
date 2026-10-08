@@ -3,10 +3,6 @@ import React, { useState, useEffect } from "react";
 export default function ConfirmDialog({ dialog, onResolve }) {
   const [closing, setClosing] = useState(false);
 
-  // This component stays mounted permanently (it just returns null when idle),
-  // so `closing` must be reset each time a *new* dialog request comes in —
-  // otherwise it carries over "true" from the last close and the next dialog
-  // plays its closing animation immediately instead of opening.
   useEffect(() => {
     if (dialog) setClosing(false);
   }, [dialog]);

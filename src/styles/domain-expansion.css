@@ -1,6 +1,5 @@
-/* Domain Expansion — v4 (split-screen cut). Pacing lives in DomainExpansion.jsx */
+/* Domain Expansion */
 .de-overlay{position:fixed;inset:0;z-index:9999;overflow:hidden;font-family:'Arial Black',Impact,'Hiragino Mincho ProN','Noto Serif CJK JP',serif}
-/* warm-up: painted at ~1% opacity with every animation frozen, so the heavy first-frame raster is done before the clock starts */
 .de-overlay:not(.de-go){opacity:.01;pointer-events:none}
 .de-overlay:not(.de-go) *{animation-play-state:paused!important}
 .de-overlay.de-go{animation:de-circ .7s cubic-bezier(.3,.7,.2,1)}
@@ -10,12 +9,10 @@
 .de-stage{position:absolute;inset:0;overflow:hidden;background:#050208;color:#fff}
 .de-stage.de-clear{background:transparent}
 
-/* two halves of the same scene, split along the diagonal cut */
 .de-half{position:absolute;inset:0;z-index:2;will-change:transform}
-.de-hA{clip-path:polygon(0 0,100% 0,100% 30.4%,0 70.4%)} /* 0.4% overlap hides the anti-aliased seam */
+.de-hA{clip-path:polygon(0 0,100% 0,100% 30.4%,0 70.4%)}
 .de-hB{clip-path:polygon(0 70%,100% 30%,100% 100%,0 100%)}
 
-/* atmosphere */
 .de-sky{position:absolute;inset:0;background:linear-gradient(180deg,#020001,#0c0205 40%,#280509 78%,#460a12)}
 .de-moon{position:absolute;left:50%;top:50%;width:56vh;height:56vh;margin:-30vh 0 0 -28vh;border-radius:50%;background:radial-gradient(circle at 50% 42%,#8a1424,#4b0912 55%,#150207);box-shadow:0 0 40px 6px rgba(255,20,45,.4),0 0 140px 40px rgba(140,8,25,.28);animation:de-mb var(--bt,1.3s) ease-in-out infinite}
 .de-moon::before{content:'';position:absolute;inset:-9%;border-radius:50%;border:2px dashed rgba(255,70,85,.55);animation:de-sp 70s linear infinite}
@@ -30,7 +27,6 @@
 .de-mist.de-m1{background:var(--de-m1) 0 0/70vmax;opacity:.7;animation:de-mA 45s ease-in-out infinite alternate}
 .de-mist.de-m2{background:var(--de-m2) 0 0/50vmax;opacity:.65;animation:de-mB 30s ease-in-out infinite alternate}
 
-/* title */
 .de-ttl{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:6px;text-align:center;animation:de-push 5.2s linear forwards}
 .de-eb{font-size:clamp(11px,2.4vw,24px);letter-spacing:.42em;color:#000;text-shadow:0 0 14px #f02;opacity:0;animation:de-eb 3.8s .3s cubic-bezier(.45,0,.2,1) forwards}
 .de-eb.de-wv{filter:url(#de-water)}
@@ -40,7 +36,6 @@
 .de-cast{margin-top:16px;font-size:clamp(10px,2vw,20px);letter-spacing:.5em;color:#ff5566;opacity:0;animation:de-ci .8s 3.5s ease-out forwards}
 .de-cast b{color:#ff3355}
 
-/* the cut line, shrine, slash canvas, rings, letterbox, impact frame */
 .de-cutsvg{position:absolute;inset:0;width:100%;height:100%;z-index:3;pointer-events:none}
 .de-cutsvg line{stroke:#fff;stroke-width:2;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:1;opacity:0;filter:drop-shadow(0 0 6px #f03)}
 .de-stage.de-draw .de-cutsvg line{opacity:1;animation:de-dw .22s ease-out forwards}
@@ -58,7 +53,6 @@
 .de-stage[data-lb="1"] .de-lb i{height:9vh}.de-stage[data-lb="2"] .de-lb i{height:5vh}
 .de-imp{position:absolute;inset:0;background:#fff;mix-blend-mode:difference;opacity:0;z-index:9;pointer-events:none}
 
-/* aftermath: scar + crack + damage number over each hit team card (overlay only, real cards untouched) */
 .de-scar{position:absolute;z-index:10;pointer-events:none;overflow:hidden;border-radius:6px;box-shadow:inset 0 0 0 2px #cc0022;opacity:0;animation:de-sev .6s ease-out var(--dl) forwards}
 .de-scar svg{position:absolute;inset:0;width:100%;height:100%;overflow:visible}
 .de-scar path{fill:none;stroke:#fff;stroke-width:2;vector-effect:non-scaling-stroke;stroke-dasharray:1;stroke-dashoffset:1;filter:drop-shadow(0 0 4px #f02);animation:de-dw .25s ease-out var(--dl) forwards}

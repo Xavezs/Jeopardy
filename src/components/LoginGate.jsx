@@ -1,24 +1,10 @@
-// src/components/LoginGate.jsx
 import { useEffect, useState } from "react";
 import { discordSdk, getDiscordIdentity } from "../discordSdk";
 import { API_BASE } from "../lib/api";
 import { DiscordContext } from "./DiscordContext";
 
-// Tracks "a reload-retry was already attempted for this failure" across the
-// actual page reload the Retry button now does (a plain useState/useRef
-// wouldn't survive that — the whole app remounts fresh). sessionStorage is
-// scoped to this tab/webview, same pattern as discordSdk.js's fake-player
-// identity cache.
-//
-// Why this exists: a plain reload only fixes a WEDGED IFRAME DOCUMENT — it
-// can't fix a wedged RPC SESSION on Discord's own side (see discordSdk.js's
-// resetDiscordSdk() comment). If the first reload-retry didn't clear the
-// error, a second click is very unlikely to either, and just loops the user
-// through the same failure. Once we know a retry already happened, the
-// error screen switches to telling them to close and reopen the Activity
-// panel instead of offering another Retry click.
 const RETRY_FLAG_KEY = "jeopardy_discord_retry_attempted_at";
-const RETRY_FLAG_TTL_MS = 2 * 60 * 1000; // stale after 2 min — treat as a fresh failure
+const RETRY_FLAG_TTL_MS = 2 * 60 * 1000;
 
 function hasRecentRetryAttempt() {
   const raw = sessionStorage.getItem(RETRY_FLAG_KEY);
@@ -46,27 +32,7 @@ export default function LoginGate({ children }) {
 
     async function setupDiscordActivity() {
       if (isDiscordIframe) {
-        // --- 1. RUNNING INSIDE DISCORD ACTIVITY IFRAME ---
-        // Reuses the shared, page-lifetime-cached getDiscordIdentity()
-        // flow from discordSdk.js instead of calling
-        // discordSdk.ready()/commands.authorize() directly here.
-        //
-        // This used to be a separate, uncached implementation. In React
-        // StrictMode (and on any double-mount) that fired a second
-        // authorize() while the first was still in flight, which Discord's
-        // SDK rejects with "Already authing" — the failed call's promise
-        // never resolved status to "in" or "error" cleanly, leaving the
-        // screen stuck on "Loading Discord Activity..." forever. That
-        // failure mode only showed up here (Host) because the Join flow
-        // in App.jsx already went through getDiscordIdentity()'s shared
-        // setupPromise/identityPromise cache; this path didn't.
-        //
-        // getDiscordIdentity() internally calls discordSdk.ready(),
-        // commands.authorize() (scope: ['identify', 'rpc.voice.read'] —
-        // see discordSdk.js for why 'guilds' was dropped), exchanges the
-        // code via POST /api/auth/token, and calls
-        // discordSdk.commands.authenticate() with the resulting
-        // access_token. It returns { id, username, avatarUrl } or null.
+        // 1. RUNNING INSIDE DISCORD ACTIVITY IFRAME
         if (!discordSdk) {
           console.error("Discord SDK unavailable: missing VITE_DISCORD_CLIENT_ID or SDK construction failed.");
           setStatusIfActive("error");
@@ -92,7 +58,7 @@ export default function LoginGate({ children }) {
           setStatusIfActive("error");
         }
       } else {
-        // --- 2. RUNNING IN STANDALONE BROWSER MODE ---
+        // 2. RUNNING IN STANDALONE BROWSER MODE
         console.log("Running in local browser mode (Outside Discord iframe)");
 
         if (import.meta.env.DEV) {
@@ -148,12 +114,7 @@ export default function LoginGate({ children }) {
     const alreadyRetried = hasRecentRetryAttempt();
 
     if (alreadyRetried) {
-      // A reload-retry already happened and STILL failed — that means the
-      // problem is Discord's own RPC session for this iframe, not
-      // something a page reload (or another one) can reach. Only closing
-      // the Activity panel and relaunching it forces Discord to hand out a
-      // genuinely new session, so tell people that directly instead of
-      // handing them a Retry button that's already shown it won't help.
+      // A reload-retry already happened and STILL failed
       return (
         <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column", gap: "12px", background: "#070a20", textAlign: "center", padding: "0 24px" }}>
           <h3>Still can't connect to Discord</h3>
@@ -182,23 +143,6 @@ export default function LoginGate({ children }) {
         <p>Make sure this app is running inside Discord as an Activity or backend server is active.</p>
         <button
           onClick={() => {
-            // resetDiscordSdk() alone only rebuilds JS-side SDK state — it
-            // can't fix a "ready handshake timeout" / "No identity
-            // returned", because that means Discord's own RPC channel to
-            // THIS iframe is wedged (see learnings: Discord frequently
-            // suspends/hides the Activity iframe instead of destroying it,
-            // and the RPC transport doesn't reconnect on its own). A full
-            // reload navigates the iframe's document, which is the closest
-            // thing to "close and reopen the panel" a Retry click can do —
-            // window.location.reload() preserves the exact current URL, so
-            // frame_id/channel_id/instance_id (read once at module load in
-            // discordSdk.js) survive intact; nothing is lost since nothing
-            // past this gate has rendered yet.
-            //
-            // Marks the retry attempt BEFORE reloading (sessionStorage
-            // survives the reload) so that if this same error is still
-            // showing after the reload, the branch above takes over instead
-            // of offering a Retry that's already been shown not to help.
             sessionStorage.setItem(RETRY_FLAG_KEY, String(Date.now()));
             window.location.reload();
           }}

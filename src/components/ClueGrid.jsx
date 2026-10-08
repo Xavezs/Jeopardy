@@ -2,28 +2,12 @@ import React from "react";
 import { playHoverTick, playClickSfx } from "../lib/boardSfx";
 import BoardSettingsPopover from "./BoardSettingsPopover";
 
-// Small icon for the hover-preview media badge — falls back to a generic
-// 📎 when there's a URL but no sniffable type (e.g. a Google Drive share
-// link; see detectMediaTypeFromUrl in mediaStore.js, which returns "" for
-// exactly that case). Presence of the badge is driven by the *Url field,
-// not the *Type field, so it still shows up even when type is unknown.
+// Small icon for the hover-preview media badge
 function mediaBadgeIcon(type) {
   return { image: "🖼", video: "🎬", audio: "🎵" }[type] || "📎";
 }
 
-/* =========================================================================
-   CLUE GRID
-   The category headers + clue-value cells for the currently active round.
-   Pulled out of JeopardyBoard.jsx, which had grown to handle board
-   rendering, session management, sound synthesis, and Discord integration
-   all in one file.
-
-   This component is intentionally "dumb": it owns no state of its own
-   (drag state, reveal state, board-flip animation state all still live in
-   JeopardyBoard.jsx, since they're shared with other parts of the board
-   like the round-switch banner) and just renders from props + calls the
-   handlers it's given.
-   ========================================================================= */
+// CLUE GRID
 export default function ClueGrid({
   rd,
   nCats,
@@ -49,7 +33,7 @@ export default function ClueGrid({
   openClueModal,
   toggleDailyDouble,
   blankClue,
-  // Board settings — only needed in edit mode, passed through to the gear popover
+  // Board settings
   timerEnabled,
   timerDuration,
   sessionId,
@@ -66,10 +50,7 @@ export default function ClueGrid({
   return (
     <div id="boardWrap">
       <div id="board" style={boardGridStyle}>
-        {/* Gear settings cell — top-left corner, only in edit mode.
-            Sits at row 1 / col 1 (the row-control gutter column) and
-            opens a popover with all board settings so the toolbar
-            row stays clean. */}
+        {/* Gear settings cell */}
         {editMode && (
           <div
             className="board-settings-gear-cell"
@@ -166,14 +147,6 @@ export default function ClueGrid({
               {rd.categories.map((cat, catIndex) => {
                 const clue = cat.clues[v] || blankClue();
                 const cellKey = cat.id + "-" + v;
-                // Host edit-mode hover preview: only cells with BOTH a question
-                // and an answer filled in get the flip-to-reveal treatment —
-                // flipping an empty/half-written clue would just show blank
-                // faces, which is confusing rather than useful.
-                // Every clue cell now gets the flip-to-reveal treatment in edit
-                // mode, even ones that aren't fully written yet — a half-written
-                // clue just shows a "not written yet" placeholder on whichever
-                // face is missing text, instead of being excluded from flipping.
                 const hasPreview = editMode;
                 const questionText = clue.question?.trim() || "No question yet";
                 const answerText = clue.answer?.trim() || "No answer yet";
@@ -202,7 +175,7 @@ export default function ClueGrid({
                       if (!editMode) return;
                       setDragSource({ catId: cat.id, value: v });
                       e.dataTransfer.effectAllowed = "move";
-                      e.dataTransfer.setData("text/plain", cellKey); // Firefox requires data to be set for drag to start
+                      e.dataTransfer.setData("text/plain", cellKey);
                     }}
                     onDragOver={(e) => {
                       if (!editMode || !dragSource) return;
@@ -274,12 +247,6 @@ export default function ClueGrid({
                                 {mediaBadgeIcon(clue.answerMediaType)}
                               </span>
                             )}
-                            {/* Same DD toggle, mirrored onto the back face — without
-                                this the badge only existed on the front face and
-                                effectively vanished once the card was flipped
-                                (hover), even though the clue's DD status hadn't
-                                changed. Same handler, so toggling from either face
-                                stays in sync. */}
                             <button
                               type="button"
                               className={"dd-toggle" + (clue.isDailyDouble ? " is-dd" : "")}

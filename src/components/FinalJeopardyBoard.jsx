@@ -1,8 +1,9 @@
-// components/FinalJeopardyBoard.jsx
 import React, { useState, useEffect, useRef } from "react";
 import MediaField from "./MediaField";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
+import { useCountdown } from "../lib/hooks/useCountdown";
+import { DEFAULT_FINAL_TIMER_SECONDS } from "../lib/hooks/useFinalJeopardy";
 import { youTubeEmbed, isDataUrl, humanSize } from "../lib/utils";
 import {
   getMediaUrl,
@@ -17,10 +18,7 @@ import {
 import { discordSdk } from "../discordSdk";
 import { playStandingsCelebration, stopStandingsCelebration, preloadStandingsCelebration, playCatRevealSfx, playCorrectSfx, playIncorrectSfx, holdBgmDuck } from "../lib/boardSfx";
 
-// The six Final Jeopardy phases in order — drives the progress stepper at
-// the top of the board (and could drive a matching one in PlayerView.jsx).
-// Kept as plain data here rather than duplicated inline JSX so the label
-// wording only needs to change in one place.
+// The six Final Jeopardy phases in order
 const FINAL_PHASES = [
   { key: "category", label: "Category" },
   { key: "wager", label: "Wager" },
@@ -30,8 +28,6 @@ const FINAL_PHASES = [
   { key: "done", label: "Done" },
 ];
 
-// Same escape hatch ClueModal uses — YouTube can't be embedded inside
-// Discord's Activity CSP, so open it in the user's real browser instead.
 async function openYoutubeExternally(url) {
   try {
     if (discordSdk?.commands?.openExternalLink) {
@@ -44,14 +40,7 @@ async function openYoutubeExternally(url) {
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
-/* =========================================================================
-   FinalMediaPlayer
-   Standalone, simplified version of ClueModal's media-resolving logic —
-   no timer/buzzer machinery, just: resolve a stored ref/URL to a playable
-   URL, detect image vs video vs audio (falling back through the cascade on
-   error the same way ClueModal does), and render the matching player.
-   Renders nothing if there's no media set for this field.
-   ========================================================================= */
+// FinalMediaPlayer
 function FinalMediaPlayer({ mediaRef, mediaType, className }) {
   const [url, setUrl] = useState("");
   const [renderAs, setRenderAs] = useState("");
@@ -87,12 +76,6 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
     };
   }, [mediaRef, mediaType]);
 
-  // Unlike normal clues (ClueModal.jsx's onDuckMusic), Final Jeopardy
-  // media had no BGM-ducking at all — this component manages its own
-  // local play state independently on host and player, with no host-
-  // driven sync to hang a duck call off of, so it needs to duck itself
-  // directly off `playing`. Images obviously don't produce sound, so
-  // only video/audio hold the duck.
   const duckReleaseRef = useRef(null);
   useEffect(() => {
     const audible = (renderAs === "video" || renderAs === "audio") && playing;
@@ -147,15 +130,7 @@ function FinalMediaPlayer({ mediaRef, mediaType, className }) {
   );
 }
 
-/* =========================================================================
-   UndoLastJudgmentButton
-   Reverses the single most recent Correct/Incorrect (or "Mark All ...")
-   judgment — used both mid-reveal (between batches) and on the "Final
-   Jeopardy Is Over" beat right before standings, so a misjudged team is
-   never more than one confirm dialog away from being fixed, wherever the
-   host happens to notice it. Shared here rather than duplicated in both
-   spots since the logic (and the confirm copy) needs to stay identical.
-   ========================================================================= */
+// UndoLastJudgmentButton
 function UndoLastJudgmentButton({ rd, teams, final, adjustTeamScore, appConfirm }) {
   const lastEntry = rd.judgeHistory[rd.judgeHistory.length - 1];
   const lastTeam = teams.find((t) => t.id === lastEntry.teamId);
@@ -180,21 +155,10 @@ function UndoLastJudgmentButton({ rd, teams, final, adjustTeamScore, appConfirm 
   );
 }
 
-/* =========================================================================
-   FinalRevealPicker
-   Multi-select version of the old "pick who's next" list: every remaining
-   (not-yet-judged) team gets a checkbox-style row the host can tap to
-   toggle in/out of the pending selection, plus a "Select All" shortcut and
-   a "Reveal Selected" button that confirms the batch. Selection lives as
-   local component state — nothing is synced to players until the host
-   actually confirms, so a half-made selection never flashes on anyone
-   else's screen.
-   ========================================================================= */
+// FinalRevealPicker
 function FinalRevealPicker({ teams, wagers, answers, onConfirm }) {
   const [pendingIds, setPendingIds] = useState([]);
 
-  // Drop any id that's no longer in `teams` (e.g. it just got judged via
-  // another path) so the confirm button's count/state never lags reality.
   useEffect(() => {
     setPendingIds((prev) => prev.filter((id) => teams.some((t) => t.id === id)));
   }, [teams]);
@@ -205,10 +169,25 @@ function FinalRevealPicker({ teams, wagers, answers, onConfirm }) {
 
   const allSelected = teams.length > 0 && pendingIds.length === teams.length;
 
+  const ordered = [...teams].sort((a, b) => a.score - b.score);
+  const lowest = ordered[0];
+
   return (
     <div className="final-reveal-picker">
       <h3 className="final-phase-title">Choose Who To Reveal Next</h3>
-      <p className="final-phase-hint">Select one or more teams, then confirm — order is entirely up to you.</p>
+      <p className="final-phase-hint">Lowest score first. Select one or more teams, then confirm — order is entirely up to you.</p>
+      {ordered.length > 1 && lowest && (
+        <button
+          type="button"
+          className="final-reveal-lowest-btn"
+          onClick={() => {
+            onConfirm([lowest.id]);
+            setPendingIds([]);
+          }}
+        >
+          Reveal Lowest Score — {lowest.name} (${lowest.score})
+        </button>
+      )}
       {teams.length > 1 && (
         <button
           type="button"
@@ -218,7 +197,7 @@ function FinalRevealPicker({ teams, wagers, answers, onConfirm }) {
           {allSelected ? "Deselect All" : "Select All"}
         </button>
       )}
-      {teams.map((t) => {
+      {ordered.map((t) => {
         const selected = pendingIds.includes(t.id);
         return (
           <button
@@ -261,40 +240,20 @@ function FinalRevealPicker({ teams, wagers, answers, onConfirm }) {
   );
 }
 
-/* =========================================================================
-   FinalJeopardyBoard
-   Renders instead of <ClueGrid> whenever the current round has
-   `type: "final"` (see JeopardyBoard.jsx). Walks the host through
-   category -> wager -> clue -> answer -> reveal -> done, driven entirely
-   by `rd.phase` (owned by useFinalJeopardy.js).
-
-   Wager/answer inputs here are the HOST'S manual entry — the same fallback
-   pattern ClueModal already uses for Daily Double. If a player submits
-   from their own device instead (useFinalSync, wired in JeopardyBoard.jsx),
-   that fills in rd.wagers/rd.answers directly and these inputs just show
-   the value as already locked, same as DailyDoubleFront in PlayerView.jsx
-   treats a wager that arrived from the picker's own device.
-   ========================================================================= */
+// FinalJeopardyBoard
 export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustTeamScore, appConfirm, appAlert, resolveDiscordMembersForTeam, players, playerStats }) {
   const [localAnswerDraft, setLocalAnswerDraft] = useState({});
 
-  // Per-team point-award override for judging — a small number input
-  // right next to Correct/Incorrect on each tile, always visible (no
-  // toggle click needed to reach it). Empty = judge with the team's full
-  // wager, same as before this feature existed. Typing a number in it
-  // overrides the amount for that one team's judgment (partial credit,
-  // correcting a wager typo, etc). Purely a host-side judging
-  // convenience, not synced to players and not part of rd, since it only
-  // matters in the instant before a Correct/Incorrect click and has no
-  // meaning once a team's already been judged. Keyed by teamId; cleared
-  // the moment that team is actually judged (see the cleanup in the judge
-  // button handlers below) so a stale value from an earlier batch never
-  // silently carries over to a team revealed later.
+  const [localWagerDraft, setLocalWagerDraft] = useState({});
+  const [timerDraft, setTimerDraft] = useState(null);
+  const [advancedMode, setAdvancedMode] = useState(false);
+
+  // Answer countdown (rd.clueDeadline, set by startClue)
+  const clueRemainingMs = useCountdown(!editMode && rd.phase === "clue" ? rd.clueDeadline ?? null : null);
+
+  // Per-team point-award override for judging
   const [judgeCustomAmount, setJudgeCustomAmount] = useState({}); // teamId -> string (raw input)
 
-  // Resolves the actual point amount a Correct/Incorrect click should
-  // apply for one team. Blank input = the team's full wager. A non-blank,
-  // valid number overrides it.
   function resolveJudgeAmount(teamId, wager) {
     const raw = judgeCustomAmount[teamId];
     if (raw === undefined || raw === "") return wager;
@@ -310,21 +269,28 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
     });
   }
 
-  // Teams at or above $0 wager up to their score, as usual. Teams already
-  // in the negative can wager up to the size of their debt — correct
-  // brings them exactly back to $0, incorrect digs them further in. This
-  // is the one case where "max wager" isn't just the score itself, since
-  // Math.max(negativeScore, 0) would otherwise floor everyone below $0 to
-  // a $0 max and strand them there for the rest of the game.
   const maxWager = (team) => (team.score < 0 ? Math.abs(team.score) : team.score);
 
-  // Final Jeopardy's clue fields commit live (no separate Save step, unlike
-  // EditClueModal) — question/answer text already work this way via
-  // final.setClue({question}) on every keystroke. Media follows the same
-  // pattern: read straight off rd, write straight back via the matching
-  // setter. "standingsSfx" lives directly on rd (not rd.clue) since it's a
-  // per-board customization rather than clue content — see useFinalJeopardy's
-  // setStandingsSfx.
+  function commitWagerDraft(team) {
+    const raw = localWagerDraft[team.id];
+    if (raw === undefined) return;
+    setLocalWagerDraft((p) => {
+      const next = { ...p };
+      delete next[team.id];
+      return next;
+    });
+    if (raw === "") return;
+    final.setWager(team.id, Math.max(0, Math.min(maxWager(team), parseInt(raw, 10) || 0)));
+  }
+
+  function commitTimerDraft() {
+    if (timerDraft === null) return;
+    const raw = timerDraft;
+    setTimerDraft(null);
+    if (raw === "") return;
+    final.setTimerSeconds(parseInt(raw, 10) || 0);
+  }
+
   function fieldAccessor(field) {
     if (field === "media") {
       return {
@@ -340,7 +306,6 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
         commit: (url, type) => final.setClue({ answerMediaUrl: url, answerMediaType: type }),
       };
     }
-    // "standingsSfx"
     return {
       url: rd.standingsSfxUrl,
       type: rd.standingsSfxType,
@@ -385,10 +350,6 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
     commit("", "");
   }
 
-  // Celebration SFX fires once, right when Final Standings appears — not on
-  // every re-render while that screen stays up. Resets when
-  // standingsRevealed goes back to false (e.g. final.resetFinal), so a
-  // second playthrough in the same session still gets the sting.
   const standingsSfxFiredRef = useRef(rd.standingsRevealed);
   useEffect(() => {
     if (rd.standingsRevealed && !standingsSfxFiredRef.current) {
@@ -400,38 +361,14 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
     }
   }, [rd.standingsRevealed]);
 
-  // Starts loading the custom celebration sound as soon as this whole
-  // Final Jeopardy screen is up — well before standingsRevealed actually
-  // flips true — so its first request through the Google Drive proxy has
-  // time to finish in the background while the round is still being
-  // played out. Without this, that first request only started at the
-  // exact moment playStandingsCelebration() fired, which is what made the
-  // celebration sound feel delayed. Re-runs if the host changes the file
-  // mid-round; preloadStandingsCelebration itself no-ops if it's already
-  // holding a preload for that same ref.
   useEffect(() => {
     preloadStandingsCelebration(rd.standingsSfxUrl);
   }, [rd.standingsSfxUrl]);
 
-  // Belt-and-suspenders: this component only renders while the current
-  // round is Final Jeopardy (see JeopardyBoard.jsx), so switching to a
-  // different round unmounts it — same as navigating away from the board
-  // entirely. Either way, any celebration sound still playing at that
-  // moment has no business continuing once this screen is gone.
   useEffect(() => {
     return () => stopStandingsCelebration();
   }, []);
 
-  // Separate, longer-lived duck: BGM should stay OFF for the entire time
-  // Final Standings is on screen, not just for however long the
-  // celebration sound itself plays. playStandingsCelebration's own duck
-  // (above) is released as soon as that sound finishes — that's correct
-  // for the sound, but left the BGM free to fade back in mid-standings
-  // whenever the celebration clip was short (e.g. the default built-in
-  // tone, ~1.5s). This hold is opened the moment standingsRevealed goes
-  // true and only released when it goes false again or this component
-  // unmounts, so the BGM has no window to creep back in while the
-  // standings screen is still showing.
   const standingsDuckReleaseRef = useRef(null);
   useEffect(() => {
     if (rd.standingsRevealed) {
@@ -450,15 +387,6 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
     };
   }, [rd.standingsRevealed]);
 
-  // "Now Revealing" batch flashes + plays a cue whenever the host confirms
-  // a NEW selection — same one-shot-per-change pattern as
-  // standingsSfxFiredRef, just keyed off currentRevealTeamIds instead of a
-  // single id. Fires only when a genuinely new team enters the spotlight
-  // (i.e. startRevealBatch was just called), not when the batch merely
-  // shrinks as individual teams get judged one at a time — that shrink
-  // reuses the same array-changed signal but shouldn't re-flash the whole
-  // card. justChangedTeam clears itself after the flash animation finishes
-  // so it can fire again next time a new batch comes up.
   const prevRevealTeamIdsRef = useRef(rd.currentRevealTeamIds || []);
   const [justChangedTeam, setJustChangedTeam] = useState(false);
   useEffect(() => {
@@ -475,9 +403,6 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
     prevRevealTeamIdsRef.current = ids;
   }, [rd.currentRevealTeamIds]);
 
-  // Same idea for the "Already Revealed" history: whenever a new row lands
-  // (rd.revealedTeamIds grows), play the matching correct/incorrect cue and
-  // flash that specific row so it's obvious what just got judged.
   const prevRevealedCountRef = useRef(rd.revealedTeamIds.length);
   const [justAddedTeamId, setJustAddedTeamId] = useState(null);
   useEffect(() => {
@@ -524,13 +449,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
         )}
       </div>
 
-      {/* Progress stepper — lets the host tell at a glance which phase
-          they're in without reading the panel title, and gives players
-          the same "where are we" context while they wait. Hidden once
-          the game reaches "done": at that point the Final Standings
-          board (or the correct-answer beat right before it) takes over
-          as the thing on screen, and the stepper would just be dead
-          weight above it. */}
+      {/* Progress stepper */}
       {!editMode && rd.phase !== "done" && (
         <div className="final-progress-stepper">
           {FINAL_PHASES.map((p, i) => {
@@ -589,17 +508,47 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
               hint="Shown alongside the answer when revealed."
             />
           </div>
-          <MediaField
-            label="Celebration sound (optional)"
-            type=""
-            accept="audio/*"
-            placeholder="https://... audio file, or a Google Drive link"
-            value={mediaValueFor("standingsSfx")}
-            onUrlChange={(url) => handleMediaUrlChange("standingsSfx", url)}
-            onFile={(file) => handleMediaFile("standingsSfx", file)}
-            onClear={() => handleClearMedia("standingsSfx")}
-            hint="Plays for everyone when standings are revealed. Leave empty for the built-in sound."
-          />
+          <div className="edit-clue-advanced-toggle-wrap final-edit-advanced-toggle-wrap">
+            <button
+              type="button"
+              className={"edit-clue-advanced-toggle" + (advancedMode ? " is-active" : "")}
+              onClick={() => setAdvancedMode((enabled) => !enabled)}
+              aria-expanded={advancedMode}
+            >
+              {advancedMode ? "Hide advanced" : "Advanced mode"}
+            </button>
+          </div>
+          {advancedMode && (
+            <div className="final-edit-advanced">
+              <div className="final-timer-setting">
+                <label htmlFor="final-timer-seconds">Answer timer (seconds, 0 = off)</label>
+                <input
+                  id="final-timer-seconds"
+                  type="number"
+                  min={0}
+                  max={300}
+                  value={timerDraft ?? String(rd.timerSeconds ?? DEFAULT_FINAL_TIMER_SECONDS)}
+                  onChange={(e) => setTimerDraft(e.target.value)}
+                  onBlur={commitTimerDraft}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
+                  }}
+                  onWheel={(e) => e.target.blur()}
+                />
+              </div>
+              <MediaField
+                label="Celebration sound (optional)"
+                type=""
+                accept="audio/*"
+                placeholder="https://... audio file, or a Google Drive link"
+                value={mediaValueFor("standingsSfx")}
+                onUrlChange={(url) => handleMediaUrlChange("standingsSfx", url)}
+                onFile={(file) => handleMediaFile("standingsSfx", file)}
+                onClear={() => handleClearMedia("standingsSfx")}
+                hint="Plays for everyone when standings are revealed. Leave empty for the built-in sound."
+              />
+            </div>
+          )}
         </div>
       )}
 
@@ -620,12 +569,14 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                   type="number"
                   min={0}
                   max={maxWager(team)}
-                  value={rd.wagers[team.id] ?? ""}
-                  placeholder="wager"
-                  onChange={(e) => {
-                    const val = Math.max(0, Math.min(maxWager(team), parseInt(e.target.value, 10) || 0));
-                    final.setWager(team.id, val);
+                  value={localWagerDraft[team.id] ?? rd.wagers[team.id] ?? ""}
+                  placeholder="wager (Enter)"
+                  onChange={(e) => setLocalWagerDraft((p) => ({ ...p, [team.id]: e.target.value }))}
+                  onBlur={() => commitWagerDraft(team)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") e.currentTarget.blur();
                   }}
+                  onWheel={(e) => e.target.blur()}
                 />
               </div>
             ))}
@@ -635,10 +586,23 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
             <button
               className="final-advance-btn"
               disabled={notWagered.length > 0}
-              onClick={final.startClue}
+              onClick={() => final.startClue()}
             >
               Lock Wagers & Show Clue
             </button>
+            {notWagered.length > 0 && (
+              <button
+                className="final-advance-btn final-advance-btn--secondary"
+                onClick={async () => {
+                  const names = notWagered.map((t) => t.name).join(", ");
+                  if (await appConfirm(`Continue without a wager from ${names}? They will bet $0.`)) {
+                    final.startClue(teams);
+                  }
+                }}
+              >
+                Continue Anyway (missing = $0)
+              </button>
+            )}
           </div>
         );
       })()}
@@ -650,13 +614,21 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
           <div className="final-phase-panel final-clue-reveal">
             <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
             <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
+            {clueRemainingMs != null && (
+              <div className={"final-timer" + (clueRemainingMs <= 0 ? " is-expired" : clueRemainingMs <= 10000 ? " is-low" : "")}>
+                {clueRemainingMs <= 0 ? "Time's up!" : Math.ceil(clueRemainingMs / 1000)}
+              </div>
+            )}
             <p className="final-phase-hint">
               {answeredCount} / {teams.length} teams locked in
             </p>
             {notAnswered.length > 0 && (
               <p className="final-waiting-on">Waiting on: {notAnswered.map((t) => t.name).join(", ")}</p>
             )}
-            <button className="final-advance-btn" onClick={final.startAnswerPhase}>
+            <button
+              className={"final-advance-btn" + (clueRemainingMs != null && clueRemainingMs <= 0 ? " final-advance-btn--urgent" : "")}
+              onClick={final.startAnswerPhase}
+            >
               Time's Up — Collect Answers
             </button>
           </div>
@@ -884,11 +856,6 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
       )}
 
       {!editMode && rd.phase === "done" && rd.standingsRevealed && (() => {
-        // Group teams by score so ties share a rank/column instead of one
-        // team arbitrarily landing a place above the other. Standard
-        // competition ranking: two teams tied for 1st both show "1", and
-        // the next distinct score is "3" (not "2") — same convention
-        // scoreboards/leaderboards use everywhere else.
         const sorted = [...teams].sort((a, b) => b.score - a.score);
         const groups = [];
         for (const team of sorted) {
@@ -900,25 +867,10 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
             groups.push({ rank, score: team.score, teams: [team] });
           }
         }
-        // Podium shows the top 3 distinct SCORE TIERS, not "whichever
-        // groups happen to have rank <= 3". Those aren't the same thing
-        // once ties are involved: standard competition ranking (1, 2, 2,
-        // 2, 5, ...) means a 3-way tie for 2nd consumes ranks 2/3/4
-        // entirely, so no group ever lands on rank 3 and the podium used
-        // to render only 2 columns even though a clear 3rd-place tier
-        // existed just below. Taking the first 3 groups by score instead
-        // always fills the podium (when there are ≥3 tiers) — each
-        // column's badge still shows that group's real rank (which can
-        // legitimately read "5", same as an Olympic medal table skipping
-        // a rank after a tie), only the podium's left/center/right
-        // *position* and height are decided by tier order rather than by
-        // the rank number itself.
         const podiumGroups = groups.slice(0, 3);
         const restGroups = groups.slice(3);
         const podiumHeightByPosition = [210, 164, 128]; // gold, silver, bronze
-        // Left-to-right: silver, gold, bronze — whichever of the top 3
-        // tiers actually exist (fewer than 3 teams overall just means a
-        // shorter podium).
+        // Left-to-right: silver, gold, bronze
         const podiumOrder = [podiumGroups[1], podiumGroups[0], podiumGroups[2]]
           .map((group) => (group ? { group, position: podiumGroups.indexOf(group) } : null))
           .filter(Boolean);
@@ -940,12 +892,6 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                       >
                         {group.teams.map((team) => {
                           const members = (resolveDiscordMembersForTeam?.(team) || []).slice(0, 3);
-                          // Per-player correct/wrong (+ accuracy) lookup —
-                          // shown inline under the team name here instead
-                          // of in a separate standalone panel, so a
-                          // team's stats always sit right next to that
-                          // team regardless of whether they landed on the
-                          // podium or in the list below.
                           const teamPlayers =
                             players && playerStats
                               ? players.filter((p) => p.teamId === team.id && playerStats[p.discordUserId])

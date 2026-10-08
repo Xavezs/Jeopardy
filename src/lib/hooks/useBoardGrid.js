@@ -1,61 +1,21 @@
 import { useState, useRef, useEffect } from "react";
 import { blankClue, blankCategory } from "../storage";
 
-/* =========================================================================
-   useBoardGrid
-   Owns everything about the CURRENT round's grid: categories, row values,
-   clue swapping, category reveal state, and the flip transition used both
-   for round-switching (here) and session-switching (useSessionManager,
-   which calls `performFlip` below rather than owning its own copy of this
-   animation).
-
-   Does NOT own: teams, clue-modal state, session state. Those come in as
-   `sessionRef` / `touch` / `persist`, supplied by the orchestrator.
-
-   NOTE ON FINAL JEOPARDY: a round with `type: "final"` has no
-   categories/values grid at all (see sessionStore.js's blankFinalRound) —
-   it's a single clue plus live wager/answer state, owned by
-   useFinalJeopardy.js instead. Every function below that assumes a grid
-   either early-returns on a final round or is simply never called for one
-   (ClueGrid/EditClueModal, the only callers of most of these, don't render
-   for a final round — see JeopardyBoard.jsx).
-   ========================================================================= */
 export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert }) {
-  /* ---------------- FLIP TRANSITION ----------------
-     Each category header + clue cell animates individually (not the board
-     as one piece) as a scale + fade ripple, left to right: "idle" -> "out"
-     (every column shrinks to 40% size and fades to transparent, each
-     column starting slightly later than the column to its left) -> swap
-     the actual data -> "in-start" (every cell jumps instantly back to
-     40%/transparent, no transition) -> "idle" (pops back to full size and
-     opacity with a slight overshoot bounce, same left-to-right stagger,
-     revealing the new data). Still just per-cell CSS transform + opacity —
-     GPU composited — so it stays smooth regardless of grid size. */
-  const [boardFlip, setBoardFlip] = useState("idle"); // "idle" | "out" | "in-start" | "in"
+  // FLIP TRANSITION
+  const [boardFlip, setBoardFlip] = useState("idle");
   const boardFlipTimeouts = useRef([]);
-  const FLIP_STAGGER_MS = 45; // delay added per column, left to right
-  const FLIP_CELL_MS = 200; // must match the transition duration in board.css
+  const FLIP_STAGGER_MS = 45;
+  const FLIP_CELL_MS = 200;
 
   useEffect(() => {
     return () => boardFlipTimeouts.current.forEach((t) => clearTimeout(t));
   }, []);
 
-  // catIndex: which category column this cell belongs to — every cell in
-  // the SAME column shares a delay, so the whole column flips together
-  // and the wave rolls left to right across the board. Only truly-idle
-  // (steady state, no flip in progress) resets the delay to 0 — "in" is
-  // the pop-back-in leg itself and needs to KEEP the stagger, or every
-  // cell would pop back at the exact same instant.
   function flipDelay(catIndex) {
     return boardFlip === "idle" ? "0ms" : `${catIndex * FLIP_STAGGER_MS}ms`;
   }
 
-  // Generic flip-out -> (swap data) -> flip-in choreography. Reused by
-  // switchRound below AND by useSessionManager's session/session-create
-  // switches, since both need the identical wave animation wrapped around
-  // a different data swap. `getCatCount` reads however many columns are
-  // about to be replaced (so the outgoing wave's timing matches); `swap`
-  // performs the actual (possibly async) data change in between.
   async function performFlip(getCatCount, swap) {
     if (boardFlip !== "idle") return false;
     const maxSteps = getCatCount() - 1; // last column's delay index (0-indexed)
@@ -69,46 +29,32 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
 
     const result = await swap();
 
-    setBoardFlip("in-start"); // instant jump to the opposite edge-on angle, no transition
+    setBoardFlip("in-start");
     await new Promise((resolve) =>
       requestAnimationFrame(() => requestAnimationFrame(resolve))
     );
-    setBoardFlip("in"); // transition back to flat, same left-to-right stagger
+    setBoardFlip("in");
     const tIdle = setTimeout(() => setBoardFlip("idle"), outDuration);
     boardFlipTimeouts.current.push(tIdle);
 
     return result;
   }
 
-  /* ---------------- ROUND-CHANGE BANNER ----------------
-     "DOUBLE JEOPARDY!"-style announcement that pops up on a round switch,
-     holds briefly, then fades out right as the board flip begins. */
-  const [roundBanner, setRoundBanner] = useState(null); // { text, phase: "in" | "out" } | null
-  const BANNER_HOLD_MS = 750; // how long the banner sits fully visible before fading
-  const BANNER_FADE_MS = 300; // must match .round-banner-out transition in board.css
+  const [roundBanner, setRoundBanner] = useState(null);
+  const BANNER_HOLD_MS = 750;
+  const BANNER_FADE_MS = 300;
 
-  /* ---------------- CATEGORY REVEAL ----------------
-     Category headers start blank (a clickable "?") and pop-reveal one at a
-     time as the host clicks each one — keyed by category id, so switching
-     rounds naturally re-hides the new round's categories (different ids)
-     while flipping back to an already-played round remembers what was
-     already shown. Never persisted — purely a live "for the show" state. */
+  // CATEGORY REVEAL
   const [revealedCats, setRevealedCats] = useState(() => new Set());
 
-  /* ---------------- DRAG-TO-SWAP ----------------
-     Dragging one clue cell onto another swaps their CONTENT
-     (question/answer/media/timer/used) between the two grid positions —
-     the $ value stays put since it's tied to the row, not the clue. */
-  const [dragSource, setDragSource] = useState(null); // {catId, value}
+  // DRAG-TO-SWAP
+  const [dragSource, setDragSource] = useState(null);
   const [dragOverKey, setDragOverKey] = useState(null); // catId + "-" + value
 
   function currentRoundOf(d) {
     return d.rounds[d.currentRound];
   }
 
-  // Fills in any missing category×row combos, for every GRID round. Final
-  // Jeopardy has no grid, so it's skipped entirely. Only called after a
-  // structural change (add/remove/load) — never during render.
   function ensureClueGrid(d) {
     d.rounds.forEach((round) => {
       if (round.type === "final") return;
@@ -147,33 +93,19 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     persist();
   }
 
-  // Called on round-tab click. `onBeforeSwitch` lets the orchestrator close
-  // any open modals (they reference category ids scoped to the round that
-  // was active when they were opened) right at the moment the data swaps.
   function switchRound(idx, onBeforeSwitch) {
     const d = sessionRef.current.data;
     if (idx === d.currentRound || !d.rounds[idx] || boardFlip !== "idle" || roundBanner) return;
     const rd = currentRoundOf(d);
 
-    // Announce the incoming round first — banner pops in immediately, then
-    // once it's held on screen for a beat, it starts fading out at the
-    // exact moment the board flip kicks off, so the two hand off cleanly.
+    // Announce the incoming round first
     setRoundBanner({ text: (d.rounds[idx].name || "ROUND") + "!", phase: "in" });
 
     const tBanner = setTimeout(() => {
       setRoundBanner((b) => (b ? { ...b, phase: "out" } : b));
       performFlip(
-        // The OUTGOING round (`rd`) may be Final Jeopardy, which has no
-        // `.categories` — fall back to a single "column" so the flip
-        // animation still has a valid duration instead of crashing.
         () => (rd.type === "final" ? 1 : rd.categories.length),
         () => {
-          // Re-fetch here instead of reusing `d` from the top of this
-          // function — up to ~1s has passed (banner hold + fade), and if
-          // a remote boardUpdate arrived in that window (e.g. a second
-          // host tab/window in the same room), sessionRef.current.data
-          // may now point at a different object than the one we grabbed
-          // on click. Mutating the stale one silently no-ops on screen.
           const liveData = sessionRef.current.data;
           liveData.currentRound = idx;
           if (onBeforeSwitch) onBeforeSwitch();
@@ -187,14 +119,8 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     boardFlipTimeouts.current.push(tBanner);
   }
 
-  /* ---------------- DAILY DOUBLE ----------------
-     1 DD in the first round, 2 DDs in the second round (tweak via
-     DD_COUNT_BY_ROUND). randomizeDailyDoubles always reshuffles from
-     scratch (clears every flag first, then picks new cells at random) so
-     repeated calls never stack up leftover DDs. toggleDailyDouble is the
-     manual override used from Edit Board mode — the host can add/remove
-     a DD outside of what the randomizer picked. */
-  const DD_COUNT_BY_ROUND = [1, 2]; // round index -> how many DDs to assign
+  // DAILY DOUBLE
+  const DD_COUNT_BY_ROUND = [1, 2];
 
   function randomizeDailyDoubles(roundIndex = null) {
     const d = sessionRef.current.data;
@@ -267,7 +193,7 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     if (rd.type === "final") return;
     const newVal = parseInt(input, 10);
     if (isNaN(newVal) || newVal <= 0 || rd.values.includes(newVal)) {
-      touch(); // revert silently, no popup needed for a simple field edit
+      touch();
       return;
     }
     const oldIndex = rd.values.indexOf(oldVal);
@@ -316,9 +242,6 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     persist();
   }
 
-  // Reset all clues to unused (both grid rounds) AND reset Final Jeopardy's
-  // live phase/wager/answer state back to its starting point — scores are
-  // reset by useTeams.
   function resetRoundClues() {
     const d = sessionRef.current.data;
     d.rounds.forEach((round) => {
@@ -340,7 +263,6 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
   }
 
   return {
-    // flip transition
     boardFlip,
     setBoardFlip,
     flipDelay,
@@ -348,23 +270,18 @@ export function useBoardGrid({ sessionRef, touch, persist, appConfirm, appAlert 
     FLIP_STAGGER_MS,
     FLIP_CELL_MS,
     boardFlipTimeouts,
-    // round banner
     roundBanner,
     switchRound,
-    // reveal state
     revealedCats,
     setRevealedCats,
     revealCategory,
-    // drag-to-swap
     dragSource,
     setDragSource,
     dragOverKey,
     setDragOverKey,
     swapClueCells,
-    // daily double
     randomizeDailyDoubles,
     toggleDailyDouble,
-    // grid data helpers
     currentRoundOf,
     ensureClueGrid,
     renameCategory,

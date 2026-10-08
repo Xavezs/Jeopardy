@@ -1,10 +1,6 @@
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 
-/* Shown on every client when the host runs a Power Draw. `result` is
-   { at, results: [{ discordUserId, username, skillName, won }] } from
-   useSkillSync. Rolls are decided server-side; this only reveals them after a
-   short suspense beat, then dismisses itself. */
 const ROLL_MS = 1400;
 const HOLD_MS = 6500;
 

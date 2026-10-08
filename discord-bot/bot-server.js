@@ -13,6 +13,7 @@ const db = require('./db');
 const supabase = require('./supabaseClient');
 const { createRoomPersistence, ROOM_TTL_MS } = require('./roomPersistence');
 const createSendRoomState = require('./roomSync');
+const { createBoardEmitters } = require('./boardRedaction');
 
 // Environment Variables & Port Config
 const PORT = process.env.PORT || 4001;
@@ -22,13 +23,6 @@ const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5180';
 const allowedOrigins = FRONTEND_URL.split(',').map((origin) => origin.trim()).filter(Boolean);
 const isAllowedOrigin = (origin) => !origin || allowedOrigins.includes(origin);
 
-// How long a disconnected player's team membership is held before we treat
-// it as a real leave. Socket.IO fires 'disconnect' on tab-blur, brief
-// network drops, and page refreshes — all of which reconnect within a
-// second or two. Without this grace window, a disconnect instantly wipes
-// the team (if they were its last member), and the reconnect that follows
-// a moment later can't find that team anymore and creates a fresh one at
-// score 0 — the "team resurrection" bug.
 const DISCONNECT_GRACE_MS = 5 * 60 * 1000;
 const MAX_BOARD_PAYLOAD_BYTES = 1_000_000;
 const MAX_ROOM_CODE_LENGTH = 8;
@@ -37,8 +31,9 @@ const MAX_TEAM_NAME_LENGTH = 24;
 // 1. Initialize Express App
 const app = express();
 
-// Trust proxy so secure cookies work properly through Cloudflare Tunnels
 app.set('trust proxy', 1);
+app.disable('x-powered-by');
+app.use((_req, res, next) => { res.setHeader('X-Content-Type-Options', 'nosniff'); next(); });
 
 // Middleware
 app.use(express.json());
@@ -56,12 +51,7 @@ app.use('/api/boards', require('./boards'));
 app.use('/api/media', mediaRouter);
 app.use('/api/shop', require('./shop'));
 
-// =========================================================================
-// YouTube IFrame API proxy — Discord Activities lock script-src to 'self',
-// so loading https://www.youtube.com/iframe_api directly is always blocked.
-// This route fetches the script through our own origin (same-origin = OK).
-// The response is cached in memory for 1 hour to avoid hammering YouTube.
-// =========================================================================
+// YouTube IFrame API proxy
 let ytApiCache = { body: null, fetchedAt: 0 };
 const YT_API_CACHE_MS = 60 * 60 * 1000; // 1 hour
 
@@ -75,8 +65,7 @@ app.get('/api/youtube-iframe-api.js', async (_req, res) => {
       }
       const rawText = await resp.text();
       
-      // Rewrite any hardcoded widgetapi URL (from s.ytimg.com or www.youtube.com)
-      // to go through our same-origin proxy route.
+      // Rewrite any hardcoded widgetapi URL
       const widgetApiRegex = /https?:\/\/[a-zA-Z0-9_.-]+\/[a-zA-Z0-9_\-\/.]+\/www-widgetapi\.js/g;
       const modifiedText = rawText.replace(widgetApiRegex, (match) => {
         return `/api/youtube-widgetapi.js?url=${encodeURIComponent(match)}`;
@@ -99,7 +88,7 @@ app.get('/api/youtube-widgetapi.js', async (req, res) => {
     return res.status(400).send('Missing url query parameter');
   }
 
-  // Validate the URL to prevent SSRF (allow s.ytimg.com and youtube.com)
+  // Validate the URL to prevent SSRF
   const isAllowedHost = url.startsWith('https://s.ytimg.com/') || 
                        url.startsWith('https://www.youtube.com/') || 
                        url.startsWith('https://youtube.com/');
@@ -132,29 +121,13 @@ const io = new Server(server, {
   },
 });
 
-// Shared in-memory state for the browser host and player views.
 const gameRooms = new Map();
 const invalidatedRoomCodes = new Set();
 
-// How often the empty-room sweep below runs. Doesn't need to be frequent —
-// this is just memory hygiene, not anything time-sensitive to a live game.
+// How often the empty-room sweep below runs
 const ROOM_SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
-// Rooms are never deleted anywhere else: a disconnect only ever removes
-// the *player* from room.players (see the 'disconnect' handler and its
-// DISCONNECT_GRACE_MS timeout below), never the room itself. Without this,
-// every room anyone ever hosts stays in `gameRooms` for the lifetime of
-// the process, even long after everyone's left. This sweep reclaims a
-// room once it's genuinely abandoned.
-//
-// Checked against Socket.IO's own room membership (io.sockets.adapter.rooms),
-// not room.players — room.players only ever gets entries from joinAsPlayer,
-// so a host who's alone building/editing a board (no one's called
-// joinAsPlayer yet) has no roster entry at all. Checking room.players here
-// would treat that as "empty" and delete the room, board and all, out from
-// under an actively-connected host. Checking actual socket presence instead
-// covers the host (and any spectator) the same way it covers players.
-const roomLastSeen = new Map(); // roomCode -> last time a socket was seen in it
+const roomLastSeen = new Map();
 function sweepEmptyRooms() {
   const now = Date.now();
   for (const [roomCode, room] of gameRooms) {
@@ -162,8 +135,6 @@ function sweepEmptyRooms() {
     if (socketsInRoom && socketsInRoom.size > 0) { roomLastSeen.set(roomCode, now); continue; } // someone's still actually connected
     const hasPendingReconnect = room?.pendingRemovals && room.pendingRemovals.size > 0;
     if (hasPendingReconnect) continue;
-    // An empty room is kept for ROOM_TTL_MS so a restart/refresh can resume
-    // it (its state is also saved to Supabase by roomPersistence).
     if (!roomLastSeen.has(roomCode)) roomLastSeen.set(roomCode, now);
     if (now - roomLastSeen.get(roomCode) < ROOM_TTL_MS) continue;
     gameRooms.delete(roomCode);
@@ -175,17 +146,7 @@ setInterval(sweepEmptyRooms, ROOM_SWEEP_INTERVAL_MS).unref();
 
 const roomPersistence = createRoomPersistence({ supabase, gameRooms });
 
-/* =========================================================================
-   VOICE PRESENCE (roster + mute/deaf only — no bot audio connection)
-   Discord's regular Gateway (GuildVoiceStates intent) tells us who's in a
-   voice channel and their mute/deaf flags. That's all the bot needs to
-   provide now — "who's speaking" comes client-side instead, straight from
-   the Discord Activity SDK's own RPC events (see useSpeakingState.js), and
-   useTeams.js always prefers that value over anything broadcast here. So
-   there's no reason for the bot to join the channel's audio anymore; this
-   is purely Gateway data, no @discordjs/voice, no self-muted connection.
-   ========================================================================= */
-// channelId -> Set of socketIds currently watching it (via watchVoiceChannel)
+// VOICE PRESENCE (roster + mute/deaf only
 const watchersByChannel = new Map();
 
 function buildVoiceMemberList(channelId) {
@@ -195,10 +156,6 @@ function buildVoiceMemberList(channelId) {
     id: member.id,
     username: member.displayName || member.user.username,
     avatarUrl: member.displayAvatarURL({ extension: 'png', size: 64 }),
-    // speaking is intentionally omitted here — the client merges its own
-    // SDK-sourced speaking state on top of this feed (see useTeams.js) and
-    // ignores whatever this field would say, so there's no point tracking
-    // it server-side anymore.
     muted: !!(member.voice.mute || member.voice.selfMute),
     deafened: !!(member.voice.deaf || member.voice.selfDeaf),
   }));
@@ -222,7 +179,6 @@ const client = new Client({
   ],
 });
 
-// 3. Register Slash Commands & Activity Entry Point
 async function registerCommands() { 
   if (!DISCORD_TOKEN || !CLIENT_ID) { 
     console.error('Error: DISCORD_TOKEN or CLIENT_ID is missing in environment variables.'); 
@@ -272,9 +228,6 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Mute/deafen toggles and channel join/leave don't fire the speaking
-// start/end events above (those are audio-only) — this catches everything
-// else so the facepile's muted/deafened badges and membership stay live.
 client.on('voiceStateUpdate', (oldState, newState) => {
   if (oldState.channelId && watchersByChannel.has(oldState.channelId)) {
     broadcastVoiceState(oldState.channelId);
@@ -284,14 +237,7 @@ client.on('voiceStateUpdate', (oldState, newState) => {
   }
 });
 
-/* =========================================================================
-   TEAM CLEANUP
-   Shared by both the "no stable identity" immediate-leave path and the
-   grace-period timeout below. Only removes a departed player's Discord id
-   from their team, and only drops the team entirely once nobody else
-   still connected is on it — a team with another active player keeps its
-   score exactly as-is.
-   ========================================================================= */
+// TEAM CLEANUP
 function detachFromTeamIfAbandoned(roomCode, leaving) {
   const room = gameRooms.get(roomCode);
   if (!leaving?.teamId || !room?.board?.data?.teams) return;
@@ -311,13 +257,9 @@ function detachFromTeamIfAbandoned(roomCode, leaving) {
   }
   room.board.updatedAt = Date.now();
   gameRooms.set(roomCode, room);
-  io.to(roomCode).emit('boardUpdate', room.board);
+  broadcastBoard(roomCode, room);
 }
 
-// The host re-announces its saved board after reconnecting. That snapshot can
-// be older than the live player roster, so preserve the Discord memberships
-// already known by the room instead of allowing the host snapshot to erase
-// them. Board content remains host-owned; only live team membership is merged.
 function mergeLivePlayerMemberships(boardData, players) {
   if (!Array.isArray(boardData?.teams) || !Array.isArray(players)) return;
 
@@ -333,38 +275,13 @@ function mergeLivePlayerMemberships(boardData, players) {
   }
 }
 
-// Sentinel stored in room.controlDiscordUserId to mean "control is open —
-// any connected player may pick", as opposed to null ("locked, host only")
-// or an actual discordUserId ("assigned to that one player"). Deliberately
-// not a value that could collide with a real Discord snowflake id.
 const OPEN_CONTROL = '__OPEN__';
 
-/* =========================================================================
-   BOARD CONTROL (who gets to pick the next category/clue)
-   Keyed by discordUserId, NOT socket.id — socket.id changes on every
-   reconnect (tab refresh, brief network drop), so anything keyed on it
-   reproduces the exact "team resurrection" class of bug: the rightful
-   control holder reconnects, gets a new socket.id, and the server no
-   longer recognizes them as the one who's allowed to pick.
-
-   room.controlDiscordUserId: string | null
-   - null means nobody has been assigned control yet (e.g. round just
-     started, or the host hasn't handed the board to anyone) — selectClue
-     is LOCKED in that case, not open. Only the host has a free pick until
-     it's explicitly assigned via hostSetControl or a correct judgeAnswer.
-   - OPEN_CONTROL means the host explicitly opened the board to everyone —
-     see hostSetControl.
-   ========================================================================= */
+// BOARD CONTROL
 function emitControlState(roomCode, room) {
   io.to(roomCode).emit('controlChanged', { controlDiscordUserId: room.controlDiscordUserId ?? null });
 }
 
-// Best-effort clue lookup by catId + value across every round in the
-// board — used only to feed prewarmDriveMedia below, so a miss here just
-// means no prewarm happens (falls back to on-demand fetch), never breaks
-// clue selection itself. Doesn't assume which round is "current"; scans
-// all of them since that's cheap and avoids depending on the exact field
-// name the board uses to track the active round.
 function findClueMediaUrls(boardData, catId, value) {
   const rounds = boardData?.rounds || [];
   for (const round of rounds) {
@@ -376,35 +293,13 @@ function findClueMediaUrls(boardData, catId, value) {
   return [];
 }
 
-/* =========================================================================
-   SKILLS (type 'skill' in shop.js)
-   Flow: a player UNLOCKS a skill by buying it in the shop (auto-equipped).
-   During a game the host pulls the lever on the Randomizer's Power-ups tab
-   (which calls `hostPowerDraw`); every
-   connected, teamed player who has a skill equipped and hasn't been granted
-   it yet rolls that skill's data.grantChance (default 5%). Only GRANTED skills
-   can be fired (`useSkill`), once per player per room.
-
-   Server-authoritative: ownership/equip state is read from SQLite (never
-   trusted from the client). Scores are owned by the host client, so the server
-   only validates and computes the per-team deltas, then broadcasts
-   `skillUsed`; every client plays the cutscene and the HOST applies the deltas
-   when it ends (same "host is the source of truth for scores" rule as
-   everything else).
-
-   room.skillsGranted: { [discordUserId]: string[] } — skill ids granted by a draw
-   room.skillsUsed:    { [discordUserId]: string[] } — skill ids spent since last granted
-                       (winning a skill again in a spin removes it from here)
-   ========================================================================= */
+// SKILLS (type 'skill' in shop.js)
 const SKILL_DOMAIN_EXPANSION = 'skill_domain_expansion';
-const DEFAULT_GRANT_CHANCE = 0.05; // used if a skill's data has no grantChance
-const CLEAVE_PERCENT = 0.20;   // each opponent loses 20% of their score...
+const DEFAULT_GRANT_CHANCE = 0.05;
+const CLEAVE_PERCENT = 0.20;
 const CLEAVE_MAX_LOSS = 1000;   // ...capped at this many points
-// Slightly longer than DomainExpansion.jsx's total runtime (~27s) so two
-// skills can never overlap on screen.
 const SKILL_ANIMATION_MS = 30 * 1000;
 
-// Skills this user has equipped: [{ id, name, grantChance }]
 function getEquippedSkills(userId) {
   try {
     return db
@@ -428,9 +323,7 @@ function getEquippedSkills(userId) {
   }
 }
 
-/* ---- Per-player privacy for power-ups -------------------------------------
-   Only the host may see everyone's power-ups. Players receive just their own
-   entry of skillsGranted / powerupsGranted / randomizer.playerPowerups. */
+// Per-player privacy for power-ups
 function ownEntry(map, uid) {
   return uid && map && map[uid] ? { [uid]: map[uid] } : {};
 }
@@ -468,23 +361,6 @@ function broadcastGrants(roomCode, room) {
   io.to(roomCode).except(ids).emit('powerupsGrantedUpdate', room.powerupsGranted || {});
 }
 
-/* =========================================================================
-   POWER-UPS (the six spin items: 2x Points, Shield, Steal, Freeze, Hint,
-   Re-Buzz). Handed out by the host's Power-ups spin (room.powerupsGranted,
-   { [discordUserId]: label[] }). A player activates one with `usePowerup` —
-   during a clue OR on the board (Domain Expansion is the only thing that is
-   blocked mid-clue). Each activation consumes one copy of the label.
-
-   Server-authoritative; scores stay host-owned, so:
-   - 2x Points / Shield become "armed" entries (room.armedPowerups). The host
-     client reads them when it judges an answer, applies the effect to the
-     score delta and reports back with `hostConsumeArmed`.
-   - Steal moves board control to the caster.
-   - Freeze locks a target team out of the buzzer for the current clue (or the
-     next one if no clue is open). room.frozenTeams: { [teamId]: { live } }
-   - Hint privately tells the caster the shape of the answer.
-   - Re-Buzz puts the caster at the front of the buzz queue.
-   ========================================================================= */
 const POWERUP_KINDS = {
   '2x Points': 'double',
   'Shield': 'shield',
@@ -506,7 +382,6 @@ function findActiveClue(room) {
   return cat?.clues?.[ac.value] ?? cat?.clues?.[String(ac.value)] ?? null;
 }
 
-// "The Eiffel Tower" -> "T__ E_____ T____" (first letter of each word only).
 function buildAnswerHint(answer) {
   const text = String(answer || '').replace(/<[^>]*>/g, '').trim();
   if (!text) return null;
@@ -564,19 +439,36 @@ function hasEquippedSkill(userId, skillId) {
   }
 }
 
-// 5. Unified Socket.io Real-time Game Coordination (handlers live in ./handlers)
+// 5. Unified Socket.io Real-time Game Coordination
 const registerHandlers = require('./handlers');
-const sendRoomState = createSendRoomState({ randomizerFor, sendGrantsTo });
-// Who may become host of a room: the owner/editor of the board whose invite
-// code is the room code (see hostAuth.js). ALLOW_UNVERIFIED_HOST=1 restores the
-// old self-declared behaviour for local debugging only.
+const { boardFor, broadcastBoard } = createBoardEmitters({ io, playerOfSocket });
+const sendRoomState = createSendRoomState({ randomizerFor, sendGrantsTo, boardFor });
 const hostAuth = createHostAuth({
   db,
   jwt,
   secret: SESSION_SECRET,
   cookieName: COOKIE_NAME,
   allowUnverified: process.env.ALLOW_UNVERIFIED_HOST === '1',
+  allowEditorHost: process.env.ALLOW_EDITOR_HOST === '1',
 });
+
+io.use((socket, next) => {
+  socket.userId = hostAuth.userIdFor(socket, socket.handshake?.auth?.ticket);
+  next();
+});
+if (process.env.ALLOW_UNVERIFIED_SOCKETS === '1') {
+  console.warn('[auth] ALLOW_UNVERIFIED_SOCKETS=1: clients may claim any Discord id. Do not use in production.');
+}
+
+const hostLocks = new Map();
+function roomCodeExists(code) {
+  if (gameRooms.has(code)) return true;
+  try {
+    return !!db.prepare('SELECT 1 FROM boards WHERE UPPER(room_code) = ?').get(code);
+  } catch {
+    return false;
+  }
+}
 if (process.env.ALLOW_UNVERIFIED_HOST === '1') {
   console.warn('[hostAuth] ALLOW_UNVERIFIED_HOST=1: ANY client can claim host. Do not use in production.');
 }
@@ -591,6 +483,8 @@ const ctx = {
   POWERUP_KINDS,
   SKILL_ANIMATION_MS,
   SKILL_DOMAIN_EXPANSION,
+  boardFor,
+  broadcastBoard,
   broadcastGrants,
   broadcastPowerupState,
   buildAnswerHint,
@@ -603,6 +497,8 @@ const ctx = {
   gameRooms,
   getEquippedSkills,
   hostAuth,
+  hostLocks,
+  roomCodeExists,
   hasEquippedSkill,
   invalidatedRoomCodes,
   io,
@@ -618,8 +514,6 @@ const ctx = {
 };
 io.on('connection', (socket) => registerHandlers(socket, ctx));
 
-// 6. Start HTTP Server and Login to Discord
-// Restore any saved rooms first (bounded so a slow Supabase can't block startup).
 const withTimeout = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
 withTimeout(roomPersistence.hydrate(), 5000)
   .catch(() => {})
@@ -630,7 +524,6 @@ withTimeout(roomPersistence.hydrate(), 5000)
     });
   });
 
-// Save once more on shutdown so the last few seconds of play aren't lost.
 for (const sig of ['SIGINT', 'SIGTERM']) {
   process.once(sig, () => {
     withTimeout(roomPersistence.flush(), 3000).finally(() => process.exit(0));

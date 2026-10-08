@@ -1,17 +1,4 @@
-/* =========================================================================
-   SHARED SFX UTILITIES
-
-   Every sound effect in the app (hover tick, click, reveal chime, etc.)
-   follows the same shape: try to play a real audio file, fall back to a
-   synthesized tone if the file is missing/unloadable, and debounce rapid
-   repeat fires. This used to be copy-pasted per-sound (~50-70 lines each).
-   createSfx() below is that shared shape, factored out once.
-
-   getSharedAudioCtx() is likewise shared: a single lazily-created
-   AudioContext reused across every synthesized fallback tone, rather than
-   `new AudioContext()` per call (an actual lag/hardware-conflict landmine
-   we already hit once with the original timer-alert sound).
-   ========================================================================= */
+// SHARED SFX UTILITIES
 
 let sharedCtx = null;
 export function getSharedAudioCtx() {
@@ -23,17 +10,6 @@ export function getSharedAudioCtx() {
   return sharedCtx;
 }
 
-/**
- * Runs `schedule` once `ctx` is actually running — not just once resume()
- * has been *called*. AudioContext.resume() is async; scheduling nodes
- * against ctx.currentTime in the same tick as an unresolved resume() call
- * is a race — most of the time the browser catches up fast enough that it
- * "just works", but whenever it doesn't (context was suspended — common
- * right after a modal opens, tab regains focus, etc., especially inside a
- * Discord Activity iframe), the scheduled sound silently never plays.
- * Every synthesized fallback tone below goes through this instead of
- * calling ctx.resume() and scheduling in the same breath.
- */
 export function withRunningCtx(ctx, schedule) {
   if (ctx.state === "suspended") {
     ctx.resume().then(schedule).catch(() => {});
@@ -42,12 +18,6 @@ export function withRunningCtx(ctx, schedule) {
   }
 }
 
-/**
- * Resolves once `audioEl` has enough data buffered to play through
- * (`canplaythrough`), or after `timeoutMs`, whichever comes first — never
- * rejects. Used to give a cold-cache play() rejection one genuine second
- * chance instead of immediately assuming the file is broken.
- */
 function waitForBuffered(audioEl, timeoutMs) {
   return new Promise((resolve) => {
     if (audioEl.readyState >= 3 /* HAVE_FUTURE_DATA */) {
@@ -75,27 +45,8 @@ function waitForBuffered(audioEl, timeoutMs) {
   });
 }
 
-/**
- * Unlocks audio playback for this device/origin. Must be called
- * synchronously inside a genuine user-gesture handler (click/submit/tap) —
- * not inside a promise .then(), a setTimeout, or a websocket callback, or
- * browsers won't count it as a gesture and it's a no-op.
- *
- * This matters specifically for players (as opposed to the host): the
- * host's SFX calls all happen inside their own click handlers, so they get
- * a free unlock every time. A player's SFX (correct/incorrect, category
- * reveal, Daily Double, etc.) are fired from *incoming* websocket events —
- * the host's actions, not the player's — so without ever unlocking audio
- * on a real tap of their own, the browser (especially iOS Safari and
- * Discord's in-app webview) keeps AudioContext suspended and rejects
- * every audio.play() indefinitely, silently, forever. Call this once from
- * the player's first genuine interaction (e.g. submitting "Join Game").
- */
+// Unlocks audio playback for this device/origin
 export function unlockAudioPlayback() {
-  // WebAudio: resume the shared context and play a silent buffer through
-  // it. iOS Safari in particular only actually unlocks once a sound has
-  // been started from inside the gesture — resume() alone isn't always
-  // enough.
   const ctx = getSharedAudioCtx();
   if (ctx) {
     if (ctx.state === "suspended") ctx.resume().catch(() => {});
@@ -106,12 +57,9 @@ export function unlockAudioPlayback() {
       source.connect(ctx.destination);
       source.start(0);
     } catch (e) {
-      /* best effort */
     }
   }
 
-  // HTMLMediaElement: a muted play() inside the gesture unlocks <audio>
-  // playback separately from WebAudio on some browsers/webviews.
   try {
     const el = new Audio();
     el.muted = true;
@@ -120,19 +68,9 @@ export function unlockAudioPlayback() {
       p.then(() => el.pause()).catch(() => {});
     }
   } catch (e) {
-    /* best effort */
   }
 }
 
-/**
- * Build a player function for one sound effect.
- *
- * @param {string} url - Asset URL, e.g. `new URL("./assets/click.mp3", import.meta.url).href`
- * @param {() => void} fallbackTone - Synthesized tone to play if the file is missing/unloadable
- * @param {number} [volume=0.3] - 0–1 playback volume for the file-based sound
- * @param {number} [minGapMs=40] - Minimum ms between plays; guards against double-fires
- * @returns {() => void} play() — call this to trigger the sound
- */
 export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40, onEnded }) {
   const audioTemplate = typeof Audio !== "undefined" ? new Audio(url) : null;
   let fileAvailable = !!audioTemplate;
@@ -140,15 +78,11 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40, onEn
     audioTemplate.preload = "auto";
     audioTemplate.volume = volume; 
     audioTemplate.addEventListener("error", () => {
-      fileAvailable = false; // file missing/unloadable — every future play uses the fallback tone instead
+      fileAvailable = false;
     });
   }
 
   let lastPlayedAt = 0;
-  // Every real-file clone currently mid-playback (createSfx allows
-  // overlapping plays — cloneNode per attemptPlay — so this can hold
-  // more than one node at once, e.g. rapid repeat triggers before
-  // minGapMs). play.stop() below force-stops and clears all of them.
   const activeNodes = new Set();
 
   function attemptPlay(isRetry) {
@@ -159,34 +93,21 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40, onEn
       const untrack = () => activeNodes.delete(node);
       node.addEventListener("ended", untrack, { once: true });
       node.addEventListener("error", untrack, { once: true });
-      // Fires only on a genuine natural finish — not on error, and not
-      // on stop() (see play.stop() below, which doesn't dispatch
-      // 'ended'). Lets a caller duck/hold for exactly this clip's real
-      // length instead of guessing a fixed duration that may not match
-      // the actual asset (see playFinalStandingsSfx in boardSfx.js).
       if (onEnded) node.addEventListener("ended", onEnded, { once: true });
       const playPromise = node.play();
       if (playPromise && typeof playPromise.catch === "function") {
         playPromise.catch(() => {
           untrack();
           if (isRetry) {
-            // Already gave it a second chance after buffering — this is a
-            // real, one-off playback failure (not just cold cache), so
-            // fall back for this call only. `fileAvailable` stays true;
-            // the next play() still gets a fair shot at the real audio.
             fallbackTone();
             return;
           }
-          // First failure: most likely the file just hasn't buffered
-          // enough yet (cold cache / slow network right after the
-          // activity first opens). Wait briefly for it to catch up, then
-          // try once more before giving up on it for this play.
           waitForBuffered(audioTemplate, 400).then(() => attemptPlay(true));
         });
       }
     } catch (e) {
       if (isRetry) {
-        fileAvailable = false; // real, reproducible failure — stop trying the file
+        fileAvailable = false;
         fallbackTone();
       } else {
         waitForBuffered(audioTemplate, 400).then(() => attemptPlay(true));
@@ -206,35 +127,16 @@ export function createSfx({ url, fallbackTone, volume = 0.1, minGapMs = 40, onEn
     fallbackTone();
   };
 
-  // Lets a caller adjust this sound's volume after the fact — e.g. a
-  // user-facing volume slider — without createSfx needing to expose its
-  // internal audioTemplate. audioTemplate.volume is read fresh by
-  // attemptPlay() on every play() call (see node.volume = audioTemplate.
-  // volume above), so mutating it here takes effect on the very next
-  // play, no extra plumbing needed.
-  //
-  // Only covers the real-file path. The fallback tone's gain is whatever
-  // that function itself schedules — sounds that want their fallback to
-  // stay in sync need to read the same volume source themselves (see
-  // playSynthFinalStandingsTone in boardSfx.js for an example).
   play.setVolume = (v) => {
     if (audioTemplate) audioTemplate.volume = Math.max(0, Math.min(1, v));
   };
 
-  // Force-stops every real-file clone currently mid-playback (see
-  // activeNodes above). Doesn't touch the synthesized fallback tone —
-  // that's WebAudio oscillators scheduled inline inside `fallbackTone`
-  // itself, with no handle available here to cancel; a sound that wants
-  // its fallback stoppable too needs to track/cancel its own nodes (see
-  // playDailyDoubleSfx/stopDailyDoubleSfx in boardSfx.js for an example).
-  // Safe to call even if nothing's currently playing.
   play.stop = () => {
     for (const node of activeNodes) {
       try {
         node.pause();
         node.currentTime = 0;
       } catch (e) {
-        /* best effort */
       }
     }
     activeNodes.clear();

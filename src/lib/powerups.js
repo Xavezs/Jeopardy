@@ -1,9 +1,3 @@
-// lib/powerups.js
-// Client-side catalog of the six spin power-ups. Labels must match the ones
-// TeamRandomizer hands out and bot-server.js's POWERUP_KINDS.
-//   needsTarget — the player must pick an opposing team first
-//   clueOnly    — only usable while a clue is open
-//   needsLive   — additionally needs the buzzer to be live
 export const POWERUP_INFO = {
   "2x Points": { kind: "double", desc: "Your team's next correct answer scores double." },
   "Shield":    { kind: "shield", desc: "Cancels your team's next wrong-answer penalty." },
@@ -15,7 +9,6 @@ export const POWERUP_INFO = {
 
 export const DOMAIN_LABEL = "Domain Expansion";
 
-/* Why a power-up can't be used right now (null = usable). */
 export function powerupBlockedReason(label, { inClue, buzzerLive, isFinal, hasControl, armed, myTeamId }) {
   const info = POWERUP_INFO[label];
   if (!info) return "Unknown power-up";

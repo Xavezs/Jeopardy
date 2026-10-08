@@ -90,7 +90,6 @@
 }
 .role-select-host-btn:hover {
   transform: translateY(-1px);
-  box-shadow: 0 6px 18px rgba(240, 185, 66, 0.35);
 }
 .role-select-host-btn:active {
   transform: translateY(0) scale(0.97);

@@ -1,28 +1,28 @@
-const express = require('express'); //[cite: 2]
+const express = require('express');
 const jwt = require('jsonwebtoken');
-const { signTicket } = require('./hostAuth'); //[cite: 2]
+const { signTicket } = require('./hostAuth');
 
 // 1. Initialize Express Router
-const router = express.Router(); //[cite: 2]
+const router = express.Router();
 
-// 2. Load Environment Variables (with fallbacks for both naming conventions)
-const CLIENT_ID = process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID; //[cite: 2]
-const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || process.env.CLIENT_SECRET; //[cite: 2]
-const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI; //[cite: 2]
-const SESSION_SECRET = process.env.SESSION_SECRET || 'default_fallback_secret'; //[cite: 2]
-const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5180'; //[cite: 2]
+// 2. Load Environment Variables
+const CLIENT_ID = process.env.DISCORD_CLIENT_ID || process.env.CLIENT_ID;
+const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || process.env.CLIENT_SECRET;
+const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
+const SESSION_SECRET = process.env.SESSION_SECRET || ephemeralSecret();
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5180';
 
-const COOKIE_NAME = 'jeopardy_session'; //[cite: 2]
-const SCOPES = 'identify'; //[cite: 2]
+function ephemeralSecret() {
+  console.warn('[auth] SESSION_SECRET is not set - using a random per-boot secret. Set SESSION_SECRET in .env (32+ random chars).');
+  return require('node:crypto').randomBytes(48).toString('hex');
+}
+if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length < 16) {
+  console.warn('[auth] SESSION_SECRET is shorter than 16 characters - use a long random value.');
+}
 
-// Builds a per-user avatar URL from a Discord user object. Handles animated
-// avatars (hash prefixed "a_" needs .gif, not .png — a .png request against
-// an animated hash 404s) and, when there's no custom avatar, computes
-// Discord's actual per-user default avatar instead of hardcoding everyone
-// to embed/avatars/0.png (which made every avatar-less user look identical,
-// like nothing had loaded). Modern (migrated) accounts have
-// discriminator "0" and use (id >> 22) % 6; legacy accounts still on a
-// 4-digit discriminator use discriminator % 5.
+const COOKIE_NAME = 'jeopardy_session';
+const SCOPES = 'identify';
+
 function buildAvatarUrl(discordUser) {
   if (discordUser.avatar) {
     const ext = discordUser.avatar.startsWith('a_') ? 'gif' : 'png';
@@ -34,8 +34,6 @@ function buildAvatarUrl(discordUser) {
   return `https://cdn.discordapp.com/embed/avatars/${defaultIndex}.png`;
 }
 
-// A localhost page cannot store a Secure cookie. Discord Activities, on the
-// other hand, are embedded cross-site and require a Secure, partitioned cookie.
 function cookieOptions(req) {
   const isDiscordActivity = req.get('x-discord-activity') === '1';
   return {
@@ -47,33 +45,20 @@ function cookieOptions(req) {
   };
 }
 
-// =======================================================
 // 1. DISCORD ACTIVITY OAUTH (SDK Token Exchange)
-// =======================================================
-// Used by @discord/embedded-app-sdk inside the Discord iframe
-router.post('/token', async (req, res) => { //[cite: 2]
-  const { code } = req.body; //[cite: 2]
-  if (!code) return res.status(400).json({ error: 'Missing authorization code' }); //[cite: 2]
+router.post('/token', async (req, res) => {
+  const { code } = req.body;
+  if (!code) return res.status(400).json({ error: 'Missing authorization code' });
 
   try {
-    // TEMP DEBUG — remove once invalid_request is resolved. Logs presence
-    // (not the actual secret value) so we can see which of these three is
-    // arriving empty/undefined without printing anything sensitive.
-    console.log('TEMP DEBUG /token exchange inputs:', {
-      hasClientId: Boolean(CLIENT_ID),
-      hasClientSecret: Boolean(CLIENT_SECRET),
-      codeLength: code ? code.length : 0,
-    });
-
-    // Exchange code for access token with Discord OAuth2
-    const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', { //[cite: 2]
-      method: 'POST', //[cite: 2]
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, //[cite: 2]
-      body: new URLSearchParams({ //[cite: 2]
-        client_id: CLIENT_ID, //[cite: 2]
-        client_secret: CLIENT_SECRET, //[cite: 2]
-        grant_type: 'authorization_code', //[cite: 2]
-        code: code, //[cite: 2]
+    const tokenResponse = await fetch('https://discord.com/api/v10/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code: code,
       }),
     });
 
@@ -84,148 +69,135 @@ router.post('/token', async (req, res) => { //[cite: 2]
     }
 
     // Fetch authenticated user profile
-    const userResponse = await fetch('https://discord.com/api/v10/users/@me', { //[cite: 2]
-      headers: { Authorization: `Bearer ${tokenData.access_token}` }, //[cite: 2]
+    const userResponse = await fetch('https://discord.com/api/v10/users/@me', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
 
-    const userData = await userResponse.json(); //[cite: 2]
+    const userData = await userResponse.json();
     if (!userResponse.ok) {
-      // Without this check, a failed/rate-limited/unauthorized call here
-      // (userData becomes something like { message: "401: Unauthorized" })
-      // silently fell through into building a `user` object with
-      // id/username = undefined — which then made the player's avatar (and
-      // even their whole entry) vanish for everyone, not just them, since
-      // this is what gets broadcast to the room via joinAsPlayer.
       console.error('Discord /users/@me failed:', userResponse.status, userData); // TEMP DEBUG
       throw new Error(userData.message || 'Failed to fetch Discord user profile');
     }
 
-    const user = { //[cite: 2]
-      id: userData.id, //[cite: 2]
-      username: userData.global_name || userData.username, //[cite: 2]
+    const user = {
+      id: userData.id,
+      username: userData.global_name || userData.username,
       avatarUrl: buildAvatarUrl(userData),
     };
 
-    // --- CRITICAL FIX: Sign JWT & Attach Cookie ---
-    const token = jwt.sign(user, SESSION_SECRET, { expiresIn: '30d' }); //[cite: 2]
-    res.cookie(COOKIE_NAME, token, cookieOptions(req)); //[cite: 2]
+    // CRITICAL FIX: Sign JWT & Attach Cookie
+    const token = jwt.sign(user, SESSION_SECRET, { expiresIn: '30d' });
+    res.cookie(COOKIE_NAME, token, cookieOptions(req));
 
-    return res.json({ user, access_token: tokenData.access_token }); //[cite: 2]
+    return res.json({ user, access_token: tokenData.access_token });
   } catch (err) {
-    console.error('Activity auth error:', err); //[cite: 2]
-    return res.status(500).json({ error: err.message }); //[cite: 2]
+    console.error('Activity auth error:', err);
+    return res.status(500).json({ error: err.message });
   }
 });
 
-// =======================================================
 // 2. STANDARD WEB BROWSER OAUTH2 FLOW
-// =======================================================
 
-// Step 1: Redirect user to Discord for browser login
-router.get('/discord', (req, res) => { //[cite: 2]
-  const params = new URLSearchParams({ //[cite: 2]
-    client_id: CLIENT_ID, //[cite: 2]
-    redirect_uri: DISCORD_REDIRECT_URI, //[cite: 2]
-    response_type: 'code', //[cite: 2]
-    scope: SCOPES, //[cite: 2]
+router.get('/discord', (req, res) => {
+  const params = new URLSearchParams({
+    client_id: CLIENT_ID,
+    redirect_uri: DISCORD_REDIRECT_URI,
+    response_type: 'code',
+    scope: SCOPES,
   });
-  res.redirect(`https://discord.com/api/oauth2/authorize?${params}`); //[cite: 2]
+  res.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
 });
 
-// Step 2: Discord redirects back here with authorization code
-router.get('/discord/callback', async (req, res) => { //[cite: 2]
-  const { code } = req.query; //[cite: 2]
-  if (!code) return res.status(400).send('Missing code'); //[cite: 2]
+router.get('/discord/callback', async (req, res) => {
+  const { code } = req.query;
+  if (!code) return res.status(400).send('Missing code');
 
   try {
-    const tokenRes = await fetch('https://discord.com/api/oauth2/token', { //[cite: 2]
-      method: 'POST', //[cite: 2]
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, //[cite: 2]
-      body: new URLSearchParams({ //[cite: 2]
-        client_id: CLIENT_ID, //[cite: 2]
-        client_secret: CLIENT_SECRET, //[cite: 2]
-        grant_type: 'authorization_code', //[cite: 2]
-        code, //[cite: 2]
-        redirect_uri: DISCORD_REDIRECT_URI, //[cite: 2]
+    const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: CLIENT_ID,
+        client_secret: CLIENT_SECRET,
+        grant_type: 'authorization_code',
+        code,
+        redirect_uri: DISCORD_REDIRECT_URI,
       }),
     });
 
-    if (!tokenRes.ok) { //[cite: 2]
-      console.error('Token exchange failed:', await tokenRes.text()); //[cite: 2]
-      return res.status(502).send('Discord token exchange failed'); //[cite: 2]
+    if (!tokenRes.ok) {
+      console.error('Token exchange failed:', await tokenRes.text());
+      return res.status(502).send('Discord token exchange failed');
     }
 
-    const { access_token } = await tokenRes.json(); //[cite: 2]
+    const { access_token } = await tokenRes.json();
 
-    const userRes = await fetch('https://discord.com/api/users/@me', { //[cite: 2]
-      headers: { Authorization: `Bearer ${access_token}` }, //[cite: 2]
+    const userRes = await fetch('https://discord.com/api/users/@me', {
+      headers: { Authorization: `Bearer ${access_token}` },
     });
-    const discordUser = await userRes.json(); //[cite: 2]
+    const discordUser = await userRes.json();
     if (!userRes.ok) {
       console.error('Discord /users/@me failed:', userRes.status, discordUser); // TEMP DEBUG
       return res.status(502).send('Failed to fetch Discord user profile');
     }
 
-    const sessionUser = { //[cite: 2]
-      id: discordUser.id, //[cite: 2]
-      username: discordUser.username, //[cite: 2]
+    const sessionUser = {
+      id: discordUser.id,
+      username: discordUser.username,
       avatarUrl: buildAvatarUrl(discordUser),
     };
 
-    const token = jwt.sign(sessionUser, SESSION_SECRET, { expiresIn: '30d' }); //[cite: 2]
-    res.cookie(COOKIE_NAME, token, cookieOptions(req)); // Updated to support iframe embedding[cite: 2]
+    const token = jwt.sign(sessionUser, SESSION_SECRET, { expiresIn: '30d' });
+    res.cookie(COOKIE_NAME, token, cookieOptions(req));
 
-    res.redirect(FRONTEND_URL); //[cite: 2]
+    res.redirect(FRONTEND_URL);
   } catch (err) {
-    console.error('Discord auth error:', err); //[cite: 2]
-    res.status(500).send('Login failed'); //[cite: 2]
+    console.error('Discord auth error:', err);
+    res.status(500).send('Login failed');
   }
 });
 
 // Log out: Clear cookie
-router.post('/logout', (req, res) => { //[cite: 2]
-  res.clearCookie(COOKIE_NAME, cookieOptions(req)); //[cite: 2]
-  res.json({ ok: true }); //[cite: 2]
+router.post('/logout', (req, res) => {
+  res.clearCookie(COOKIE_NAME, cookieOptions(req));
+  res.json({ ok: true });
 });
 
-// =======================================================
 // 3. MIDDLEWARE & USER STATE
-// =======================================================
 
-function requireAuth(req, res, next) { //[cite: 2]
-  const token = req.cookies?.[COOKIE_NAME]; //[cite: 2]
-  if (!token) return res.status(401).json({ error: 'Not logged in' }); //[cite: 2]
+function requireAuth(req, res, next) {
+  const token = req.cookies?.[COOKIE_NAME];
+  if (!token) return res.status(401).json({ error: 'Not logged in' });
   try {
-    req.user = jwt.verify(token, SESSION_SECRET); //[cite: 2]
-    next(); //[cite: 2]
+    req.user = jwt.verify(token, SESSION_SECRET, { algorithms: ['HS256'] });
+    next();
   } catch {
-    res.clearCookie(COOKIE_NAME, cookieOptions(req)); //[cite: 2]
-    res.status(401).json({ error: 'Session expired' }); //[cite: 2]
+    res.clearCookie(COOKIE_NAME, cookieOptions(req));
+    res.status(401).json({ error: 'Session expired' });
   }
 }
 
-function optionalAuth(req, res, next) { //[cite: 2]
-  const token = req.cookies?.[COOKIE_NAME]; //[cite: 2]
+function optionalAuth(req, res, next) {
+  const token = req.cookies?.[COOKIE_NAME];
   if (token) {
     try {
-      req.user = jwt.verify(token, SESSION_SECRET); //[cite: 2]
+      req.user = jwt.verify(token, SESSION_SECRET, { algorithms: ['HS256'] });
     } catch {
-      res.clearCookie(COOKIE_NAME, cookieOptions(req)); //[cite: 2]
+      res.clearCookie(COOKIE_NAME, cookieOptions(req));
     }
   }
-  next(); //[cite: 2]
+  next();
 }
 
-// Short-lived proof of identity for the socket connection. The host client
-// sends it with joinRoom so the server can verify who is claiming to host.
 router.get('/socket-ticket', requireAuth, (req, res) => {
   res.json({ ticket: signTicket(jwt, SESSION_SECRET, req.user.id) });
 });
 
-router.get('/me', optionalAuth, (req, res) => { //[cite: 2]
-  res.json({ user: req.user || null }); //[cite: 2]
+router.get('/me', optionalAuth, (req, res) => {
+  res.json({ user: req.user || null });
 });
 router.post('/dev-login', (req, res) => {
+  if (process.env.ENABLE_DEV_LOGIN !== '1') return res.status(404).json({ error: 'Not found' });
   const mockUser = {
     id: "mock_user_123",
     username: "LocalDevUser",
@@ -236,4 +208,4 @@ router.post('/dev-login', (req, res) => {
   res.cookie(COOKIE_NAME, token, cookieOptions(req));
   return res.json({ user: mockUser });
 });
-module.exports = { router, requireAuth, optionalAuth, COOKIE_NAME, SESSION_SECRET }; //[cite: 2]
+module.exports = { router, requireAuth, optionalAuth, COOKIE_NAME, SESSION_SECRET };

@@ -1,18 +1,6 @@
 import { api } from "../api";
 
-/* =========================================================================
-   SESSION STORE
-   Board CRUD lives on the server, scoped to whoever is logged in via
-   Discord. Boards can now be shared: an owner generates a room code via
-   inviteToBoard(), a friend uses joinBoard() with that code to get editor
-   access, and the board's buzzer can be bound to a Discord voice channel
-   via setDiscordChannel() so /buzz there feeds the same room as the web
-   Buzz button.
-
-   getCurrentId/setCurrentId are the one exception — "which board did I
-   have open last" is local UI convenience, not board data, so that still
-   lives in localStorage.
-   ========================================================================= */
+// SESSION STORE
 const CURRENT_KEY = "jp_current_session_id";
 
 export function newId() {
@@ -32,8 +20,6 @@ export function blankClue() {
     answerMediaType: "",
     used: false,
     timerSeconds: null,
-    // "Stop after N seconds" clip cutoff for question/answer audio/video —
-    // see useClueEditor.js's mediaClipSeconds/answerMediaClipSeconds.
     mediaClipSeconds: null,
     answerMediaClipSeconds: null,
     isDailyDouble: false,
@@ -51,23 +37,17 @@ export function blankCategory(name, valuesArray) {
   };
 }
 
-// Final Jeopardy is shaped completely differently from a normal round: 1
-// clue instead of a category×value grid, plus per-team wager/answer state
-// that only exists live during play. `phase` drives the host UI through
-// category -> wager -> clue -> answer -> reveal -> done, and `revealOrder`
-// is locked in (score-ascending) the moment reveal starts so it can't
-// shift mid-reveal as scores change.
 export function blankFinalRound(name) {
   return {
     type: "final",
     name: name || "Final Jeopardy",
     category: "",
     clue: blankClue(),
-    phase: "category", // "category" | "wager" | "clue" | "answer" | "reveal" | "done"
+    phase: "category",
     wagers: {}, // teamId -> number
     answers: {}, // teamId -> string
-    revealOrder: [], // teamIds, locked in when reveal starts
-    revealedTeamIds: [], // teamIds already judged, in reveal order
+    revealOrder: [],
+    revealedTeamIds: [],
   };
 }
 
@@ -97,7 +77,7 @@ export function defaultSessionData() {
 }
 
 export const SessionStore = {
-  // GET /api/boards — boards you own or were added to
+  // GET /api/boards
   async getIndex() {
     return await api("/api/boards");
   },
@@ -109,7 +89,7 @@ export const SessionStore = {
     localStorage.setItem(CURRENT_KEY, id);
   },
 
-  // GET /api/boards/:id — now also returns isOwner, roomCode (owner-only), discordChannelId
+  // GET /api/boards/:id
   async loadSession(id) {
     try {
       return await api("/api/boards/" + id);
@@ -149,9 +129,7 @@ export const SessionStore = {
     }
   },
 
-  // POST /api/boards/:id/invite — owner only. Returns the board's room
-  // code, generating one the first time. Share this with a friend so they
-  // can join with joinBoard() below.
+  // POST /api/boards/:id/invite
   async inviteToBoard(id) {
     return await api("/api/boards/" + id + "/invite", { method: "POST" });
   },
@@ -160,8 +138,7 @@ export const SessionStore = {
     return await api("/api/boards/" + id + "/rotate-invite", { method: "POST" });
   },
 
-  // POST /api/boards/join — a friend enters a room code and gets editor
-  // access. Returns the full board (same shape as loadSession()).
+  // POST /api/boards/join
   async joinBoard(roomCode) {
     return await api("/api/boards/join", {
       method: "POST",
@@ -169,8 +146,7 @@ export const SessionStore = {
     });
   },
 
-  // PUT /api/boards/:id/channel — owner only. Binds/unbinds the Discord
-  // voice channel whose /buzz feeds this board's buzzer.
+  // PUT /api/boards/:id/channel
   async setDiscordChannel(id, discordChannelId) {
     return await api("/api/boards/" + id + "/channel", {
       method: "PUT",
@@ -178,10 +154,7 @@ export const SessionStore = {
     });
   },
 
-  // POST /api/boards/:id/games — call once when the host ends the game.
-  // finalScores should be shaped like:
-  //   { teams: [{id,name,score}], ranking: [{teamId,rank,score}],
-  //     playerStats: { [discordUserId]: {username, correct, wrong, teamId} } }
+  // POST /api/boards/:id/games
   async saveGameResult(boardId, finalScores) {
     return await api("/api/boards/" + boardId + "/games", {
       method: "POST",
@@ -189,8 +162,7 @@ export const SessionStore = {
     });
   },
 
-  // GET /api/boards/:id/games — past playthroughs for this board, most
-  // recent first. Powers a "game history" / leaderboard view.
+  // GET /api/boards/:id/games
   async getGameHistory(boardId) {
     return await api("/api/boards/" + boardId + "/games");
   },
@@ -219,9 +191,6 @@ export function migrateClueSchemaIfNeeded(data) {
     delete data.values;
   }
 
-  // Legacy boards (created before Final Jeopardy existed) won't have a
-  // round with type "final" yet — append one. Runs after the `!data.rounds`
-  // branch above, so a board with zero rounds at all also ends up with one.
   if (!data.rounds.some((r) => r.type === "final")) {
     data.rounds.push(blankFinalRound("Final Jeopardy"));
   }
@@ -239,7 +208,7 @@ export function migrateClueSchemaIfNeeded(data) {
       if (!round.answers) round.answers = {};
       if (!round.revealOrder) round.revealOrder = [];
       if (!round.revealedTeamIds) round.revealedTeamIds = [];
-      return; // skip the grid-shape migration below — final has no grid
+      return;
     }
 
     if (!round.values) round.values = [100, 200, 300, 400, 500];

@@ -1,8 +1,4 @@
-/* =========================================================================
-   Skill button (player screen) — e.g. Domain Expansion.
-   `button.pv-skill-btn` is deliberately more specific than any global
-   `button` / `.btn` rule so it can't be flattened into a grey full-width bar.
-   ========================================================================= */
+/* Skill button (player screen) */
 button.pv-skill-btn {
   position: fixed;
   left: 50%;
@@ -35,7 +31,6 @@ button.pv-skill-btn {
   transition: transform 0.15s ease, box-shadow 0.15s ease, filter 0.15s ease;
 }
 
-/* small sigil in front of the label */
 button.pv-skill-btn::before {
   content: "";
   flex: 0 0 auto;
@@ -49,7 +44,6 @@ button.pv-skill-btn::before {
 button.pv-skill-btn:hover:not(:disabled) {
   transform: translate(-50%, -2px);
   filter: brightness(1.15);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.6), 0 0 28px rgba(225, 29, 46, 0.85), inset 0 0 18px rgba(225, 29, 46, 0.4);
 }
 
 button.pv-skill-btn:active:not(:disabled) {
@@ -61,7 +55,6 @@ button.pv-skill-btn:focus-visible {
   outline-offset: 3px;
 }
 
-/* used / playing */
 button.pv-skill-btn:disabled {
   animation: none;
   cursor: not-allowed;
@@ -93,7 +86,7 @@ button.pv-skill-btn:disabled::before {
   button.pv-skill-btn { animation: none; }
 }
 
-/* Player's own granted power-ups (given when the host applies the spin) */
+/* Player's own granted power-ups */
 .pv-powerup-chips {
   position: fixed;
   left: 50%;
@@ -116,10 +109,8 @@ button.pv-skill-btn:disabled::before {
   font-weight: 700;
 }
 
-/* =========================================================================
-   Power-up tray (player) + activation banner (everyone)
-   ========================================================================= */
-.pv-powerup-chips { display: none; } /* legacy static chips, replaced by the tray */
+/* Power-up tray (player) + activation banner (everyone) */
+.pv-powerup-chips { display: none; }
 
 .pv-powerup-tray {
   position: fixed;
@@ -156,7 +147,9 @@ button.pv-powerup-btn {
   cursor: pointer;
   transition: transform 0.12s ease, box-shadow 0.12s ease, opacity 0.12s ease;
 }
-button.pv-powerup-btn:hover:not(:disabled),
+button.pv-powerup-btn:hover:not(:disabled) {
+  transform: translateY(-1px);
+}
 button.pv-powerup-btn.is-picking {
   transform: translateY(-1px);
   box-shadow: 0 0 12px rgba(240, 185, 66, 0.6);
@@ -201,7 +194,6 @@ button.pv-powerup-cancel { background: transparent; border-color: rgba(255, 255,
 }
 .pv-powerup-error { font-size: 0.78rem; color: #ff8a8a; text-align: center; }
 
-/* Team badges (host sidebar): armed 2x / Shield, frozen */
 .pu-team-badges { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
 .pu-team-badge {
   padding: 1px 6px; font-size: 0.65rem; font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
@@ -238,11 +230,7 @@ button.pv-powerup-cancel { background: transparent; border-color: rgba(255, 255,
 @media (prefers-reduced-motion: reduce) { .pu-notice { animation: none; } }
 
 
-/* =========================================================================
-   Leaderboard-attached power-ups (base screen) — same idea as the inline
-   tray used inside the clue overlay, but sitting just above the base
-   SCOREBOARD panel instead of floating fixed over the whole screen.
-   ========================================================================= */
+/* Leaderboard-attached power-ups (base screen) */
 .pv-leaderboard-powerups {
   display: flex;
   flex-direction: column;
@@ -252,8 +240,6 @@ button.pv-powerup-cancel { background: transparent; border-color: rgba(255, 255,
   margin: 0 0 10px;
 }
 
-/* De-fix the skill button so it sits in normal flow here instead of
-   pinned to the bottom of the screen. */
 button.pv-skill-btn.pv-skill-btn--inline {
   position: static;
   left: auto;
@@ -262,12 +248,6 @@ button.pv-skill-btn.pv-skill-btn--inline {
   max-width: 100%;
 }
 
-/* The base hover/active rules assume the fixed-position button's own
-   `transform: translateX(-50%)` centering, so their hover/active states
-   also bake that -50% horizontal shift in. Once the button is inline
-   (transform: none as its resting state) that same -50% just shoves it
-   sideways by half its own width on hover — these overrides drop the
-   horizontal component and keep only the lift/press. */
 button.pv-skill-btn.pv-skill-btn--inline:hover:not(:disabled) {
   transform: translateY(-2px);
 }

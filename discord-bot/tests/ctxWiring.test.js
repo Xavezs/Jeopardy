@@ -1,5 +1,3 @@
-// Guards against "X is not a function" crashes: every name a handler pulls
-// from `ctx` must actually be provided by bot-server.js's ctx object.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

@@ -1,10 +1,5 @@
 import React, { useRef, useState } from "react";
 
-// Extension -> kind lookup for the "has media?" badge below. Deliberately
-// small/local (rather than importing the shared detectMediaTypeFromUrl
-// from mediaStore.js) so this component doesn't pick up a dependency on
-// wherever that file happens to live — this only has to answer "image,
-// video, audio, or unknown", nothing else needs it to be exact.
 const MEDIA_EXT_KIND = {
   image: ["jpg", "jpeg", "png", "gif", "webp", "svg", "bmp", "avif"],
   video: ["mp4", "webm", "ogv", "mov", "m4v"],
@@ -40,12 +35,6 @@ export default function MediaField({ label, type, accept, placeholder, value, on
     handleFiles(e.dataTransfer.files);
   };
 
-  // "Is there actually media here right now" — a file upload counts once
-  // it has a fileName, a URL counts once it's non-blank. Drive share
-  // links and other extension-less URLs still count as "attached", they
-  // just fall back to the generic 📎 badge below since we can't sniff
-  // image/video/audio from the link text alone (same limitation as
-  // detectMediaTypeFromUrl in mediaStore.js).
   const hasMedia = value.mode === "file" ? !!value.fileName : !!(value.url && value.url.trim());
   const kind = hasMedia ? detectKindFromName(value.mode === "file" ? value.fileName : value.url) : "";
   const badge = hasMedia ? KIND_BADGE[kind] || { icon: "📎", label: "File attached" } : null;

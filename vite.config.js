@@ -22,8 +22,6 @@ export default defineConfig({
         ws: true,
         changeOrigin: true,
       },
-      // Mimics Discord's URL Mapping (/youtube-embed -> youtube.com)
-      // for local development where the real mapping isn't active.
       '/youtube-embed': {
         target: 'https://www.youtube.com',
         changeOrigin: true,

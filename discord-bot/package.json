@@ -5,7 +5,7 @@
   "scripts": {
     "start": "node bot-server.js",
     "start:dev": "nodemon bot-server.js",
-    "test": "node --test tests/roomPersistence.test.js tests/ctxWiring.test.js tests/skillMath.test.js tests/skillsHandler.test.js tests/skillRules.test.js tests/hostAuth.test.js"
+    "test": "node --test tests/roomPersistence.test.js tests/ctxWiring.test.js tests/skillMath.test.js tests/skillsHandler.test.js tests/skillRules.test.js tests/hostAuth.test.js tests/boardRedaction.test.js tests/security.test.js"
   },
   "keywords": [],
   "author": "",

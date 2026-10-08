@@ -7,32 +7,28 @@ import domainThemeSfx     from '../assets/domain_theme.mp3';
 import shrineImg          from '../assets/domain_shrine.png';
 import { getSharedAudioCtx, withRunningCtx, unlockAudioPlayback } from '../lib/sfx';
 
-/* DomainExpansion — v4
-   circle-open from the caster's card → blood-moon title (heartbeat speeds up) → ripple rings
-   → sword-draw line + impact frame → scene splits along the diagonal, revealing the real board
-   + rising shrine + accelerating slash barrage → big X → shrine drops, hit cards get scarred.
-   All times are ms from mount (same clock for visuals and audio). Tweak in T / AUDIO / CONTENT. */
+// DomainExpansion
 
 const CONTENT = { eyebrow: 'DOMAIN EXPANSION', name: '伏魔御廚子' };
 
 const T = {
   wave: 1700,        // water ripple on "DOMAIN EXPANSION"
-  ring0: 2420,       // first ripple ring (kanji slam), then every ringGap
+  ring0: 2420,
   ringGap: 260,
   ringCount: 5,
   beat2: 3900,       // heartbeat speeds up
   beat3: 4700,
   draw: 5000,        // cut line is drawn
   impact: 5260,      // white impact frame
-  open: 5350,        // halves split, shrine rises, slashes start
+  open: 5350,
   barrage: 3600,     // barrage length (after open)
   finale: 3750,      // big X (after open)
-  hits: 4050,        // shrine drops, scars + damage numbers (after open)
+  hits: 4050,
   hitGap: 230,
 };
-export const HIT_AT = T.open + T.hits; // 9400 (JeopardyBoard uses this to time the score change)
+export const HIT_AT = T.open + T.hits;
 
-const AUDIO_LAG = 0.12; // seconds the audio trails the visuals (output latency + first-frame paint). raise if sound still leads.
+const AUDIO_LAG = 0.12;
 const AUDIO = [
   { key: 'expansion', at: 0,    volume: 0.9  },
   { key: 'name',      at: 1800, volume: 0.85 },
@@ -56,8 +52,6 @@ function loadClips() {
   });
   return clipsPromise;
 }
-/* Mist textures: baked ONCE into tiny tileable bitmaps (instead of SVG feTurbulence filters, which the
-   browser re-rasterises on the CPU at 70vmax/50vmax every time they scale - the real cause of the stall). */
 function mistPixels(seed, N, oct, tint, lo, gain) {
   let s = seed >>> 0;
   const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
@@ -94,10 +88,9 @@ function bakeMist() {
       root.setProperty(name, `url(${cv.toDataURL('image/png')})`);
     });
     mistDone = true;
-  } catch (_) { /* falls back to no mist rather than a stall */ }
+  } catch (_) { }
 }
 
-/* decode the shrine PNG ahead of time so it never hitches the split */
 let shrinePromise = null;
 function decodeShrine() {
   if (!shrinePromise) {
@@ -108,9 +101,6 @@ function decodeShrine() {
   return shrinePromise;
 }
 
-/* Everything that made the first second stall happens BEFORE the timeline clock starts:
-   audio decoded, image decoded, and the (heavy) scene laid out + painted a few frames while
-   invisible and frozen. Hard-capped so a hidden tab / slow device can never block it. */
 const cap = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(r, ms))]);
 const frames = (n) => new Promise((res) => {
   const step = () => (--n <= 0 ? res() : requestAnimationFrame(step));
@@ -131,7 +121,6 @@ if (typeof window !== 'undefined') {
   ['pointerup', 'touchend', 'keydown', 'click'].forEach((e) => window.addEventListener(e, unlock, { passive: true }));
 }
 
-/* synthesized impact sounds (boom + filtered noise) */
 function makeSynth(ctx, nodes) {
   let nb;
   const out = ctx.destination;
@@ -171,7 +160,6 @@ function crackPath() {
   return p;
 }
 
-/* one copy of the scene; rendered twice (top / bottom half of the diagonal cut) */
 function Scene({ embers, caster }) {
   return (
     <>
@@ -193,7 +181,7 @@ function Scene({ embers, caster }) {
 export default function DomainExpansion({ onDone, deltas = [], casterName, casterTeamId }) {
   const [fading, setFading] = useState(false);
   const [hits, setHits] = useState([]);
-  const [go, setGo] = useState(false); // false = warm-up (painted, frozen, ~invisible); true = clock running
+  const [go, setGo] = useState(false);
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
   const stRef = useRef(null), hARef = useRef(null), hBRef = useRef(null), cvRef = useRef(null);
@@ -203,7 +191,6 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
     left: `${R(0, 100)}%`, width: `${R(2, 6)}px`, height: `${R(2, 6)}px`,
     '--d': `${R(4, 9)}s`, '--dl': `${R(0, 4)}s`, '--dx': `${R(-80, 80)}px`,
   })), []);
-  // the circle opens from the caster's team card (falls back to screen centre)
   const origin = useMemo(() => {
     const el = casterTeamId != null && document.querySelector(`[data-team-id="${casterTeamId}"]`);
     if (!el) return { '--ox': '50vw', '--oy': '50vh' };
@@ -224,7 +211,6 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
     const FADE_AT = HIT_AT + (nHit - 1) * T.hitGap + 1900 + 300;
     const at = (ms, fn) => tm.push(setTimeout(fn, ms));
 
-    /* ---- audio: every cue scheduled against the same clock as the visuals ---- */
     loadClips().then((clips) => {
       if (!alive || !clips || !ctx) return;
       withRunningCtx(ctx, () => {
@@ -244,7 +230,7 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
         const when = (ms) => { const d = ms / 1000 - el + AUDIO_LAG; return d >= 0 ? ctx.currentTime + d : null; };
         const B = (ms, ...a) => { const t = when(ms); if (t != null) synth.boom(t, ...a); };
         const N = (ms, ...a) => { const t = when(ms); if (t != null) synth.noise(t, ...a); };
-        for (let i = 0; i < T.ringCount; i++) N(T.ring0 + i * T.ringGap, 0.35, 900 + i * 250, 300, 0.12); // ripple swish (was a 58Hz boom = heartbeat)
+        for (let i = 0; i < T.ringCount; i++) N(T.ring0 + i * T.ringGap, 0.35, 900 + i * 250, 300, 0.12);
         N(T.draw, 0.26, 1500, 7000, 0.5);                                   // sword draw
         B(T.impact, 1, 42, 1.2); N(T.impact, 0.5, 400, 120, 0.7);            // impact frame
         B(T.open + T.finale, 1, 36, 1.5); N(T.open + T.finale, 0.6, 5000, 300, 0.8); // finale X
@@ -252,7 +238,6 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
       });
     });
 
-    /* ---- canvas slashes + screen shake (one rAF loop) ---- */
     const fit = () => { const d = Math.min(2, devicePixelRatio || 1); cv.width = cv.clientWidth * d; cv.height = cv.clientHeight * d; cx.setTransform(d, 0, 0, d, 0, 0); };
     fit(); window.addEventListener('resize', fit);
     const slash = (deg, x, y, len, w, dur, style) => {
@@ -294,7 +279,6 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
       requestAnimationFrame(f);
     };
 
-    /* ---- visual timeline ---- */
     st.dataset.lb = '1';
     at(T.wave, wave);
     for (let i = 0; i < T.ringCount; i++) at(T.ring0 + i * T.ringGap, () => { ring(); shk = Math.max(shk, 9 + i * 2); });
@@ -353,7 +337,7 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
     prepare().then(() => {
       if (cancelled) return;
       flushSync(() => setGo(true));            // un-freeze the CSS animations...
-      requestAnimationFrame(() => { if (!cancelled) stop = run(); }); // ...and start the JS/audio clock on that same frame
+      requestAnimationFrame(() => { if (!cancelled) stop = run(); });
     });
     return () => { cancelled = true; if (stop) stop(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps

@@ -3,17 +3,6 @@ import { useSocket } from "../SocketContext";
 import { SessionStore } from "../storage";
 import { emitHostJoin } from "../hostJoin";
 
-// A board can disappear out from under an open session — deleted by its
-// owner from another device/tab, a delete that succeeded server-side even
-// though the client never got a clean response, etc. Saving against a
-// board id the server no longer has returns 404 "Not found" (boards.js's
-// requireRole finds no matching row, so role is null, which maps to 404 —
-// see requireRole in boards.js). Left unhandled, that 404 propagates
-// straight out of flushPersist/persist and aborts whatever called them —
-// most visibly createAndSwitchToNewSession, whose very first step is
-// flushPersist()'ing the CURRENTLY open (now-deleted) board before it can
-// even attempt to create the new one. Treat "board no longer exists" as
-// nothing left to save, not a failure worth propagating.
 function isBoardGoneError(err) {
   const msg = String(err?.message || "");
   return err?.status === 404 || /not found/i.test(msg);
@@ -31,18 +20,6 @@ async function saveSessionTolerant(s) {
   }
 }
 
-/* =========================================================================
-   usePersistence
-   Owns session STATE and its autosave plumbing. Role-aware via `isHost`:
-   only the host emits 'boardUpdate' on connect or save, preventing non-host
-   clients or secondary test windows from clobbering active room state.
-
-   Shares the tab's single socket via SocketContext (see SocketContext.jsx)
-   instead of opening its own connection. `socketRef` still exists and is
-   kept in sync with the shared socket — everything below (persist,
-   setRoomCode, rotateRoomCode) reads through the ref exactly like before,
-   so none of that logic needed to change.
-   ========================================================================= */
 export function usePersistence(isHost = true) {
   const [session, setSession] = useState(null);
   const sessionRef = useRef(null);
@@ -59,7 +36,6 @@ export function usePersistence(isHost = true) {
   const saveMsgTimeout = useRef(null);
   const persistTimeout = useRef(null);
 
-  // --- live sync ---
   const { socket } = useSocket();
   const socketRef = useRef(null);
   useEffect(() => {
@@ -67,11 +43,7 @@ export function usePersistence(isHost = true) {
   }, [socket]);
   const roomCodeRef = useRef(null);
 
-  // Recently-deleted team names (lowercased) -> deletion timestamp. Lets the
-  // boardUpdate merge below tell "zombie of a team we just deleted" apart
-  // from "legitimately new team from a joining player" — both show up as
-  // an unrecognized team ID, but only one of them should survive the merge.
-  // Self-expiring so it can't grow unbounded across a long session.
+  // Recently-deleted team names (lowercased) -> deletion timestamp
   const deletedTeamNames = useRef(new Map());
   const TOMBSTONE_MS = 15000;
   const markTeamDeleted = useCallback((name) => {
@@ -79,14 +51,6 @@ export function usePersistence(isHost = true) {
     deletedTeamNames.current.set(name.trim().toLowerCase(), Date.now());
   }, []);
 
-  // Mirror image of the tombstone above: recently-added-locally team IDs.
-  // The host round-trips a newly-added team to the server on a 400ms
-  // debounce, so there's a brief window where our own brand-new team
-  // exists locally but not yet in the server's copy. If a disconnect
-  // grace-period cleanup (or anyone else's) boardUpdate lands in that
-  // window, its team list won't include our new team either — without
-  // this guard the "server no longer has it, so remove it locally" logic
-  // below would delete a team we just created before it ever got saved.
   const recentlyAddedTeamIds = useRef(new Map());
   const RECENT_ADD_MS = 5000;
   const markTeamAdded = useCallback((id) => {
@@ -94,11 +58,6 @@ export function usePersistence(isHost = true) {
     recentlyAddedTeamIds.current.set(id, Date.now());
   }, []);
 
-  // Connected players, as broadcast by the server on join/disconnect
-  // (playersUpdate). Carries Discord identity (username/avatarUrl) per
-  // connected socket, plus a `connected` flag during the server's
-  // disconnect grace period — used as a fallback source for team avatars
-  // when live voice-presence data isn't available.
   const [players, setPlayers] = useState([]);
 
   useEffect(() => {
@@ -107,8 +66,7 @@ export function usePersistence(isHost = true) {
     const handleConnect = async () => {
       const roomCode = roomCodeRef.current;
       if (!roomCode) return;
-      // Verified host join (ticket fetched over HTTP). Awaited so the board
-      // re-announce below is only sent once the server has seen our joinRoom.
+      // Verified host join (ticket fetched over HTTP)
       await emitHostJoin(socket, roomCode);
       const s = sessionRef.current;
       if (s && isHostRef.current) {
@@ -124,24 +82,10 @@ export function usePersistence(isHost = true) {
       setPlayers(Array.isArray(list) ? list : []);
     };
 
-    // Applying a remote update goes straight into setSession, deliberately
-    // NOT through persist()/touch() — so receiving one never triggers a
-    // save or a rebroadcast.
     const handleBoardUpdate = ({ data, updatedAt }) => {
       const s = sessionRef.current;
       if (!s) return;
 
-      // The host owns board content, so we don't want to blanket-adopt a
-      // remote payload here — that could stomp in-progress edits with a
-      // stale broadcast. BUT the server can also push a boardUpdate on its
-      // own: when a joining player is auto-assigned to a team
-      // (joinAsPlayer), and when a disconnected player's grace period
-      // expires and they're detached/removed (disconnect handler in
-      // bot-server.js). Both of those only ever touch `teams`, so we merge
-      // just that array in rather than ignoring the message outright —
-      // additions, membership changes, AND removals, all three, otherwise
-      // the host's screen drifts from what every other client sees the
-      // moment someone leaves.
       if (isHostRef.current) {
         const incomingTeams = data?.teams;
         if (!Array.isArray(incomingTeams)) return;
@@ -150,7 +94,7 @@ export function usePersistence(isHost = true) {
         const incomingIds = new Set(incomingTeams.map((t) => t.id));
         const localIds = new Set(localTeams.map((t) => t.id));
 
-        // Expire old tombstones/recent-add markers before using them.
+        // Expire old tombstones/recent-add markers before using them
         const now = Date.now();
         for (const [name, ts] of deletedTeamNames.current) {
           if (now - ts > TOMBSTONE_MS) deletedTeamNames.current.delete(name);
@@ -159,19 +103,12 @@ export function usePersistence(isHost = true) {
           if (now - ts > RECENT_ADD_MS) recentlyAddedTeamIds.current.delete(id);
         }
 
-        // New teams the server knows about that we don't yet (a player
-        // just auto-created one via joinAsPlayer) — add them, unless we
-        // deliberately just deleted a team with that same name.
         const newTeams = incomingTeams.filter((t) => {
           if (localIds.has(t.id)) return false;
           if (t.name && deletedTeamNames.current.has(t.name.trim().toLowerCase())) return false;
           return true;
         });
 
-        // Teams the server no longer has at all — either its disconnect
-        // grace-period cleanup dropped them, or someone else's edit did.
-        // Adopt that removal locally too, unless it's a team we just
-        // added ourselves and the server echo simply hasn't caught up yet.
         const removedIds = new Set(
           localTeams
             .filter((t) => !incomingIds.has(t.id) && !recentlyAddedTeamIds.current.has(t.id))
@@ -180,10 +117,6 @@ export function usePersistence(isHost = true) {
 
         let changed = newTeams.length > 0 || removedIds.size > 0;
 
-        // For teams both sides still agree exist, sync discordUserIds
-        // fully (both growing AND shrinking) — the server is the sole
-        // source of truth for who's actually connected to a team, since
-        // only joinAsPlayer/disconnect ever mutate this from its side.
         const mergedExisting = localTeams
           .filter((t) => !removedIds.has(t.id))
           .map((t) => {
@@ -204,7 +137,6 @@ export function usePersistence(isHost = true) {
         return;
       }
 
-      // Last-write-wins: ignore a remote update older than what we already have.
       if (updatedAt && s.updatedAt && updatedAt < s.updatedAt) return;
       setSession((prev) => (prev ? { ...prev, data, updatedAt } : prev));
     };
@@ -213,9 +145,6 @@ export function usePersistence(isHost = true) {
     socket.on("playersUpdate", handlePlayersUpdate);
     socket.on("boardUpdate", handleBoardUpdate);
 
-    // Socket may already be connected (shared across hooks that mount at
-    // slightly different times) — join immediately rather than waiting
-    // for a 'connect' event that already fired.
     if (socket.connected) handleConnect();
 
     return () => {
@@ -269,15 +198,6 @@ export function usePersistence(isHost = true) {
       try {
         saved = await saveSessionTolerant(s);
       } catch (err) {
-        // Network was down (or the API call otherwise failed) when this
-        // fired. Previously this rejection had no catch anywhere in the
-        // chain — it became a silent unhandled promise rejection, and the
-        // edit that triggered this persist() was just lost: never saved,
-        // never broadcast, with no retry once connectivity came back.
-        // Schedule one retry attempt shortly after reconnect instead of
-        // dropping it. If `s` has since changed again, that later edit's
-        // own persist() call will already cover this save, so re-running
-        // saveSessionTolerant here is harmless (same tolerant path).
         console.warn("Autosave failed, will retry once reconnected:", err.message);
         const retry = () => {
           socketRef.current?.off("connect", retry);
@@ -286,7 +206,7 @@ export function usePersistence(isHost = true) {
         socketRef.current?.once ? socketRef.current.once("connect", retry) : socketRef.current?.on("connect", retry);
         return;
       }
-      if (!saved) return; // board's gone — nothing to broadcast either
+      if (!saved) return;
 
       setSaveMsg('Saved to "' + s.name + '"');
       clearTimeout(saveMsgTimeout.current);

@@ -1,21 +1,6 @@
 import React from "react";
 
-/* =========================================================================
-   TEAM CARD
-   One scoreboard card: name/score (or edit-mode inputs to rename, delete,
-   and assign Discord members), the click-to-select scoring shortcut
-   (↑ / ↓ then adjusts the selected team's score — see useTeams), and a
-   face-pile of any Discord members assigned to this team, each with live
-   speaking/mute state.
-
-   A team can have any number of Discord members assigned — assignment is
-   fully manual (click an avatar chip in edit mode to add/remove them),
-   there's no auto-matching by name.
-
-   Pulled out of JeopardyBoard.jsx, which had this markup duplicated inline
-   even though this file already existed. This is now the single source of
-   truth for team-card rendering.
-   ========================================================================= */
+// TEAM CARD
 export default function TeamCard({
   team,
   teamIndex,
@@ -30,13 +15,9 @@ export default function TeamCard({
   renameTeam,
   setTeamScore,
   scorePulse,
-  buzzPosition, // 1-based queue position if this team has a player buzzed
-                 // in on the current clue, null/undefined otherwise —
-                 // rendered as a small badge to the left of the card.
-  buzzIsActive, // true if the team's queued member is the one currently
-                // holding the buzzer — badge renders gold instead of navy.
-  buzzIsStruck, // true if that member already had their turn and got
-                // passed over — badge renders grey + struck-through.
+  buzzPosition,
+  buzzIsActive,
+  buzzIsStruck,
 }) {
   const assignedIds = Array.isArray(team.discordUserIds)
     ? team.discordUserIds

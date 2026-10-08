@@ -3,21 +3,6 @@ import { BgmStore, blankTrack } from "../storage/bgmStore";
 import { MediaStore } from "../storage";
 import { humanSize } from "../utils";
 
-/* =========================================================================
-   useBgmSettings
-   Background music is GLOBAL — deliberately its own bit of state, loaded
-   once at startup and saved to its own storage key, completely decoupled
-   from the session. It must never live inside session.data, or switching
-   sessions would hand BackgroundMusicPlayer a new settings object and the
-   track would reset/restart.
-
-   `roundKey` (passed in by the caller, e.g. String(data.currentRound) or
-   "final") identifies which round's track is "active" right now when
-   bgmSettings.mode === "perRound". It's just a read each render — nothing
-   here subscribes to it changing; `activeTrack` below is recomputed fresh
-   every render from the latest bgmSettings + roundKey, so switching rounds
-   naturally flows through to whatever's consuming activeTrack.
-   ========================================================================= */
 function activeTrackOf(bgm, roundKey) {
   if (!bgm) return null;
   if (bgm.mode === "perRound") {
@@ -48,11 +33,6 @@ export function useBgmSettings({ appConfirm, appAlert, roundKey }) {
     }, 400);
   }
 
-  // Patches whichever track is currently "active": the universal track's
-  // top-level fields in "universal" mode, or perRound[roundKeyRef.current]
-  // in "perRound" mode. This is what upload/clear/loop/direct-url below
-  // all go through, so the same controls in BackgroundMusicPlayer keep
-  // working unchanged regardless of which mode is selected.
   function updateActiveTrack(patch) {
     const cur = bgmRef.current;
     if (!cur) return;
@@ -73,10 +53,7 @@ export function useBgmSettings({ appConfirm, appAlert, roundKey }) {
     updateBgm({ mode });
   }
 
-  // Called once during app init. One-time migration: if this is the very
-  // first time (no global track saved yet) but the just-loaded session
-  // happens to have an old per-session track from before this was global,
-  // adopt it so nobody's existing music silently disappears.
+  // Called once during app init
   async function initBgm(loadedSessionData) {
     let bgm = await BgmStore.load();
     const legacyBgm = loadedSessionData.settings.backgroundMusic;
@@ -104,8 +81,7 @@ export function useBgmSettings({ appConfirm, appAlert, roundKey }) {
   function clearBgm() {
     updateActiveTrack({ fileRef: "", fileName: "", source: "file" });
   }
-  // Volume stays global — not per-track, not per-round. See
-  // defaultBgmSettings() in bgmStore.js for why.
+  // Volume stays global
   function setBgmVolume(volume) {
     updateBgm({ volume });
   }
@@ -113,9 +89,6 @@ export function useBgmSettings({ appConfirm, appAlert, roundKey }) {
     const active = activeTrackOf(bgmRef.current, roundKeyRef.current);
     updateActiveTrack({ loop: !active?.loop });
   }
-  // Direct audio link (mp3/ogg/etc, played via a plain <audio> element —
-  // same code path as an uploaded file, just backed by a URL instead of a
-  // MediaStore ref).
   function setBgmDirectUrl(url, name) {
     updateActiveTrack({ source: "file", fileRef: url, fileName: name });
   }

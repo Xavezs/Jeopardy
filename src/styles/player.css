@@ -308,11 +308,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   text-shadow: 0 0 10px rgba(240,185,66,0.25);
 }
 
-/* My turn (or control is open to everyone) — this cell is actually
-   tappable. Adds affordance on top of the base .pv-cell look; cells that
-   aren't pickable intentionally stay unstyled/uniform (no dimming), per
-   request — the turn indicator banner above is what communicates that
-   state instead. */
+/* My turn */
 .pv-cell.pv-pickable {
   cursor: pointer;
   border-color: rgba(240, 185, 66, 0.55);
@@ -332,7 +328,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 @media (hover: hover) {
   .pv-cell.pv-pickable:hover {
     transform: translateY(-2px);
-    box-shadow: 0 0 0 1px var(--gold), 0 0 18px rgba(240, 185, 66, 0.35);
+    box-shadow: 0 0 0 1px var(--gold);
   }
 }
 
@@ -517,9 +513,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   border-radius: 12px;
 }
 
-/* =========================================================================
-   3D Clue Card Modal & Flip Synchronization
-   ========================================================================= */
+/* 3D Clue Card Modal & Flip Synchronization */
 .pv-clue-overlay {
   position: fixed;
   top: 0;
@@ -759,10 +753,6 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   50% { opacity: 1; transform: scale(1); }
 }
 
-/* Back Face: Rotated 180deg, displays question & media. Flex column so
-   the question/media/answer share the available height instead of each
-   claiming fixed margins — media (the biggest, most variable element)
-   gets the flexible space via .pv-clue-media's flex rules below. */
 .pv-clue-flip-back {
   transform: rotateY(180deg);
   overflow-y: auto;
@@ -770,8 +760,6 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   min-height: 0;
 }
 
-/* Category + value on one slim line instead of two stacked, centered
-   blocks — saves roughly a full line of vertical space. */
 .pv-clue-cat-value {
   display: flex;
   align-items: baseline;
@@ -844,8 +832,6 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 .pv-clue-media audio {
   width: 100%;
 }
-/* The custom video/audio players size themselves via board.css, but cap
-   them here too so a long clip can't push the answer off-screen. */
 .pv-clue-media .custom-video-player,
 .pv-clue-media .custom-audio-player {
   margin: 0 auto;
@@ -870,9 +856,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   flex-shrink: 0;
 }
 
-/* =========================================================================
-   App Landing / Role Select Styles
-   ========================================================================= */
+/* App Landing / Role Select Styles */
 .app-landing-card {
   max-width: 400px;
   width: 100%;
@@ -1092,28 +1076,11 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   object-fit: cover;
 }
 
-/* =========================================================================
-   Player BGM Widget
-   Small floating note button, bottom-right, sitting above the buzz bar.
-   Mirrors the host's now-playing state (read-only) — the only control a
-   player actually has here is their own local volume.
-   ========================================================================= */
+/* Player BGM Widget */
 .pv-bgm-widget {
-  /* Portaled straight into document.body (see PlayerBgmWidget.jsx) to
-     escape .pv-root's overflow clipping — which also means it's no
-     longer a DOM descendant of .pv-root, so that file's
-     `.pv-root * { box-sizing: border-box; }` no longer reaches this
-     subtree. Set it explicitly here instead of relying on it. Same
-     reason font-family is set explicitly below: .pv-root's own
-     font-family no longer cascades down to a portaled subtree either. */
   box-sizing: border-box;
   font-family: var(--font-body), system-ui, -apple-system, sans-serif;
   position: fixed;
-  /* Matches BackgroundMusicPlayer's fixed 18px/18px corner exactly.
-     There's no persistent buzz bar reserving space at the bottom of the
-     player screen (the BUZZ button lives inline inside the clue overlay,
-     not a fixed bottom bar), so there's nothing to offset above — the
-     old --pv-buzzbar-height offset just left this floating too high. */
   right: 18px;
   bottom: 18px;
   z-index: 310;
@@ -1143,13 +1110,6 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   position: absolute;
   right: 0;
   bottom: 54px;
-  /* Matches BackgroundMusicPlayer's .bgm-panel exactly (width, padding,
-     background opacity, shadow) so the two look like the same component
-     in different modes rather than two different designs. The player
-     version was previously much more transparent (0.55/0.92 alpha),
-     which on a narrow mobile viewport let the board cells behind it
-     bleed through and made the panel unreadable — see the screenshot
-     that flagged this. */
   width: 240px;
   background: linear-gradient(180deg, rgba(26,37,112,0.97), rgba(6,9,26,0.98));
   border: 1px solid rgba(240,185,66,0.3);
@@ -1198,10 +1158,6 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   filter: drop-shadow(0 0 4px rgba(240, 185, 66, 0.35));
 }
 
-/* Same plain native slider as BackgroundMusicPlayer's .bgm-volume-slider
-   — just accent-color on an unstyled <input type="range">, rather than
-   a custom-built track/thumb. Kept identical between host and player so
-   the two widgets read as the same component. */
 .pv-bgm-volume-row input[type="range"] {
   flex: 1;
   accent-color: var(--gold);
@@ -1226,8 +1182,6 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   flex-shrink: 0;
 }
 
-/* Same plain native slider treatment as .pv-bgm-volume-row above (and
-   BackgroundMusicPlayer's .bgm-volume-slider) — no custom track/thumb. */
 .pv-bgm-fs-volume-row input[type="range"] {
   flex: 1;
   accent-color: var(--gold);
@@ -1254,17 +1208,16 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   position: fixed;
   top: 14px;
   right: 14px;
-  z-index: 1000; /* must be higher than .pv-clue-overlay's z-index */
+  z-index: 1000;
 }
 
-/* ── Shop Modal ───────────────────────────────────────────────────────── */
+/* Shop Modal */
 .shop-modal {
   max-width: 560px;
   display: flex;
   flex-direction: column;
   gap: 14px;
-  /* Explicit font inheritance — modal is portaled outside .pv-root so
-     font-family doesn't cascade down automatically. */
+  /* Explicit font inheritance */
   font-family: var(--font-body), 'Quicksand', system-ui, sans-serif;
   color: var(--text);
 }
@@ -1451,7 +1404,7 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
 }
 .shop-unequip-btn:hover { background: rgba(255,255,255,0.12); color: var(--text); }
 
-/* ── Skill item card ──────────────────────────────────────────────────── */
+/* Skill item card */
 .shop-item-card.is-skill {
   border-color: rgba(200, 60, 60, 0.4);
   background: linear-gradient(135deg, rgba(40, 10, 10, 0.95) 0%, rgba(20, 5, 5, 0.95) 100%);

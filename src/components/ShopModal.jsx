@@ -6,18 +6,9 @@ import '../styles/skill.css';
 import { getSharedAudioCtx, withRunningCtx } from '../lib/sfx';
 import DomainExpansion from './DomainExpansion';
 
-/* =========================================================================
-   ShopModal
-   Cosmetics shop + loadout manager for players. Opens from the room bar
-   in PlayerView. Two tabs:
-     Shop    — browse and buy items with earned coins
-     Loadout — equip / unequip owned items
+// ShopModal
 
-   Custom buzz sounds are previewed here using the same synth-or-file
-   pattern as boardSfx.js — no extra infrastructure needed.
-   ========================================================================= */
-
-// ── Synth preview for items that have synthParams ─────────────────────────
+// Synth preview for items that have synthParams
 function playSynthPreview(params) {
   try {
     const ctx = getSharedAudioCtx();
@@ -57,7 +48,7 @@ function previewItem(item) {
   }
 }
 
-// ── Single item card ───────────────────────────────────────────────────────
+// Single item card
 function ItemCard({ item, coins, onBuy, onEquip, onUnequip, buying, equipping, onPreviewSkill }) {
   const canAfford = coins >= item.price;
   const statusLabel = item.equipped ? 'Equipped' : item.owned ? 'Owned' : null;
@@ -104,7 +95,7 @@ function ItemCard({ item, coins, onBuy, onEquip, onUnequip, buying, equipping, o
   );
 }
 
-// ── Main modal ─────────────────────────────────────────────────────────────
+// Main modal
 export default function ShopModal({ onClose, discordUserId, onChanged }) {
   const [tab, setTab] = useState('buzzer'); // 'buzzer' | 'power' | 'inventory'
   const [catalog, setCatalog] = useState(null);
@@ -142,7 +133,6 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
     try {
       const result = await buyItem(item.id);
       setCoins(result.coins);
-      // Skills auto-equip on purchase (server unequips any other skill).
       setCatalog((prev) =>
         prev.map((i) => {
           if (i.id === item.id) return { ...i, owned: true, equipped: !!result.equipped };
@@ -163,7 +153,6 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
     try {
       await equipItem(item.id, true);
       onChanged?.();
-      // Unequip all others of same type, equip this one
       setCatalog((prev) =>
         prev.map((i) => {
           if (i.type === item.type) return { ...i, equipped: i.id === item.id };
@@ -295,7 +284,7 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
         )}
       </div>
 
-      {/* Skill preview cutscene — portaled so it escapes the modal's overflow */}
+      {/* Skill preview cutscene */}
       {previewSkill?.data?.preview === 'domain_expansion' &&
         createPortal(
           <DomainExpansion onDone={() => setPreviewSkill(null)} />,
