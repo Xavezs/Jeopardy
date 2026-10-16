@@ -5,6 +5,7 @@ import spinningSound from "../assets/slot-spin.mp3";
 import stopSound     from "../assets/slot-stop.mp3";
 import winSound      from "../assets/slot-win.mp3";
 import wheelSpinSound from "../assets/spinning-wheel.mp3";
+import { setSfxAudioVolume } from "../lib/sfx";
 
 // RANDOMIZER
 
@@ -62,15 +63,15 @@ function getAudioCtx() {
 function playStartAndSpinOnce() {
   try {
     getAudioCtx();
-    startAudio.currentTime = 0; startAudio.volume = 0.5; startAudio.play();
-    spinningAudio.currentTime = 0; spinningAudio.volume = 0.4; spinningAudio.play();
+    startAudio.currentTime = 0; setSfxAudioVolume(startAudio, 0.5, true); startAudio.play();
+    spinningAudio.currentTime = 0; setSfxAudioVolume(spinningAudio, 0.4, true); spinningAudio.play();
   } catch (_) {}
 }
 function playStop() {
-  try { getAudioCtx(); const c = stopAudio.cloneNode(); c.volume = 0.6; c.play(); } catch (_) {}
+  try { getAudioCtx(); const c = stopAudio.cloneNode(); setSfxAudioVolume(c, 0.6, true); c.play(); } catch (_) {}
 }
 function playWin() {
-  try { getAudioCtx(); winAudio.currentTime = 0; winAudio.volume = 0.7; winAudio.play(); } catch (_) {}
+  try { getAudioCtx(); winAudio.currentTime = 0; setSfxAudioVolume(winAudio, 0.7, true); winAudio.play(); } catch (_) {}
 }
 
 // Utilities
@@ -291,7 +292,7 @@ function SpinWheel({ teams, readOnly, syncedState, onSpun }) {
 
     wheelAudio.currentTime = 0;
     wheelAudio.loop   = false;
-    wheelAudio.volume = 0.7;
+    setSfxAudioVolume(wheelAudio, 0.7, true);
     wheelAudio.addEventListener("ended", onEnded, { once: true });
     wheelAudio.play().catch(() => {
       // Autoplay blocked

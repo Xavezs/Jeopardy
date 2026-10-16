@@ -11,8 +11,12 @@ import { useSpeakingState } from "../lib/hooks/useSpeakingState";
 import { useDiscordMembers } from "../lib/hooks/useDiscordMembers";
 import { getMediaUrl, isGoogleDriveUrl, extractGoogleDriveFileId, resolveGoogleDriveMediaType } from "../lib/storage";
 import { isYoutubeUrl } from "../lib/youtube";
-import { getDiscordIdentity, activityChannelId } from "../discordSdk";
-import { unlockAudioPlayback, getSharedAudioCtx, withRunningCtx } from "../lib/sfx";
+import { getBuzzSoundUrl } from "../lib/buzzSounds";
+import { activityChannelId } from "../discordSdk";
+import { getIdentity } from "../lib/identity";
+import { API_BASE } from "../lib/api";
+import Avatar from "./Avatar";
+import { unlockAudioPlayback, getSharedAudioCtx, getSfxOutput, withRunningCtx, playSfxAudio } from "../lib/sfx";
 import MarqueeBulbs from "../lib/MarqueeBulbs";
 import ShopModal from "./ShopModal";
 import ShopWidget from "./ShopWidget";
@@ -578,7 +582,7 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
                 >
                   <span className="pv-final-reveal-history-icon">{rd.results?.[t.id] ? "✓" : "✗"}</span>
                   {members.length > 0 ? (
-                    <img src={members[0].avatarUrl} alt="" className="pv-final-reveal-history-avatar" />
+                    <Avatar src={members[0].avatarUrl} platform={members[0].platform} className="pv-final-reveal-history-avatar" />
                   ) : (
                     <div className="pv-final-reveal-history-avatar-fallback">{(t.name || "?").trim().charAt(0).toUpperCase()}</div>
                   )}
@@ -638,10 +642,10 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
     return (
       <div className="pv-podium-avatar-stack">
         {members.map((m) => (
-          <img
+          <Avatar
             key={m.id}
             src={m.avatarUrl}
-            alt=""
+            platform={m.platform}
             className={"pv-podium-avatar" + (m.speaking ? " is-speaking" : "")}
           />
         ))}
@@ -788,7 +792,7 @@ export default function PlayerView() {
     (async () => {
       let user = null;
       try {
-        user = await getDiscordIdentity();
+        user = await getIdentity();
       } catch (err) {
         console.warn("Discord identity resolution failed, continuing without it:", err.message);
       }
@@ -872,6 +876,16 @@ export default function PlayerView() {
       <div className="pv-root pv-center">
         <form className="pv-join-card" onSubmit={handleJoin}>
           <h1>Join a Game</h1>
+          {discordUser?.platform === "web" && (
+            <div className="web-identity-chip">
+              <Avatar src={discordUser.avatarUrl} platform="web" className="web-identity-avatar" />
+              <span className="web-identity-name">{discordUser.username}</span>
+              <span className="web-identity-tag">{discordUser.guest ? "Guest \u00b7 Web" : "Web"}</span>
+              {discordUser.guest && (
+                <a className="web-identity-login" href={`${API_BASE}/api/auth/discord`}>Log in with Discord</a>
+              )}
+            </div>
+          )}
           <label>
             Room Code
             <input
@@ -974,42 +988,54 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
   // Cosmetics shop
   const [loadout, setLoadout] = useState({});
   const hasDiscordId = !!me.discordUser?.id;
+  const isGuestUser = !!me.discordUser?.guest; // guests have no wallet/shop (the server enforces this too)
 
   const refreshLoadout = useCallback(async () => {
-    if (!hasDiscordId) return;
+    if (!hasDiscordId || isGuestUser) return;
     try {
       const data = await fetchLoadout();
       setLoadout(data || {});
     } catch (_) { }
-  }, [hasDiscordId]);
+  }, [hasDiscordId, isGuestUser]);
 
   useEffect(() => { refreshLoadout(); }, [refreshLoadout]);
 
   // Custom buzz sound
   const playCustomBuzzSound = useCallback(() => {
     const buzzItem = loadout.buzz_sound;
-    if (!buzzItem?.data?.synth || !buzzItem.data.synthParams) return;
+    if (!buzzItem) return;
+    if (buzzItem.data?.synth && buzzItem.data.synthParams) {
+      try {
+        const ctx = getSharedAudioCtx();
+        if (!ctx) return;
+        withRunningCtx(ctx, () => {
+          const t0 = ctx.currentTime;
+          const { type = 'square', startHz = 220, endHz = 440, durationMs = 200, volume = 0.2 } = buzzItem.data.synthParams;
+          const osc = ctx.createOscillator();
+          const gain = ctx.createGain();
+          osc.type = type;
+          osc.frequency.setValueAtTime(startHz, t0);
+          osc.frequency.linearRampToValueAtTime(endHz, t0 + durationMs / 1000);
+          gain.gain.setValueAtTime(0.0001, t0);
+          gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
+          gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationMs / 1000);
+          osc.connect(gain);
+          gain.connect(getSfxOutput(ctx));
+          osc.onended = () => { osc.disconnect(); gain.disconnect(); };
+          osc.start(t0);
+          osc.stop(t0 + durationMs / 1000 + 0.05);
+        });
+      } catch (_) { /* best effort */ }
+      return;
+    }
+
+    const url = getBuzzSoundUrl(buzzItem);
+    if (!url) return;
     try {
-      const ctx = getSharedAudioCtx();
-      if (!ctx) return;
-      withRunningCtx(ctx, () => {
-        const t0 = ctx.currentTime;
-        const { type = 'square', startHz = 220, endHz = 440, durationMs = 200, volume = 0.2 } = buzzItem.data.synthParams;
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.type = type;
-        osc.frequency.setValueAtTime(startHz, t0);
-        osc.frequency.linearRampToValueAtTime(endHz, t0 + durationMs / 1000);
-        gain.gain.setValueAtTime(0.0001, t0);
-        gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
-        gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationMs / 1000);
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.onended = () => { osc.disconnect(); gain.disconnect(); };
-        osc.start(t0);
-        osc.stop(t0 + durationMs / 1000 + 0.05);
-      });
-    } catch (_) { /* best effort */ }
+      playSfxAudio(url, 0.7);
+    } catch (err) {
+      console.warn("Could not play equipped buzzer sound:", err);
+    }
   }, [loadout]);
 
   const handleBuzz = useCallback(() => {
@@ -1121,6 +1147,7 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
           return {
             id: p.discordUserId,
             avatarUrl: p.discordAvatarUrl,
+            platform: p.platform,
             speaking: speakingIds.has(p.discordUserId),
             muted: !!voiceState?.muted,
             deafened: !!voiceState?.deafened,
@@ -1486,7 +1513,7 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
         </button>
       </div>
 
-      <ShopWidget discordUserId={me.discordUser?.id} onChanged={refreshLoadout} />
+      {!isGuestUser && <ShopWidget discordUserId={me.discordUser?.id} onChanged={refreshLoadout} />}
       <SkillOverlay activeSkill={activeSkill} onDone={clearActiveSkill} />
       <PowerupNotice notice={powerupNotice} onDone={clearPowerupNotice} />
 

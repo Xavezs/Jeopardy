@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { getMediaUrl } from "../lib/storage";
 import { isSoundCloudUrl } from "../lib/soundcloud";
 import { subscribeSfxDucking } from "../lib/boardSfx";
+import SfxVolumeControl from "./SfxVolumeControl";
 
 // BACKGROUND MUSIC PLAYER
 const DUCK_LEVEL = 0;
@@ -364,6 +365,7 @@ export default function BackgroundMusicPlayer({
               />
             </div>
           )}
+          <SfxVolumeControl />
         </div>
       )}
 

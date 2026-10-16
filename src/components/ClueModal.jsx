@@ -5,7 +5,8 @@ import CustomAudioPlayer from './CustomAudioPlayer';
 import CustomVideoPlayer from './CustomVideoPlayer';
 import YoutubePlayer from './YoutubePlayer';
 import ClueMediaImage from './ClueMediaImage';
-import { createSfx, getSharedAudioCtx, withRunningCtx } from "../lib/sfx";
+import Avatar from "./Avatar";
+import { createSfx, getSharedAudioCtx, getSfxOutput, withRunningCtx } from "../lib/sfx";
 import { playDailyDoubleSfx, stopDailyDoubleSfx } from "../lib/boardSfx";
 import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
 
@@ -28,7 +29,7 @@ function playSynthRevealTone() {
     oscGain.gain.exponentialRampToValueAtTime(0.22, t0 + 0.01);
     oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
     osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
+    oscGain.connect(getSfxOutput(ctx));
     osc.onended = () => {
       osc.disconnect();
       oscGain.disconnect();
@@ -65,7 +66,7 @@ function playSynthCorrectTone() {
       gain.gain.exponentialRampToValueAtTime(0.25, t0 + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.18);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.start(t0 + delay);
       osc.stop(t0 + delay + 0.2);
     });
@@ -88,7 +89,7 @@ function playSynthIncorrectTone() {
     gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(getSfxOutput(ctx));
     osc.start(t0);
     osc.stop(t0 + 0.3);
   } catch (e) {
@@ -123,7 +124,7 @@ function playAlertSound() {
       gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + delay + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + 0.28);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.start(ctx.currentTime + delay);
       osc.stop(ctx.currentTime + delay + 0.3);
     };
@@ -1076,9 +1077,9 @@ export default function ClueModal({
                     <div className="score-team-discord-facepile">
                       {discordTeamMembers.map((dm) => (
                         <div className="score-team-discord-avatar-wrap" key={dm.id}>
-                          <img
+                          <Avatar
                             src={dm.avatarUrl}
-                            alt=""
+                            platform={dm.platform}
                             className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
                             style={{ opacity: dm.deafened ? 0.4 : 1 }}
                           />

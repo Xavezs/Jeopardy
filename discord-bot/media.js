@@ -4,7 +4,7 @@ const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { GoogleAuth } = require('google-auth-library');
 const supabase = require('./supabaseClient');
-const { requireAuth } = require('./auth');
+const { requireAuth, requireAccount } = require('./auth');
 const { safeFetch, isAllowedMediaType } = require('./safeFetch');
 
 const execFileAsync = promisify(execFile);
@@ -26,7 +26,7 @@ function newKey(ownerId, filename) {
 }
 
 // POST /api/media/upload  (multipart/form-data, field name "file")
-router.post('/upload', upload.single('file'), async (req, res) => {
+router.post('/upload', requireAccount, upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file provided' });
 
   const key = newKey(req.user.id, req.file.originalname);
@@ -45,7 +45,7 @@ router.post('/upload', upload.single('file'), async (req, res) => {
 });
 
 // DELETE /api/media/*  (key contains slashes)
-router.delete('/*splat', async (req, res) => {
+router.delete('/*splat', requireAccount, async (req, res) => {
   const key = req.params.splat.join('/');
   if (!key.startsWith(req.user.id + '/')) {
     return res.status(403).json({ error: 'Not allowed' });

@@ -7,6 +7,7 @@ import {
   setFinalStandingsVolume,
   getFinalStandingsVolume,
 } from "../lib/boardSfx";
+import SfxVolumeControl from "./SfxVolumeControl";
 
 // PLAYER BGM WIDGET
 const DRIFT_TOLERANCE_S = 1.5;
@@ -270,6 +271,11 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
               title="Your celebration sound volume (only affects your own device)"
             />
           </div>
+          <SfxVolumeControl
+            className="pv-bgm-fs-volume-row"
+            labelClassName="pv-bgm-fs-volume-label"
+            sliderClassName="pv-bgm-fs-volume-slider"
+          />
         </div>
       )}
 

@@ -4,7 +4,7 @@ import LoginGate from "./components/LoginGate";
 import PlayerView from "./components/PlayerView";
 import RoleSelect from "./components/RoleSelect";
 import { SocketProvider } from "./lib/SocketContext";
-import { getDiscordIdentity } from './discordSdk';
+import { getIdentity } from './lib/identity';
 import { installGlobalBoardSfx } from './lib/boardSfx';
 import '@fontsource/quicksand/300.css';
 import '@fontsource/quicksand/600.css';
@@ -85,7 +85,7 @@ export default function App() {
 
     setJoining(true);
     try {
-      const discordUser = await getDiscordIdentity();
+      const discordUser = await getIdentity();
       if (discordUser) {
         localStorage.setItem(`jeopardy:player:${code}:discordUser`, JSON.stringify(discordUser));
       } else {

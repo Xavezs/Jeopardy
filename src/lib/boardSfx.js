@@ -1,4 +1,4 @@
-import { createSfx, getSharedAudioCtx, withRunningCtx } from "./sfx";
+import { createSfx, getSharedAudioCtx, getSfxOutput, withRunningCtx, getSfxVolume, subscribeSfxVolume } from "./sfx";
 import { getMediaUrl } from "./storage";
 import { storeGet, storeSet } from "./storage/kvStore";
 
@@ -24,7 +24,7 @@ function playSynthHoverTick() {
     oscGain.gain.exponentialRampToValueAtTime(0.32, t0 + 0.006);
     oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.13);
     osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
+    oscGain.connect(getSfxOutput(ctx));
     osc.onended = () => {
       osc.disconnect();
       oscGain.disconnect();
@@ -49,7 +49,7 @@ function playSynthHoverTick() {
     noiseGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.03);
     noise.connect(noiseFilter);
     noiseFilter.connect(noiseGain);
-    noiseGain.connect(ctx.destination);
+    noiseGain.connect(getSfxOutput(ctx));
     noise.onended = () => {
       noise.disconnect();
       noiseFilter.disconnect();
@@ -121,7 +121,7 @@ function playSynthClickTone() {
     oscGain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.004);
     oscGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.06);
     osc.connect(oscGain);
-    oscGain.connect(ctx.destination);
+    oscGain.connect(getSfxOutput(ctx));
     osc.onended = () => {
       osc.disconnect();
       oscGain.disconnect();
@@ -160,7 +160,7 @@ function playSynthCorrectTone() {
       gain.gain.exponentialRampToValueAtTime(0.25, t0 + delay + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, t0 + delay + 0.18);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.start(t0 + delay);
       osc.stop(t0 + delay + 0.2);
     });
@@ -185,7 +185,7 @@ function playSynthIncorrectTone() {
     gain.gain.exponentialRampToValueAtTime(0.2, t0 + 0.02);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.28);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(getSfxOutput(ctx));
     osc.start(t0);
     osc.stop(t0 + 0.3);
     });
@@ -229,7 +229,7 @@ function playSynthCatRevealTone() {
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.22);
 
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(getSfxOutput(ctx));
     osc.onended = () => {
       osc.disconnect();
       gain.disconnect();
@@ -267,7 +267,7 @@ function playSynthBuzzTone() {
     gain.gain.exponentialRampToValueAtTime(0.28, t0 + 0.01);
     gain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.2);
     osc.connect(gain);
-    gain.connect(ctx.destination);
+    gain.connect(getSfxOutput(ctx));
     osc.onended = () => {
       osc.disconnect();
       gain.disconnect();
@@ -309,7 +309,7 @@ function playSynthDailyDoubleTone() {
     sweepGain.gain.exponentialRampToValueAtTime(0.18, t0 + 0.15);
     sweepGain.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.5);
     sweep.connect(sweepGain);
-    sweepGain.connect(ctx.destination);
+    sweepGain.connect(getSfxOutput(ctx));
     sweep.start(t0);
     sweep.stop(t0 + 0.52);
     nodes.push(sweep, sweepGain);
@@ -325,7 +325,7 @@ function playSynthDailyDoubleTone() {
       gain.gain.exponentialRampToValueAtTime(0.22, start + 0.02);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.6);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.start(start);
       osc.stop(start + 0.62);
       nodes.push(osc, gain);
@@ -410,9 +410,11 @@ let preloadedCelebration = null;
 function applyFinalStandingsVolume() {
   playFinalStandingsSfx.setVolume(FINAL_STANDINGS_MP3_BASE_VOLUME * finalStandingsVolume);
   if (currentCelebrationAudio) {
-    currentCelebrationAudio.volume = currentCelebrationBaseVolume * finalStandingsVolume;
+    currentCelebrationAudio.volume = currentCelebrationBaseVolume * finalStandingsVolume * getSfxVolume();
   }
 }
+
+subscribeSfxVolume(() => applyFinalStandingsVolume());
 
 export async function loadFinalStandingsVolume() {
   try {
@@ -458,7 +460,7 @@ function playSynthFinalStandingsTone() {
       gain.gain.exponentialRampToValueAtTime(0.16 * finalStandingsVolume, start + 0.015);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 0.22);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.start(start);
       osc.stop(start + 0.24);
     });
@@ -474,7 +476,7 @@ function playSynthFinalStandingsTone() {
       gain.gain.exponentialRampToValueAtTime(0.2 * finalStandingsVolume, start + 0.03);
       gain.gain.exponentialRampToValueAtTime(0.0001, start + 1.1);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.start(start);
       osc.stop(start + 1.12);
     });
@@ -536,7 +538,7 @@ export async function playStandingsCelebration(customRef) {
         audio = url ? new Audio(url) : null;
       }
       if (audio) {
-        audio.volume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME * finalStandingsVolume;
+        audio.volume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME * finalStandingsVolume * getSfxVolume();
         currentCelebrationAudio = audio;
         currentCelebrationBaseVolume = FINAL_STANDINGS_CUSTOM_BASE_VOLUME;
         const stopTrackingVolume = () => {

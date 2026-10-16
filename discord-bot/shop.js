@@ -1,9 +1,9 @@
 const express = require('express');
 const db = require('./db');
-const { requireAuth } = require('./auth');
+const { requireAccount } = require('./auth');
 
 const router = express.Router();
-router.use(requireAuth);
+router.use(requireAccount); // guests have no wallet or inventory
 
 // Helpers
 

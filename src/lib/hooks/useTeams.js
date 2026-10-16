@@ -155,7 +155,7 @@ export function useTeams({ sessionRef, touch, persist, editMode, activeClue, set
         if (voice) return voice;
         const p = (players || []).find((pl) => pl.discordUserId === id);
         return p
-          ? { id, username: p.discordUsername, avatarUrl: p.discordAvatarUrl, speaking: speakingIds.has(id), muted: false, deafened: false }
+          ? { id, username: p.discordUsername, avatarUrl: p.discordAvatarUrl, platform: p.platform, speaking: speakingIds.has(id), muted: false, deafened: false }
           : null;
       })
       .filter(Boolean);

@@ -3,7 +3,8 @@ import '../styles/player.css';
 import { createPortal } from 'react-dom';
 import { fetchCatalog, buyItem, equipItem } from '../lib/api/shop';
 import '../styles/skill.css';
-import { getSharedAudioCtx, withRunningCtx } from '../lib/sfx';
+import { getSharedAudioCtx, getSfxOutput, withRunningCtx, playSfxAudio } from '../lib/sfx';
+import { getBuzzSoundUrl } from '../lib/buzzSounds';
 import DomainExpansion from './DomainExpansion';
 
 // ShopModal
@@ -25,7 +26,7 @@ function playSynthPreview(params) {
       gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationMs / 1000);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.onended = () => { osc.disconnect(); gain.disconnect(); };
       osc.start(t0);
       osc.stop(t0 + durationMs / 1000 + 0.05);
@@ -40,11 +41,9 @@ function previewItem(item) {
     return;
   }
   if (item.data.asset) {
-    try {
-      const audio = new Audio(`/api/shop/sfx/${item.data.asset}`);
-      audio.volume = 0.3;
-      audio.play().catch(() => {});
-    } catch (_) { /* best effort */ }
+    const url = getBuzzSoundUrl(item);
+    if (!url) return;
+    playSfxAudio(url, 0.3);
   }
 }
 

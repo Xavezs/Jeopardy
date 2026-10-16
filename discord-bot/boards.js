@@ -1,10 +1,10 @@
 const express = require('express');
 const db = require('./db');
-const { requireAuth } = require('./auth');
+const { requireAccount } = require('./auth');
 const { deleteMediaForBoardData, duplicateMediaForBoardData } = require('./media');
 
 const router = express.Router();
-router.use(requireAuth);
+router.use(requireAccount); // guests cannot create or edit boards
 
 function newId() {
   return 'sess_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 7);

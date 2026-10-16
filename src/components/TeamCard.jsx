@@ -1,4 +1,5 @@
 import React from "react";
+import Avatar from "./Avatar";
 
 // TEAM CARD
 export default function TeamCard({
@@ -106,9 +107,9 @@ export default function TeamCard({
             <div className="team-discord-facepile">
               {discordTeamMembers.map((dm) => (
                 <div className="team-discord-avatar-wrap" key={dm.id}>
-                  <img
+                  <Avatar
                     src={dm.avatarUrl}
-                    alt=""
+                    platform={dm.platform}
                     className={"team-discord-avatar" + (dm.speaking ? " is-speaking" : "")}
                     style={{ opacity: dm.deafened ? 0.4 : 1 }}
                   />

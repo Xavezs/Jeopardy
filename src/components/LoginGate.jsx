@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { discordSdk, getDiscordIdentity } from "../discordSdk";
-import { API_BASE } from "../lib/api";
+import { api, API_BASE } from "../lib/api";
+import { isDiscordActivity } from "../lib/environment";
 import { DiscordContext } from "./DiscordContext";
 
 const RETRY_FLAG_KEY = "jeopardy_discord_retry_attempted_at";
@@ -58,8 +59,20 @@ export default function LoginGate({ children }) {
           setStatusIfActive("error");
         }
       } else {
-        // 2. RUNNING IN STANDALONE BROWSER MODE
-        console.log("Running in local browser mode (Outside Discord iframe)");
+        // 2. RUNNING IN A NORMAL BROWSER
+        // Hosting needs a real Discord account. Players never pass through LoginGate: PlayerView gives them a guest session.
+        try {
+          const { user } = await api("/api/auth/me");
+          if (user && !user.guest) {
+            if (!cancelled) {
+              setAuthData({ sdk: null, user, guildId: null, channelId: null, instanceId: null });
+              setStatus("in");
+            }
+            return;
+          }
+        } catch (err) {
+          console.warn("Could not check web session:", err.message);
+        }
 
         if (import.meta.env.DEV) {
           try {
@@ -67,31 +80,26 @@ export default function LoginGate({ children }) {
               method: "POST",
               credentials: "include",
             });
-
-            if (!res.ok) {
-              throw new Error(`Auth endpoint returned status ${res.status}`);
-            }
-
-            const data = await res.json();
-
-            if (!cancelled) {
-              setAuthData({
-                sdk: null,
-                user: data.user,
-                guildId: "mock_guild",
-                channelId: "mock_channel",
-                instanceId: "mock_instance",
-              });
-              setStatus("in");
+            if (res.ok) {
+              const data = await res.json();
+              if (!cancelled) {
+                setAuthData({
+                  sdk: null,
+                  user: data.user,
+                  guildId: "mock_guild",
+                  channelId: "mock_channel",
+                  instanceId: "mock_instance",
+                });
+                setStatus("in");
+              }
+              return;
             }
           } catch (err) {
-            console.error("Dev authentication failed:", err);
-            setStatusIfActive("error");
+            console.warn("Dev login unavailable:", err.message);
           }
-          return;
         }
 
-        setStatusIfActive("error");
+        setStatusIfActive("login");
       }
     }
 
@@ -105,7 +113,33 @@ export default function LoginGate({ children }) {
   if (status === "initializing") {
     return (
       <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff", background: "#070a20" }}>
-        <h3>Loading Discord Activity…</h3>
+        <h3>{isDiscordActivity ? "Loading Discord Activity…" : "Loading…"}</h3>
+      </main>
+    );
+  }
+
+  if (status === "login") {
+    return (
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff", flexDirection: "column", gap: "12px", background: "#070a20", textAlign: "center", padding: "0 24px" }}>
+        <h3>Log in to host</h3>
+        <p style={{ maxWidth: "420px", color: "#ddd" }}>
+          Hosting and editing boards on the web needs a Discord account. Players can join a room without logging in.
+        </p>
+        <a
+          href={`${API_BASE}/api/auth/discord`}
+          style={{ padding: "8px 20px", borderRadius: "6px", background: "#5865F2", color: "#fff", textDecoration: "none", fontSize: "14px" }}
+        >
+          Log in with Discord
+        </a>
+        <button
+          onClick={() => {
+            sessionStorage.removeItem("jeopardy:active-host-mode");
+            window.location.reload();
+          }}
+          style={{ marginTop: "4px", padding: "4px 12px", borderRadius: "6px", border: "1px solid #444", background: "transparent", color: "#999", cursor: "pointer", fontSize: "12px" }}
+        >
+          Back
+        </button>
       </main>
     );
   }

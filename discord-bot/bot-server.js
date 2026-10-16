@@ -453,7 +453,9 @@ const hostAuth = createHostAuth({
 });
 
 io.use((socket, next) => {
-  socket.userId = hostAuth.userIdFor(socket, socket.handshake?.auth?.ticket);
+  const ident = hostAuth.identityFor(socket, socket.handshake?.auth?.ticket);
+  socket.userId = ident ? ident.id : null;
+  socket.platform = ident ? ident.platform : null; // 'web' | 'activity' | null, from the signed session
   next();
 });
 if (process.env.ALLOW_UNVERIFIED_SOCKETS === '1') {

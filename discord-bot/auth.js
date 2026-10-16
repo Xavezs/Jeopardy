@@ -1,6 +1,7 @@
 const express = require('express');
 const jwt = require('jsonwebtoken');
-const { signTicket } = require('./hostAuth');
+const crypto = require('node:crypto');
+const { signTicket, isGuestId, guestNameFor, GUEST_PREFIX } = require('./hostAuth');
 
 // 1. Initialize Express Router
 const router = express.Router();
@@ -11,6 +12,8 @@ const CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET || process.env.CLIENT_SE
 const DISCORD_REDIRECT_URI = process.env.DISCORD_REDIRECT_URI;
 const SESSION_SECRET = process.env.SESSION_SECRET || ephemeralSecret();
 const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5180';
+// FRONTEND_URL may hold several comma-separated origins (CORS allowlist); redirect to the first.
+const FRONTEND_REDIRECT = FRONTEND_URL.split(',')[0].trim();
 
 function ephemeralSecret() {
   console.warn('[auth] SESSION_SECRET is not set - using a random per-boot secret. Set SESSION_SECRET in .env (32+ random chars).');
@@ -21,7 +24,40 @@ if (process.env.SESSION_SECRET && process.env.SESSION_SECRET.length < 16) {
 }
 
 const COOKIE_NAME = 'jeopardy_session';
+const OAUTH_STATE_COOKIE = 'jeopardy_oauth_state';
 const SCOPES = 'identify';
+
+// Web guests: low-privilege identities minted by the server. Set ALLOW_GUESTS=0 to disable.
+const GUESTS_ENABLED = process.env.ALLOW_GUESTS !== '0';
+const GUEST_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const GUEST_RATE = { windowMs: 60 * 60 * 1000, max: 10 }; // new guest sessions per IP per window
+// Set WEB_COOKIE_CROSS_SITE=1 only if the web frontend and this API are on different sites (e.g. Vercel frontend calling the API directly
+// via VITE_API_URL). Same-origin setups (Vite proxy / tunnel) should leave it off so cookies stay SameSite=Lax.
+const CROSS_SITE_WEB = process.env.WEB_COOKIE_CROSS_SITE === '1';
+
+const guestHits = new Map();
+setInterval(() => {
+  const now = Date.now();
+  for (const [ip, h] of guestHits) if (h.resetAt <= now) guestHits.delete(ip);
+}, 10 * 60 * 1000).unref();
+function guestRateLimited(ip) {
+  const now = Date.now();
+  let h = guestHits.get(ip);
+  if (!h || h.resetAt <= now) { h = { count: 0, resetAt: now + GUEST_RATE.windowMs }; guestHits.set(ip, h); }
+  h.count += 1;
+  return h.count > GUEST_RATE.max;
+}
+
+// Shape sent to the client. `platform` comes from the signed session; `guest` from the server-minted id prefix.
+function publicUser(p) {
+  return {
+    id: p.id,
+    username: p.username,
+    avatarUrl: p.avatarUrl || null,
+    platform: p.src === 'web' ? 'web' : 'activity',
+    guest: isGuestId(p.id),
+  };
+}
 
 function buildAvatarUrl(discordUser) {
   if (discordUser.avatar) {
@@ -36,11 +72,12 @@ function buildAvatarUrl(discordUser) {
 
 function cookieOptions(req) {
   const isDiscordActivity = req.get('x-discord-activity') === '1';
+  const crossSite = isDiscordActivity || CROSS_SITE_WEB;
   return {
     httpOnly: true,
-    sameSite: isDiscordActivity ? 'none' : 'lax',
-    secure: isDiscordActivity,
-    partitioned: isDiscordActivity,
+    sameSite: crossSite ? 'none' : 'lax',
+    secure: crossSite,
+    partitioned: crossSite,
     maxAge: 30 * 24 * 60 * 60 * 1000,
   };
 }
@@ -86,7 +123,7 @@ router.post('/token', async (req, res) => {
     };
 
     // CRITICAL FIX: Sign JWT & Attach Cookie
-    const token = jwt.sign(user, SESSION_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ ...user, src: 'activity' }, SESSION_SECRET, { expiresIn: '30d' });
     res.cookie(COOKIE_NAME, token, cookieOptions(req));
 
     return res.json({ user, access_token: tokenData.access_token });
@@ -99,18 +136,31 @@ router.post('/token', async (req, res) => {
 // 2. STANDARD WEB BROWSER OAUTH2 FLOW
 
 router.get('/discord', (req, res) => {
+  // `state` ties the callback to this browser (blocks login CSRF)
+  const state = crypto.randomBytes(16).toString('hex');
+  res.cookie(OAUTH_STATE_COOKIE, state, { httpOnly: true, sameSite: 'lax', secure: req.secure, maxAge: 10 * 60 * 1000 });
   const params = new URLSearchParams({
     client_id: CLIENT_ID,
     redirect_uri: DISCORD_REDIRECT_URI,
     response_type: 'code',
     scope: SCOPES,
+    state,
   });
   res.redirect(`https://discord.com/api/oauth2/authorize?${params}`);
 });
 
 router.get('/discord/callback', async (req, res) => {
-  const { code } = req.query;
+  const { code, state } = req.query;
+  const expectedState = req.cookies?.[OAUTH_STATE_COOKIE];
+  res.clearCookie(OAUTH_STATE_COOKIE);
   if (!code) return res.status(400).send('Missing code');
+  if (
+    typeof state !== 'string' || typeof expectedState !== 'string' ||
+    state.length !== expectedState.length ||
+    !crypto.timingSafeEqual(Buffer.from(state), Buffer.from(expectedState))
+  ) {
+    return res.status(400).send('Invalid login state. Please start the login again.');
+  }
 
   try {
     const tokenRes = await fetch('https://discord.com/api/oauth2/token', {
@@ -147,10 +197,10 @@ router.get('/discord/callback', async (req, res) => {
       avatarUrl: buildAvatarUrl(discordUser),
     };
 
-    const token = jwt.sign(sessionUser, SESSION_SECRET, { expiresIn: '30d' });
+    const token = jwt.sign({ ...sessionUser, src: 'web' }, SESSION_SECRET, { expiresIn: '30d' });
     res.cookie(COOKIE_NAME, token, cookieOptions(req));
 
-    res.redirect(FRONTEND_URL);
+    res.redirect(FRONTEND_REDIRECT);
   } catch (err) {
     console.error('Discord auth error:', err);
     res.status(500).send('Login failed');
@@ -189,12 +239,42 @@ function optionalAuth(req, res, next) {
   next();
 }
 
+// Like requireAuth, but rejects guests (boards, uploads, shop).
+function requireAccount(req, res, next) {
+  requireAuth(req, res, () => {
+    if (isGuestId(req.user.id)) return res.status(403).json({ error: 'Guests cannot do this. Log in with Discord.' });
+    next();
+  });
+}
+
+// WEB GUEST SESSION: server-minted identity for browser players. Not available inside the Discord Activity.
+router.post('/guest', (req, res) => {
+  if (!GUESTS_ENABLED) return res.status(404).json({ error: 'Not found' });
+  if (req.get('x-discord-activity') === '1') return res.status(403).json({ error: 'Guests are web-only' });
+
+  // Reuse a valid existing session instead of minting a new one (stops farming guest ids by refreshing)
+  const existing = req.cookies?.[COOKIE_NAME];
+  if (existing) {
+    try {
+      return res.json({ user: publicUser(jwt.verify(existing, SESSION_SECRET, { algorithms: ['HS256'] })) });
+    } catch { /* expired or invalid: fall through and mint a fresh guest */ }
+  }
+
+  if (guestRateLimited(req.ip)) return res.status(429).json({ error: 'Too many guest sessions from this network. Try again later.' });
+
+  const id = GUEST_PREFIX + crypto.randomBytes(12).toString('hex');
+  const user = { id, username: guestNameFor(id), avatarUrl: null };
+  const token = jwt.sign({ ...user, src: 'web' }, SESSION_SECRET, { expiresIn: Math.floor(GUEST_TTL_MS / 1000) });
+  res.cookie(COOKIE_NAME, token, { ...cookieOptions(req), maxAge: GUEST_TTL_MS });
+  return res.json({ user: publicUser({ ...user, src: 'web' }) });
+});
+
 router.get('/socket-ticket', requireAuth, (req, res) => {
-  res.json({ ticket: signTicket(jwt, SESSION_SECRET, req.user.id) });
+  res.json({ ticket: signTicket(jwt, SESSION_SECRET, req.user.id, req.user.src) });
 });
 
 router.get('/me', optionalAuth, (req, res) => {
-  res.json({ user: req.user || null });
+  res.json({ user: req.user ? publicUser(req.user) : null });
 });
 router.post('/dev-login', (req, res) => {
   if (process.env.ENABLE_DEV_LOGIN !== '1') return res.status(404).json({ error: 'Not found' });
@@ -204,8 +284,8 @@ router.post('/dev-login', (req, res) => {
     avatarUrl: "https://cdn.discordapp.com/embed/avatars/0.png",
   };
 
-  const token = jwt.sign(mockUser, SESSION_SECRET, { expiresIn: '30d' });
+  const token = jwt.sign({ ...mockUser, src: 'web' }, SESSION_SECRET, { expiresIn: '30d' });
   res.cookie(COOKIE_NAME, token, cookieOptions(req));
   return res.json({ user: mockUser });
 });
-module.exports = { router, requireAuth, optionalAuth, COOKIE_NAME, SESSION_SECRET };
+module.exports = { router, requireAuth, requireAccount, optionalAuth, COOKIE_NAME, SESSION_SECRET };

@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import MediaField from "./MediaField";
+import Avatar from "./Avatar";
 import CustomAudioPlayer from "./CustomAudioPlayer";
 import CustomVideoPlayer from "./CustomVideoPlayer";
 import { useCountdown } from "../lib/hooks/useCountdown";
@@ -685,10 +686,10 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                         {members.length > 0 ? (
                           <div className="final-reveal-avatar-stack">
                             {members.map((m) => (
-                              <img
+                              <Avatar
                                 key={m.id}
                                 src={m.avatarUrl}
-                                alt=""
+                                platform={m.platform}
                                 className={"final-reveal-avatar" + (m.speaking ? " is-speaking" : "")}
                               />
                             ))}
@@ -816,7 +817,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                     >
                       <span className="final-reveal-history-icon">{rd.results?.[t.id] ? "✓" : "✗"}</span>
                       {members.length > 0 ? (
-                        <img src={members[0].avatarUrl} alt="" className="final-reveal-history-avatar" />
+                        <Avatar src={members[0].avatarUrl} platform={members[0].platform} className="final-reveal-history-avatar" />
                       ) : (
                         <div className="final-reveal-history-avatar-fallback">{(t.name || "?").trim().charAt(0).toUpperCase()}</div>
                       )}
@@ -901,10 +902,10 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
                               {members.length > 0 ? (
                                 <div className="final-podium-avatar-stack">
                                   {members.map((m) => (
-                                    <img
+                                    <Avatar
                                       key={m.id}
                                       src={m.avatarUrl}
-                                      alt=""
+                                      platform={m.platform}
                                       className={"final-podium-avatar" + (m.speaking ? " is-speaking" : "")}
                                     />
                                   ))}

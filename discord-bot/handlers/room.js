@@ -1,5 +1,5 @@
 // Socket handlers: room
-const { identityOf, clip, safeAvatarUrl } = require('./guards');
+const { identityOf, safeAvatarUrl, isGuestSocket, displayNameOf, platformOf } = require('./guards');
 
 module.exports = function registerRoomHandlers(socket, ctx) {
   const { hostLocks, roomCodeExists, DISCONNECT_GRACE_MS, MAX_ROOM_CODE_LENGTH, MAX_TEAM_NAME_LENGTH, broadcastBoard, buildVoiceMemberList, detachFromTeamIfAbandoned, gameRooms, hostAuth, invalidatedRoomCodes, io, roomPersistence, sendRoomState, watchersByChannel } = ctx;
@@ -86,6 +86,7 @@ module.exports = function registerRoomHandlers(socket, ctx) {
 
   socket.on('watchVoiceChannel', (rawChannelId) => {
     if (!identityOf(socket, 'unverified')) return;
+    if (isGuestSocket(socket)) return; // guests have no business reading a voice channel roster
     if (typeof rawChannelId !== 'string' || !rawChannelId) return;
     const channelId = rawChannelId.trim();
     if (!channelId) return;
@@ -124,9 +125,10 @@ module.exports = function registerRoomHandlers(socket, ctx) {
     }
     const discordUser = {
       id: verifiedId,
-      username: clip(claimedUser?.username, 64),
-      avatarUrl: safeAvatarUrl(claimedUser?.avatarUrl),
+      username: displayNameOf(socket, claimedUser?.username),
+      avatarUrl: isGuestSocket(socket) ? null : safeAvatarUrl(claimedUser?.avatarUrl),
     };
+    const platform = platformOf(socket);
     if (socket.isHost && socket.hostRoomCode !== roomCode) socket.isHost = false;
 
     socket.join(roomCode);
@@ -152,6 +154,7 @@ module.exports = function registerRoomHandlers(socket, ctx) {
       existing.connected = true;
       existing.discordUsername = discordUser.username || existing.discordUsername;
       existing.discordAvatarUrl = discordUser.avatarUrl || existing.discordAvatarUrl;
+      existing.platform = platform || existing.platform || null;
 
       gameRooms.set(roomCode, room);
 
@@ -183,6 +186,7 @@ module.exports = function registerRoomHandlers(socket, ctx) {
       discordAvatarUrl: discordUser?.avatarUrl || null,
       teamId: team.id,
       role: 'player',
+      platform,
       connected: true,
     });
 

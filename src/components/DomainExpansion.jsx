@@ -5,7 +5,7 @@ import domainExpansionSfx from '../assets/domain_expansion.mp3';
 import domainNameSfx      from '../assets/domain_name.mp3';
 import domainThemeSfx     from '../assets/domain_theme.mp3';
 import shrineImg          from '../assets/domain_shrine.png';
-import { getSharedAudioCtx, withRunningCtx, unlockAudioPlayback } from '../lib/sfx';
+import { getSharedAudioCtx, getSfxOutput, withRunningCtx, unlockAudioPlayback } from '../lib/sfx';
 
 // DomainExpansion
 
@@ -123,7 +123,7 @@ if (typeof window !== 'undefined') {
 
 function makeSynth(ctx, nodes) {
   let nb;
-  const out = ctx.destination;
+  const out = getSfxOutput(ctx);
   const boom = (t, v, f, d) => {
     const o = ctx.createOscillator(), g = ctx.createGain();
     o.frequency.setValueAtTime(f * 2.4, t);
@@ -221,7 +221,7 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
           if (!buffer) return;
           const delay = ms / 1000 - el + AUDIO_LAG;
           const src = ctx.createBufferSource(), gain = ctx.createGain();
-          src.buffer = buffer; gain.gain.value = volume; src.connect(gain).connect(ctx.destination);
+          src.buffer = buffer; gain.gain.value = volume; src.connect(gain).connect(getSfxOutput(ctx));
           if (delay >= 0) src.start(ctx.currentTime + delay);
           else if (-delay < buffer.duration) src.start(ctx.currentTime, -delay);
           else return;

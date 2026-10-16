@@ -77,50 +77,20 @@ db.exec(`
 const seedItems = [
   // Buzz sounds
   {
-    id: 'buzz_airhorn',
-    name: 'Air Horn',
-    description: 'A classic air horn blast.',
+    id: 'vineboom',
+    name: 'Vineboom',
+    description: 'Vineboom Sound Effect',
     price: 300,
     type: 'buzz_sound',
-    data: JSON.stringify({ asset: 'airhorn.mp3', preview: 'airhorn.mp3' }),
+    data: JSON.stringify({ asset: 'vine-boom.mp3', preview: 'vine-boom.mp3' }),
   },
   {
-    id: 'buzz_laser',
-    name: 'Laser',
-    description: 'Futuristic laser zap.',
-    price: 300,
-    type: 'buzz_sound',
-    data: JSON.stringify({ asset: 'laser.mp3', preview: 'laser.mp3' }),
-  },
-  {
-    id: 'buzz_retro',
-    name: 'Retro Beep',
-    description: '8-bit arcade buzz.',
+    id: 'FAHHH',
+    name: '🗣️FAHHH!',
+    description: 'FAHHH Sound Effect',
     price: 200,
     type: 'buzz_sound',
-    data: JSON.stringify({ asset: 'retro.mp3', preview: 'retro.mp3' }),
-  },
-  {
-    id: 'buzz_synth_deep',
-    name: 'Deep Buzz',
-    description: 'Low, heavy synthesised buzz.',
-    price: 150,
-    type: 'buzz_sound',
-    data: JSON.stringify({
-      synth: true,
-      synthParams: { type: 'square', startHz: 110, endHz: 80, durationMs: 250, volume: 0.25 },
-    }),
-  },
-  {
-    id: 'buzz_synth_high',
-    name: 'High Ping',
-    description: 'Sharp high-pitched ping.',
-    price: 150,
-    type: 'buzz_sound',
-    data: JSON.stringify({
-      synth: true,
-      synthParams: { type: 'sine', startHz: 880, endHz: 1200, durationMs: 120, volume: 0.2 },
-    }),
+    data: JSON.stringify({ asset: 'fahhh.mp3', preview: 'fahhh.mp3' }),
   },
   // Skills
   {
@@ -144,6 +114,48 @@ for (const item of seedItems) {
 const syncSkill = db.prepare(`UPDATE shop_items SET description = ?, price = ?, data = ? WHERE id = ?`);
 for (const item of seedItems) {
   if (item.type === 'skill') syncSkill.run(item.description, item.price, item.data, item.id);
+}
+
+const syncBuzzSound = db.prepare(`UPDATE shop_items SET name = ?, description = ?, price = ?, type = ?, data = ? WHERE id = ?`);
+for (const item of seedItems) {
+  if (item.type === 'buzz_sound') {
+    syncBuzzSound.run(item.name, item.description, item.price, item.type, item.data, item.id);
+  }
+}
+
+db.exec('BEGIN');
+try {
+  const legacyItem = db.prepare('SELECT id FROM shop_items WHERE id = ?').get('buzz_airhorn');
+  if (legacyItem) {
+    db.prepare(`
+      INSERT INTO player_inventory (user_id, item_id, equipped, acquired_at)
+      SELECT user_id, 'vineboom', equipped, acquired_at
+      FROM player_inventory
+      WHERE item_id = 'buzz_airhorn'
+      ON CONFLICT(user_id, item_id) DO UPDATE SET
+        equipped = MAX(player_inventory.equipped, excluded.equipped),
+        acquired_at = MIN(player_inventory.acquired_at, excluded.acquired_at)
+    `).run();
+    db.prepare('DELETE FROM player_inventory WHERE item_id = ?').run('buzz_airhorn');
+    db.prepare('DELETE FROM shop_items WHERE id = ?').run('buzz_airhorn');
+  }
+
+  db.prepare(`
+    DELETE FROM player_inventory
+    WHERE item_id IN (
+      SELECT id FROM shop_items
+      WHERE type = 'buzz_sound' AND id NOT IN ('vineboom', 'FAHHH')
+    )
+  `).run();
+  db.prepare(`
+    DELETE FROM shop_items
+    WHERE type = 'buzz_sound' AND id NOT IN ('vineboom', 'FAHHH')
+  `).run();
+
+  db.exec('COMMIT');
+} catch (err) {
+  db.exec('ROLLBACK');
+  throw err;
 }
 
 module.exports = db;
