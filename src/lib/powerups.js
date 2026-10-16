@@ -2,7 +2,7 @@ export const POWERUP_INFO = {
   "2x Points": { kind: "double", desc: "Your team's next correct answer scores double." },
   "Shield":    { kind: "shield", desc: "Cancels your team's next wrong-answer penalty." },
   "Steal":     { kind: "steal", desc: "Take board control — you pick the next clue." },
-  "Freeze":    { kind: "freeze", desc: "Lock another team out of buzzing for this clue (or the next one).", needsTarget: true },
+  "Freeze":    { kind: "freeze", desc: "Delay another team's buzz by 5 seconds for this clue (or the next one).", needsTarget: true },
   "Hint":      { kind: "hint", desc: "Privately reveals the first letter of each answer word.", clueOnly: true },
   "Re-Buzz":   { kind: "rebuzz", desc: "Jump to the front of the buzz queue.", clueOnly: true, needsLive: true },
 };

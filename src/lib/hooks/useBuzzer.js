@@ -6,10 +6,13 @@ export function useBuzzer(roomCode, me) {
   const [buzzerLive, setBuzzerLive] = useState(false);
   const [queue, setQueue] = useState([]);
   const [activeIndex, setActiveIndex] = useState(-1);
+  const [buzzPending, setBuzzPending] = useState(false);
   const { socket, connected } = useSocket();
   const prevQueueLenRef = useRef(0);
   const roomCodeRef = useRef(roomCode);
   roomCodeRef.current = roomCode;
+  const playerIdRef = useRef(me?.id);
+  playerIdRef.current = me?.id;
 
   useEffect(() => {
     if (!socket) return;
@@ -21,14 +24,19 @@ export function useBuzzer(roomCode, me) {
       setBuzzerLive(live);
       setQueue(q || []);
       setActiveIndex(idx);
+      if (!live || (q || []).some((p) => p.id === playerIdRef.current)) setBuzzPending(false);
 
       const len = q ? q.length : 0;
       if (len > prevQueueLenRef.current) playBuzzSfx();
       prevQueueLenRef.current = len;
     };
+    const handleBuzzDelayed = () => setBuzzPending(true);
+    const handleBuzzDelayCancelled = () => setBuzzPending(false);
 
     socket.on("connect", handleConnect);
     socket.on("buzzerState", handleBuzzerState);
+    socket.on("buzzDelayed", handleBuzzDelayed);
+    socket.on("buzzDelayCancelled", handleBuzzDelayCancelled);
 
     if (socket.connected && roomCodeRef.current) {
       socket.emit("joinRoom", roomCodeRef.current);
@@ -37,6 +45,8 @@ export function useBuzzer(roomCode, me) {
     return () => {
       socket.off("connect", handleConnect);
       socket.off("buzzerState", handleBuzzerState);
+      socket.off("buzzDelayed", handleBuzzDelayed);
+      socket.off("buzzDelayCancelled", handleBuzzDelayCancelled);
     };
   }, [socket]);
 
@@ -79,6 +89,7 @@ export function useBuzzer(roomCode, me) {
     winner: activePlayer, // back-compat alias
     connected,
     alreadyBuzzed,
+    buzzPending,
     armBuzzer,
     resetBuzzer,
     nextBuzzer,

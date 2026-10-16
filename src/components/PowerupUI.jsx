@@ -110,7 +110,7 @@ function noticeText(n) {
     case "double": return `${who} activated 2x Points — their next correct answer counts double!`;
     case "shield": return `${who} raised a Shield — their next wrong answer costs nothing.`;
     case "steal":  return `${who} stole board control!`;
-    case "freeze": return `${who} froze ${n.targetTeamName || "a team"} — no buzzing!`;
+    case "freeze": return `${who} used Freeze on ${n.targetTeamName || "a team"} — their buzz is delayed by 5 seconds!`;
     case "hint":   return `${who} used a Hint.`;
     case "rebuzz": return `${who} used Re-Buzz and jumped the queue!`;
     default:       return `${who} used ${n.label}.`;

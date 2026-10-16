@@ -68,13 +68,15 @@ function clearCachedIdentity(roomCode) {
   localStorage.removeItem(`jeopardy:player:${code}:discordUser`);
 }
 
-function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, myPosition, idle, className = "" }) {
+function BuzzStatusText({ buzzerLive, iHaveFloor, alreadyBuzzed, buzzPending, myPosition, idle, className = "" }) {
   const text = idle
     ? "Buzzer is closed — wait for the host…"
     : !buzzerLive
     ? "Buzzer is closed — wait for the host…"
     : iHaveFloor
     ? "You have the floor — go!"
+    : buzzPending
+    ? "Freeze delay — your buzz is accepted in 5 seconds."
     : alreadyBuzzed
     ? `Buzzed in — you're #${myPosition} in line.`
     : "Buzzer is ready!";
@@ -967,7 +969,7 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
     [me.id, me.username, me.discordUser?.id, me.discordUser?.avatarUrl]
   );
 
-  const { queue, activePlayer, alreadyBuzzed, buzz, buzzerLive } = useBuzzer(roomCode, buzzerMe);
+  const { queue, activePlayer, alreadyBuzzed, buzzPending, buzz, buzzerLive } = useBuzzer(roomCode, buzzerMe);
 
   // Cosmetics shop
   const [loadout, setLoadout] = useState({});
@@ -1176,8 +1178,8 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
     if (!activeClue && hint) clearHint();
   }, [activeClue, hint, clearHint]);
 
-  const buzzDisabled = !buzzerLive || iHaveFloor || alreadyBuzzed;
-  const buzzBarActive = buzzerLive || alreadyBuzzed || iHaveFloor;
+  const buzzDisabled = !buzzerLive || iHaveFloor || alreadyBuzzed || buzzPending;
+  const buzzBarActive = buzzerLive || alreadyBuzzed || iHaveFloor || buzzPending;
 
   // LOCAL BOARD FLIP RIPPLE
   const BANNER_HOLD_MS = 750; // must match useBoardGrid.js
@@ -1669,6 +1671,7 @@ function PlayerBoard({ roomCode, me, onRoomCodeChanged, onLeave }) {
               buzzerLive={buzzerLive}
               iHaveFloor={iHaveFloor}
               alreadyBuzzed={alreadyBuzzed}
+              buzzPending={buzzPending}
               myPosition={myPosition}
               className="pv-buzzer-status-compact"
             />

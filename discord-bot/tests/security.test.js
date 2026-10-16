@@ -72,6 +72,76 @@ test('buzz is attributed to the verified user; spoofed ids and fake players are 
   assert.equal(room.buzzer.queue.length, 1);
 });
 
+test('Freeze delays a valid buzz instead of preventing it', async () => {
+  const room = {
+    players: [
+      { discordUserId: 'u1', socketId: 's1', teamId: 't1', discordUsername: 'Delayed Player' },
+      { discordUserId: 'u2', socketId: 's2', teamId: 't2', discordUsername: 'Other Player' },
+    ],
+    activeClue: { catId: 'c1', value: 200 },
+    frozenTeams: { t1: { live: true } },
+    buzzer: { live: true, queue: [], activeIndex: -1 },
+  };
+  const events = [];
+  const handlers = new Map();
+  const player = (id, userId) => ({
+    id, userId, gameRoomCode: 'ABC',
+    on: (ev, fn) => {
+      const socketHandlers = handlers.get(id) || {};
+      socketHandlers[ev] = fn;
+      handlers.set(id, socketHandlers);
+    },
+    emit: (ev, payload) => events.push([ev, payload]),
+  });
+  const ctx = {
+    gameRooms: new Map([['ABC', room]]),
+    FREEZE_BUZZ_DELAY_MS: 15,
+    teamOfPlayer: (_room, uid) => uid === 'u1' ? 't1' : 't2',
+    io: { to: (target) => ({ emit: (ev, payload) => events.push([target, ev, payload]) }) },
+  };
+  registerBuzzer(player('s1', 'u1'), ctx);
+  registerBuzzer(player('s2', 'u2'), ctx);
+
+  handlers.get('s1').buzz({ roomCode: 'ABC', player: { id: 'u1' } });
+  handlers.get('s1').buzz({ roomCode: 'ABC', player: { id: 'u1' } });
+  handlers.get('s2').buzz({ roomCode: 'ABC', player: { id: 'u2' } });
+  assert.deepEqual(room.buzzer.queue.map((p) => p.id), ['u2']);
+  assert.ok(events.some(([ev]) => ev === 'buzzDelayed'));
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(room.buzzer.queue.map((p) => p.id), ['u2', 'u1']);
+  assert.equal(room.buzzer.activeIndex, 0);
+});
+
+test('a delayed Freeze buzz is discarded if the host resets the buzzer', async () => {
+  const room = {
+    players: [{ discordUserId: 'u1', socketId: 'p1', teamId: 't1' }],
+    activeClue: { catId: 'c1', value: 200 },
+    frozenTeams: { t1: { live: true } },
+    buzzer: { live: true, queue: [], activeIndex: -1 },
+  };
+  const handlers = {};
+  const hostHandlers = {};
+  const events = [];
+  const sockets = [
+    { id: 'p1', userId: 'u1', gameRoomCode: 'ABC', on: (ev, fn) => { handlers[ev] = fn; }, emit: (ev) => events.push(ev) },
+    { id: 'host', isHost: true, gameRoomCode: 'ABC', on: (ev, fn) => { hostHandlers[ev] = fn; }, emit() {} },
+  ];
+  const ctx = {
+    gameRooms: new Map([['ABC', room]]),
+    FREEZE_BUZZ_DELAY_MS: 15,
+    teamOfPlayer: () => 't1',
+    io: { to: (target) => ({ emit: (ev) => events.push([target, ev]) }) },
+  };
+  registerBuzzer(sockets[0], ctx);
+  registerBuzzer(sockets[1], ctx);
+
+  handlers.buzz({ roomCode: 'ABC', player: { id: 'u1' } });
+  hostHandlers.resetBuzzer('ABC');
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.deepEqual(room.buzzer.queue, []);
+  assert.ok(events.some((entry) => Array.isArray(entry) && entry[0] === 'p1' && entry[1] === 'buzzDelayCancelled'));
+});
+
 test('host-only relays (activeClue, bgm) are ignored from non-hosts', () => {
   const room = {};
   const c = ctxFor(room);
