@@ -30,7 +30,7 @@ const POWERUPS = [
   { id: "hint",   label: "Hint",      desc: "Eliminate one wrong option on a clue" },
   { id: "rebuzz", label: "Re-Buzz",   desc: "Override the buzzer queue — jump to front" },
   // Skill from the shop
-  { id: "domain", label: "Domain Expansion", desc: "Every other team loses 20% of its score (max 1000). One use per win; spin again to win it back." },
+  { id: "domain", label: "Domain Expansion", desc: "Every other team loses 20% of its score (max 1000)" },
 ];
 const DOMAIN_LABEL = "Domain Expansion";
 const FILLER_POWERUPS = POWERUPS.filter((p) => p.label !== DOMAIN_LABEL);

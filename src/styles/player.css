@@ -1188,6 +1188,13 @@ html::-webkit-scrollbar-thumb, body::-webkit-scrollbar-thumb {
   cursor: pointer;
 }
 
+.pv-bgm-playback-error {
+  margin-top: 8px;
+  color: #ff8d8d;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 .pv-bgm-enable-btn {
   display: flex;
   align-items: center;

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { getMediaUrl } from "../lib/storage";
+import { getBgmMediaUrl } from "../lib/storage";
 import {
   subscribeSfxDucking,
   loadFinalStandingsVolume,
@@ -35,6 +35,7 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
   const [open, setOpen] = useState(false);
   const [mediaUrl, setMediaUrl] = useState("");
   const [needsGesture, setNeedsGesture] = useState(false);
+  const [mediaError, setMediaError] = useState("");
   const [ducking, setDucking] = useState(false);
   useEffect(() => subscribeSfxDucking(setDucking), []);
   const [volume, setVolume] = useState(() => {
@@ -102,14 +103,29 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
 
   useEffect(() => {
     let cancelled = false;
+    let urlToRevoke = "";
 
     async function resolve() {
+      setMediaError("");
       if (!bgm?.fileRef) {
         setMediaUrl("");
         return;
       }
-      const url = await getMediaUrl(bgm.fileRef);
-      if (cancelled) return;
+      let url;
+      try {
+        url = await getBgmMediaUrl(bgm.fileRef);
+      } catch (error) {
+        if (!cancelled) {
+          setMediaUrl("");
+          setMediaError(error.message || "Could not load background music.");
+        }
+        return;
+      }
+      if (cancelled) {
+        if (url.startsWith("blob:")) URL.revokeObjectURL(url);
+        return;
+      }
+      urlToRevoke = url.startsWith("blob:") ? url : "";
       forceFadeInRef.current = true;
       setMediaUrl(url);
     }
@@ -129,6 +145,7 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
 
     return () => {
       cancelled = true;
+      if (urlToRevoke) URL.revokeObjectURL(urlToRevoke);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [bgm?.fileRef]);
@@ -173,7 +190,10 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
             fadeVolumeTo(calcDuckedGain(volumeRef.current, duckingRef.current));
           }
         })
-        .catch(() => setNeedsGesture(true));
+        .catch((error) => {
+          if (error.name === "NotAllowedError") setNeedsGesture(true);
+          else setMediaError(error.message || "The browser could not play this background track.");
+        });
     } else {
       cancelFade();
       audio.pause();
@@ -191,7 +211,10 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
         setNeedsGesture(false);
         fadeVolumeTo(calcDuckedGain(volumeRef.current, duckingRef.current));
       })
-      .catch(() => setNeedsGesture(true));
+      .catch((error) => {
+        if (error.name === "NotAllowedError") setNeedsGesture(true);
+        else setMediaError(error.message || "The browser could not play this background track.");
+      });
   }
 
   const hasTrack = !!bgm?.fileRef;
@@ -205,6 +228,7 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
           <div className="pv-bgm-track-name" title={hasTrack ? bgm.fileName : undefined}>
             {hasTrack ? bgm.fileName || "Background music" : "No background music"}
           </div>
+          {mediaError && <div className="pv-bgm-playback-error" role="alert">{mediaError}</div>}
 
           {hasTrack && needsGesture && (
             <button type="button" className="pv-bgm-enable-btn" onClick={handleEnableSound}>
@@ -292,7 +316,14 @@ export default function PlayerBgmWidget({ roomCode, bgm }) {
         </svg>
       </button>
 
-      {mediaUrl && <audio ref={audioRef} src={mediaUrl} loop={bgm?.loop} />}
+      {mediaUrl && (
+        <audio
+          ref={audioRef}
+          src={mediaUrl}
+          loop={bgm?.loop}
+          onError={() => setMediaError("The browser could not decode or play this background track. Use a direct link to an audio file.")}
+        />
+      )}
     </div>,
     document.body
   );

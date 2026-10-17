@@ -7,6 +7,7 @@ export {
   detectMediaTypeFromFile,
   detectMediaTypeFromUrl,
   getMediaUrl,
+  getBgmMediaUrl,
   isGoogleDriveUrl,
   extractGoogleDriveFileId,
   resolveGoogleDriveMediaType,

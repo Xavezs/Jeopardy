@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { getMediaUrl } from "../lib/storage";
+import { getBgmMediaUrl } from "../lib/storage";
 import { isSoundCloudUrl } from "../lib/soundcloud";
 import { subscribeSfxDucking } from "../lib/boardSfx";
 import SfxVolumeControl from "./SfxVolumeControl";
@@ -49,6 +49,7 @@ export default function BackgroundMusicPlayer({
   const [urlMode, setUrlMode] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [urlError, setUrlError] = useState("");
+  const [mediaError, setMediaError] = useState("");
   const audioRef = useRef(null);
   const fadeRafRef = useRef(null);
   const wasPlayingRef = useRef(false);
@@ -93,12 +94,23 @@ export default function BackgroundMusicPlayer({
     const shouldResume = wasPlayingRef.current;
 
     async function resolve() {
+      setMediaError("");
       if (!track.fileRef) {
         setMediaUrl("");
         setPlaying(false);
         return;
       }
-      const url = await getMediaUrl(track.fileRef);
+      let url;
+      try {
+        url = await getBgmMediaUrl(track.fileRef);
+      } catch (error) {
+        if (!cancelled) {
+          setMediaUrl("");
+          setPlaying(false);
+          setMediaError(error.message || "Could not load background music.");
+        }
+        return;
+      }
       if (cancelled) {
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
         return;
@@ -120,7 +132,10 @@ export default function BackgroundMusicPlayer({
             setPlaying(true);
             fadeVolumeTo(calcGain(duckingRef.current ? volumeRef.current * DUCK_LEVEL : volumeRef.current), FADE_IN_MS);
           })
-          .catch(() => setPlaying(false));
+          .catch((error) => {
+            setPlaying(false);
+            setMediaError(error.message || "The browser could not play this background track.");
+          });
       });
     }
 
@@ -194,7 +209,10 @@ export default function BackgroundMusicPlayer({
           setPlaying(true);
           fadeVolumeTo(calcGain(ducking ? volume * DUCK_LEVEL : volume), FADE_IN_MS);
         })
-        .catch(() => setPlaying(false));
+        .catch((error) => {
+          setPlaying(false);
+          setMediaError(error.message || "The browser could not play this background track.");
+        });
     }
   }
 
@@ -213,6 +231,7 @@ export default function BackgroundMusicPlayer({
     }
     const name = trimmed.split("/").pop().split(/[?#]/)[0] || "External track";
     onSetDirectUrl(trimmed, decodeURIComponent(name));
+    setMediaError("");
     setUrlInput("");
     setUrlError("");
     setUrlMode(false);
@@ -337,6 +356,7 @@ export default function BackgroundMusicPlayer({
               </svg>
             </button>
           </div>
+          {mediaError && <div className="bgm-playback-error" role="alert">{mediaError}</div>}
 
           {onFinalStandingsVolumeChange && (
             <div className="bgm-fs-volume-row">
@@ -389,6 +409,7 @@ export default function BackgroundMusicPlayer({
           onEnded={() => {
             if (!track.loop) setPlaying(false);
           }}
+          onError={() => setMediaError("The browser could not decode or play this background track. Use a direct link to an audio file.") }
         />
       )}
     </div>,

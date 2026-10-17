@@ -420,7 +420,7 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
   }, [rd.revealedTeamIds.length]);
 
   return (
-    <div className="final-jeopardy-board">
+    <div className={"final-jeopardy-board" + (!editMode && rd.phase === "clue" ? " final-jeopardy-board--clue" : "") + (!editMode && rd.phase === "reveal" ? " final-jeopardy-board--reveal" : "")}>
       <button
         type="button"
         className="final-reset-corner"
@@ -613,25 +613,29 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
         const answeredCount = teams.length - notAnswered.length;
         return (
           <div className="final-phase-panel final-clue-reveal">
-            <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
-            <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
-            {clueRemainingMs != null && (
-              <div className={"final-timer" + (clueRemainingMs <= 0 ? " is-expired" : clueRemainingMs <= 10000 ? " is-low" : "")}>
-                {clueRemainingMs <= 0 ? "Time's up!" : Math.ceil(clueRemainingMs / 1000)}
-              </div>
-            )}
-            <p className="final-phase-hint">
-              {answeredCount} / {teams.length} teams locked in
-            </p>
-            {notAnswered.length > 0 && (
-              <p className="final-waiting-on">Waiting on: {notAnswered.map((t) => t.name).join(", ")}</p>
-            )}
-            <button
-              className={"final-advance-btn" + (clueRemainingMs != null && clueRemainingMs <= 0 ? " final-advance-btn--urgent" : "")}
-              onClick={final.startAnswerPhase}
-            >
-              Time's Up — Collect Answers
-            </button>
+            <div className="final-clue-main">
+              <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
+              <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
+            </div>
+            <div className="final-clue-side">
+              {clueRemainingMs != null && (
+                <div className={"final-timer" + (clueRemainingMs <= 0 ? " is-expired" : clueRemainingMs <= 10000 ? " is-low" : "")}>
+                  {clueRemainingMs <= 0 ? "Time's up!" : Math.ceil(clueRemainingMs / 1000)}
+                </div>
+              )}
+              <p className="final-phase-hint">
+                {answeredCount} / {teams.length} teams locked in
+              </p>
+              {notAnswered.length > 0 && (
+                <p className="final-waiting-on">Waiting on: {notAnswered.map((t) => t.name).join(", ")}</p>
+              )}
+              <button
+                className={"final-advance-btn" + (clueRemainingMs != null && clueRemainingMs <= 0 ? " final-advance-btn--urgent" : "")}
+                onClick={final.startAnswerPhase}
+              >
+                Time's Up — Collect Answers
+              </button>
+            </div>
           </div>
         );
       })()}
@@ -669,11 +673,15 @@ export default function FinalJeopardyBoard({ rd, editMode, teams, final, adjustT
           <div className="final-phase-panel">
             {activeTeams.length > 0 ? (
               <div className={`final-reveal-batch${justChangedTeam ? " is-flash" : ""}`}>
-                <span className="final-eyebrow">{isBatch ? `Now Revealing — ${activeTeams.length} Teams` : "Now Revealing"}</span>
-                <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
-                <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
+                <span className="final-reveal-kicker">{isBatch ? `Revealing ${activeTeams.length} teams` : "Revealing"}</span>
+                <div className="final-reveal-context">
+                  <div className="final-reveal-context-media">
+                    <FinalMediaPlayer mediaRef={rd.clue.mediaUrl} mediaType={rd.clue.mediaType} />
+                  </div>
+                  <p className="final-clue-text">{rd.clue.question || "(no question set)"}</p>
+                </div>
                 <div className="final-correct-answer-box">
-                  <span className="final-correct-answer-label">Correct Answer</span>
+                  <span className="final-correct-answer-label">Correct answer</span>
                   <p className="final-correct-answer-text">{rd.clue.answer || "(no answer set)"}</p>
                   <FinalMediaPlayer mediaRef={rd.clue.answerMediaUrl} mediaType={rd.clue.answerMediaType} className="final-answer-media" />
                 </div>

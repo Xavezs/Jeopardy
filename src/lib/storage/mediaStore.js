@@ -123,3 +123,30 @@ export async function getMediaUrl(ref) {
   }
   return ref;
 }
+
+export async function getBgmMediaUrl(ref) {
+  const mediaUrl = await getMediaUrl(ref);
+  if (!mediaUrl) return "";
+
+  const resolvedUrl = new URL(mediaUrl, window.location.href);
+  const apiBaseUrl = new URL(API_BASE || window.location.origin, window.location.href);
+  if (resolvedUrl.origin !== apiBaseUrl.origin || !resolvedUrl.pathname.startsWith("/api/media/")) {
+    return mediaUrl;
+  }
+
+  const response = await fetch(resolvedUrl.href, { credentials: "include" });
+  if (!response.ok) {
+    const responseBody = await response.text();
+    let detail = responseBody.trim();
+    try {
+      const body = JSON.parse(responseBody);
+      detail = body.error || "";
+    } catch {
+    }
+    throw new Error(detail || `Could not load background music (HTTP ${response.status}).`);
+  }
+
+  const blob = await response.blob();
+  if (!blob.size) throw new Error("The background music link returned an empty file.");
+  return URL.createObjectURL(blob);
+}

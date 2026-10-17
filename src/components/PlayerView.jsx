@@ -287,23 +287,30 @@ const FINAL_PHASES = [
 ];
 
 function FinalProgressStepper({ phase }) {
-  const currentIndex = FINAL_PHASES.findIndex((fp) => fp.key === phase);
+  const total = FINAL_PHASES.length;
+  const currentIndex = Math.max(0, FINAL_PHASES.findIndex((fp) => fp.key === phase));
+  const current = FINAL_PHASES[currentIndex];
   return (
-    <div className="pv-final-progress-stepper">
-      {FINAL_PHASES.map((p, i) => {
-        const state = i < currentIndex ? "done" : i === currentIndex ? "active" : "upcoming";
-        return (
-          <React.Fragment key={p.key}>
-            <div className={`pv-final-progress-step is-${state}`}>
-              <span className="pv-final-progress-step-dot">{state === "done" ? "✓" : i + 1}</span>
-              <span className="pv-final-progress-step-label">{p.label}</span>
-            </div>
-            {i < FINAL_PHASES.length - 1 && (
-              <div className={`pv-final-progress-connector${state === "done" ? " is-done" : ""}`} />
-            )}
-          </React.Fragment>
-        );
-      })}
+    <div
+      className="pv-final-progress"
+      role="progressbar"
+      aria-label="Final Jeopardy progress"
+      aria-valuemin={1}
+      aria-valuemax={total}
+      aria-valuenow={currentIndex + 1}
+      aria-valuetext={`${current.label}, step ${currentIndex + 1} of ${total}`}
+    >
+      <div className="pv-final-progress-track">
+        {FINAL_PHASES.map((p, i) => (
+          <span
+            key={p.key}
+            className={"pv-final-progress-seg" + (i < currentIndex ? " is-done" : i === currentIndex ? " is-active" : "")}
+          />
+        ))}
+      </div>
+      <span className="pv-final-progress-text">
+        {current.label} · {currentIndex + 1}/{total}
+      </span>
     </div>
   );
 }
@@ -479,49 +486,56 @@ function FinalJeopardyView({ rd, joinedTeam, teams, submitFinalWager, submitFina
   }
 
   if (rd.phase === "clue" || rd.phase === "answer") {
+    const showTimer = hasTimer && rd.phase === "clue" && remainingMs != null;
     return (
-      <div className="pv-final-panel">
+      <div className="pv-final-panel pv-final-panel--clue">
         <FinalProgressStepper phase={rd.phase} />
-        <div className="pv-final-category">{rd.category}</div>
-        <p className="pv-final-clue-text">{rd.clue?.question || "(no question set)"}</p>
-        <FinalMediaPlayer mediaRef={rd.clue?.mediaUrl} mediaType={rd.clue?.mediaType} />
-        {hasTimer && rd.phase === "clue" && remainingMs != null && (
-          <div className={"pv-final-timer" + (remainingMs <= 0 ? " is-expired" : remainingMs <= 10000 ? " is-low" : "")}>
-            {remainingMs <= 0 ? "Time's up!" : Math.ceil(remainingMs / 1000)}
-          </div>
-        )}
-        {myAnswerLocked || answerSubmitted ? (
-          <p className="pv-final-hint pulse">Answer locked in — waiting for other teams…</p>
-        ) : answersClosed ? (
-          <p className="pv-final-hint">Time's up — answers are closed.</p>
-        ) : (
-          <div className="pv-final-form" onClick={(e) => e.stopPropagation()}>
-            <div className="pv-final-label">Your answer</div>
-            <input
-              type="text"
-              value={answerInput}
-              title={answerInput}
-              autoFocus
-              maxLength={300}
-              onChange={(e) => setAnswerInput(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key !== "Enter") return;
-                submitFinalAnswer(answerInput);
-                setAnswerSubmitted(true);
-              }}
-            />
-            <button
-              type="button"
-              className="pv-btn pv-btn-primary"
-              onClick={() => {
-                submitFinalAnswer(answerInput);
-                setAnswerSubmitted(true);
-              }}
-            >
-              Lock In Answer
-            </button>
-          </div>
-        )}
+        <div className="pv-final-clue-head">
+          <div className="pv-final-category">{rd.category}</div>
+          {showTimer && (
+            <div className={"pv-final-timer" + (remainingMs <= 0 ? " is-expired" : remainingMs <= 10000 ? " is-low" : "")}>
+              {remainingMs <= 0 ? "Time's up!" : Math.ceil(remainingMs / 1000)}
+            </div>
+          )}
+        </div>
+        <div className="pv-final-clue-main">
+          <p className="pv-final-clue-text">{rd.clue?.question || "(no question set)"}</p>
+          <FinalMediaPlayer mediaRef={rd.clue?.mediaUrl} mediaType={rd.clue?.mediaType} />
+        </div>
+        <div className="pv-final-clue-side">
+          {myAnswerLocked || answerSubmitted ? (
+            <p className="pv-final-hint pulse">Answer locked in — waiting for other teams…</p>
+          ) : answersClosed ? (
+            <p className="pv-final-hint">Time's up — answers are closed.</p>
+          ) : (
+            <div className="pv-final-form" onClick={(e) => e.stopPropagation()}>
+              <div className="pv-final-label">Your answer</div>
+              <input
+                type="text"
+                value={answerInput}
+                title={answerInput}
+                autoFocus
+                maxLength={300}
+                onChange={(e) => setAnswerInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return;
+                  submitFinalAnswer(answerInput);
+                  setAnswerSubmitted(true);
+                }}
+              />
+              <button
+                type="button"
+                className="pv-btn pv-btn-primary"
+                onClick={() => {
+                  submitFinalAnswer(answerInput);
+                  setAnswerSubmitted(true);
+                }}
+              >
+                Lock In Answer
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     );
   }

@@ -4,7 +4,9 @@ import '../styles/domain-expansion.css';
 import domainExpansionSfx from '../assets/domain_expansion.mp3';
 import domainNameSfx      from '../assets/domain_name.mp3';
 import domainThemeSfx     from '../assets/domain_theme.mp3';
+import domainCutSfx       from '../assets/domain_cut.mp3';
 import shrineImg          from '../assets/domain_shrine.png';
+import handsImg           from '../assets/domain_hands.png';
 import { getSharedAudioCtx, getSfxOutput, withRunningCtx, unlockAudioPlayback } from '../lib/sfx';
 
 // DomainExpansion
@@ -33,8 +35,9 @@ const AUDIO = [
   { key: 'expansion', at: 0,    volume: 0.9  },
   { key: 'name',      at: 1800, volume: 0.85 },
   { key: 'theme',     at: 4900, volume: 0.75 },
+  { key: 'cut',       at: 5030, volume: 0.85 },   // big transition slash: its peak (~220ms in) lands on the impact frame
 ];
-const CLIP_URLS = { expansion: domainExpansionSfx, name: domainNameSfx, theme: domainThemeSfx };
+const CLIP_URLS = { expansion: domainExpansionSfx, name: domainNameSfx, theme: domainThemeSfx, cut: domainCutSfx };
 
 let clipsPromise = null;
 function loadClips() {
@@ -132,7 +135,7 @@ function makeSynth(ctx, nodes) {
     g.gain.exponentialRampToValueAtTime(0.001, t + d);
     o.connect(g).connect(out); o.start(t); o.stop(t + d); nodes.push(o);
   };
-  const noise = (t, d, f0, f1, v) => {
+  const noise = (t, d, f0, f1, v, pan) => {
     if (!nb) {
       nb = ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate);
       const a = nb.getChannelData(0);
@@ -144,7 +147,10 @@ function makeSynth(ctx, nodes) {
     g.gain.setValueAtTime(0.0001, t);
     g.gain.exponentialRampToValueAtTime(v, t + d * 0.3);
     g.gain.exponentialRampToValueAtTime(0.001, t + d);
-    s.connect(fl).connect(g).connect(out); s.start(t); s.stop(t + d); nodes.push(s);
+    s.connect(fl).connect(g);
+    if (pan != null && ctx.createStereoPanner) { const pn = ctx.createStereoPanner(); pn.pan.value = Math.max(-1, Math.min(1, pan)); g.connect(pn).connect(out); }
+    else g.connect(out);
+    s.start(t); s.stop(t + d); nodes.push(s);
   };
   return { boom, noise };
 }
@@ -154,16 +160,10 @@ const STY = [
   { core: '#fff', out: '#e0102c' }, { core: '#0a0a0a', out: '#fff' }, { core: '#e0102c', out: '#0a0a0a' },
   { core: '#0a0a0a', out: '#e0102c' }, { core: '#fff', out: '#0a0a0a' }, { core: '#fff', out: '#e0102c' },
 ];
-function crackPath() {
-  let x = 0, y = R(20, 40), p = `M0 ${y}`;
-  while (x < 100) { x += R(8, 22); y = Math.max(4, Math.min(56, y + R(-17, 17))); p += ` L${x} ${y}`; }
-  return p;
-}
-
 function Scene({ embers, caster }) {
   return (
     <>
-      <div className="de-sky" /><div className="de-moon" />
+      <div className="de-sky" /><div className="de-moon"><div className="de-hands"><img alt="" src={handsImg} /></div></div>
       <div className="de-smoke" /><div className="de-smoke de-b" /><div className="de-fog" />
       <div className="de-mist de-m1" /><div className="de-mist de-m2" />
       {embers.map((s, i) => <i key={i} className="de-em" style={s} />)}
@@ -185,7 +185,7 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
   const stRef = useRef(null), hARef = useRef(null), hBRef = useRef(null), cvRef = useRef(null);
-  const fxRef = useRef(null), impRef = useRef(null), shrRef = useRef(null), dispRef = useRef(null), turbRef = useRef(null);
+  const fxRef = useRef(null), impRef = useRef(null), shrRef = useRef(null), dispRef = useRef(null), turbRef = useRef(null), rgbRRef = useRef(null), rgbCRef = useRef(null), bkRef = useRef(null);
 
   const embers = useMemo(() => Array.from({ length: 14 }, () => ({
     left: `${R(0, 100)}%`, width: `${R(2, 6)}px`, height: `${R(2, 6)}px`,
@@ -203,13 +203,33 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
     const run = () => {
     const st = stRef.current, hA = hARef.current, hB = hBRef.current, cv = cvRef.current, cx = cv.getContext('2d');
     const t0 = performance.now();
-    let alive = true, shk = 0, raf = 0, wid = 0, sl = [];
+    let alive = true, shk = 0, shDir = null, raf = 0, wid = 0, sl = [], pa = [], sc = [];
     const tm = [], nodes = [];
     const ctx = getSharedAudioCtx();
     const synth = ctx && makeSynth(ctx, nodes);
     const nHit = deltas.length || 3;
     const FADE_AT = HIT_AT + (nHit - 1) * T.hitGap + 1900 + 300;
     const at = (ms, fn) => tm.push(setTimeout(fn, ms));
+    // colour split: red and cyan channels slide apart, then settle
+    const rgbSplit = (px) => {
+      const r = rgbRRef.current, c = rgbCRef.current; if (!r || !c) return;
+      const w0 = performance.now(), D = 180; st.style.filter = 'url(#de-rgb)';
+      const f = (n) => {
+        if (!alive) return;
+        const p = Math.min(1, (n - w0) / D), k = px * (1 - p) * (1 - p);
+        r.setAttribute('dx', (-k).toFixed(1)); c.setAttribute('dx', k.toFixed(1));
+        if (p < 1) requestAnimationFrame(f); else st.style.filter = '';
+      };
+      requestAnimationFrame(f);
+    };
+    // hit pause: freeze every running CSS animation for a beat
+    const freeze = (ms) => {
+      try {
+        const an = st.parentNode.getAnimations({ subtree: true }).filter((a) => a.playState === 'running');
+        an.forEach((a) => a.pause());
+        setTimeout(() => an.forEach((a) => { try { a.play(); } catch (_) {} }), ms);
+      } catch (_) {}
+    };
 
     loadClips().then((clips) => {
       if (!alive || !clips || !ctx) return;
@@ -231,10 +251,8 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
         const B = (ms, ...a) => { const t = when(ms); if (t != null) synth.boom(t, ...a); };
         const N = (ms, ...a) => { const t = when(ms); if (t != null) synth.noise(t, ...a); };
         for (let i = 0; i < T.ringCount; i++) N(T.ring0 + i * T.ringGap, 0.35, 900 + i * 250, 300, 0.12);
-        N(T.draw, 0.26, 1500, 7000, 0.5);                                   // sword draw
         B(T.impact, 1, 42, 1.2); N(T.impact, 0.5, 400, 120, 0.7);            // impact frame
         B(T.open + T.finale, 1, 36, 1.5); N(T.open + T.finale, 0.6, 5000, 300, 0.8); // finale X
-        for (let k = 0; k < nHit; k++) { B(HIT_AT + k * T.hitGap, 0.6, 55, 0.5); N(HIT_AT + k * T.hitGap, 0.15, 2500, 600, 0.3); }
       });
     });
 
@@ -246,16 +264,51 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
     };
     const frame = (now) => {
       shk *= 0.88;
-      st.style.transform = shk > 0.4 ? `translate(${(Math.random() - 0.5) * shk}px,${(Math.random() - 0.5) * shk}px) rotate(${(Math.random() - 0.5) * shk * 0.03}deg)` : '';
+      const sx = (Math.random() - 0.5) * shk, sy = (Math.random() - 0.5) * shk, dm = (Math.random() - 0.5) * shk * 1.6;
+      st.style.transform = shk > 0.4 ? (shDir == null ? `translate(${sx}px,${sy}px)` : `translate(${Math.cos(shDir) * dm + sx * 0.2}px,${Math.sin(shDir) * dm + sy * 0.2}px)`) + ` rotate(${(Math.random() - 0.5) * shk * 0.03}deg)` : '';
       cx.clearRect(0, 0, cv.clientWidth, cv.clientHeight); cx.lineCap = 'butt';
-      sl = sl.filter((s) => now - s.t0 < s.dur);
+      sl = sl.filter((s) => { if (now - s.t0 < s.dur) return true; if (s.w < 8) sc.push({ ...s, born: now }); return false; });
       for (const s of sl) {
         const p = (now - s.t0) / s.dur, h = Math.min(1, p * 4), t = Math.max(0, (p - 0.2) / 0.8);
-        const f = (k) => [s.x1 + (s.x2 - s.x1) * k, s.y1 + (s.y2 - s.y1) * k];
-        const [ax, ay] = f(t), [bx, by] = f(h);
-        cx.globalAlpha = Math.min(1, (1 - t) * 1.4); cx.beginPath(); cx.moveTo(ax, ay); cx.lineTo(bx, by);
-        cx.strokeStyle = s.out; cx.lineWidth = s.w + 5; cx.shadowColor = s.out === '#0a0a0a' ? '#000' : s.out; cx.shadowBlur = s.out === '#0a0a0a' ? 0 : 14; cx.stroke();
-        cx.strokeStyle = s.core; cx.lineWidth = s.w; cx.shadowBlur = 0; cx.stroke();
+        if (h - t < 0.002) continue;
+        if (h < 1 && now - (s.lp || 0) > 14) {   // sparks fly off the blade tip while it sweeps
+          s.lp = now;
+          const ux = s.x2 - s.x1, uy = s.y2 - s.y1, L = Math.hypot(ux, uy) || 1, hx = s.x1 + ux * h, hy = s.y1 + uy * h;
+          for (let q = 0; q < 2; q++) {
+            const al = R(60, 280), pe = R(-200, 200);
+            pa.push({ x: hx, y: hy, vx: ux / L * al - uy / L * pe, vy: uy / L * al + ux / L * pe, t0: now, life: R(220, 420), c: Math.random() < 0.5 ? '#fff' : '#ff3a50' });
+          }
+          if (pa.length > 160) pa.splice(0, pa.length - 160);
+        }
+        const dx = s.x2 - s.x1, dy = s.y2 - s.y1, len = Math.hypot(dx, dy) || 1, nx = -dy / len, ny = dx / len;
+        const STEPS = 12, pts = [];
+        for (let i = 0; i <= STEPS; i++) {
+          const u = i / STEPS, k = t + (h - t) * u;
+          // blade profile: razor tip at the head, thickest near the tail, pointed at both ends
+          pts.push([s.x1 + dx * k, s.y1 + dy * k, Math.sin(Math.PI * Math.pow(u, 0.7))]);
+        }
+        const blade = (half, color) => {
+          cx.beginPath();
+          pts.forEach(([x, y, tp], i) => (i ? cx.lineTo : cx.moveTo).call(cx, x + nx * half * tp, y + ny * half * tp));
+          for (let i = pts.length - 1; i >= 0; i--) cx.lineTo(pts[i][0] - nx * half * pts[i][2], pts[i][1] - ny * half * pts[i][2]);
+          cx.closePath(); cx.fillStyle = color; cx.fill();
+        };
+        cx.globalAlpha = Math.min(1, (1 - t) * 1.4); cx.shadowBlur = 0; cx.lineJoin = 'miter';
+        blade(s.w * 0.8 + 2.5, s.out);   // crisp outline
+        blade(s.w * 0.8, s.core);        // sharp inner blade
+      }
+      sc = sc.filter((q) => now - q.born < 1500);   // faint slash scars that linger and fade
+      cx.lineWidth = 1.2;
+      for (const q of sc) {
+        cx.globalAlpha = 0.24 * (1 - (now - q.born) / 1500);
+        cx.strokeStyle = q.out === '#e0102c' || q.core === '#e0102c' ? '#ff4458' : '#fff';
+        cx.beginPath(); cx.moveTo(q.x1, q.y1); cx.lineTo(q.x2, q.y2); cx.stroke();
+      }
+      pa = pa.filter((q) => now - q.t0 < q.life);
+      for (const q of pa) {
+        const a = (now - q.t0) / q.life, age = (now - q.t0) / 1000, px = q.x + q.vx * age, py = q.y + q.vy * age;
+        cx.globalAlpha = 1 - a; cx.strokeStyle = q.c; cx.lineWidth = 1.8 * (1 - a) + 0.4;
+        cx.beginPath(); cx.moveTo(px, py); cx.lineTo(px - q.vx * 0.04, py - q.vy * 0.04); cx.stroke();
       }
       cx.globalAlpha = 1;
       raf = requestAnimationFrame(frame);
@@ -279,15 +332,17 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
       requestAnimationFrame(f);
     };
 
-    st.dataset.lb = '1';
+    const ovEl = st.parentNode;
+    ovEl.dataset.lb = '1';
     at(T.wave, wave);
-    for (let i = 0; i < T.ringCount; i++) at(T.ring0 + i * T.ringGap, () => { ring(); shk = Math.max(shk, 9 + i * 2); });
+    for (let i = 0; i < T.ringCount; i++) at(T.ring0 + i * T.ringGap, () => { ring(); shk = Math.max(shk, 9 + i * 2); shDir = null; });
     at(T.beat2, () => st.style.setProperty('--bt', '.65s'));
     at(T.beat3, () => st.style.setProperty('--bt', '.38s'));
     at(T.draw, () => st.classList.add('de-draw'));
-    at(T.impact, () => { impRef.current.style.opacity = 1; shk = 28; setTimeout(() => { if (impRef.current) impRef.current.style.opacity = 0; }, 90); });
+    at(T.impact, () => { impRef.current.style.opacity = 1; shk = 28; shDir = null; freeze(80); rgbSplit(14); setTimeout(() => { if (impRef.current) impRef.current.style.opacity = 0; }, 90); });
     at(T.open, () => {
-      st.classList.remove('de-draw'); st.classList.add('de-open', 'de-clear'); st.dataset.lb = '2';
+      st.classList.remove('de-draw'); st.classList.add('de-open', 'de-clear'); ovEl.dataset.lb = '2';
+      if (bkRef.current) bkRef.current.style.display = 'none';
       shrRef.current.className = 'de-shr de-up';
       const o = { duration: 950, easing: 'cubic-bezier(.6,0,.2,1)', fill: 'forwards' };
       hA.animate([{ transform: 'none', opacity: 1 }, { transform: 'translate(-4vw,-15vh)', opacity: 0 }], o);
@@ -297,12 +352,15 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
         const ms = t;
         at(ms, () => {
           const W = cv.clientWidth, H = cv.clientHeight, n = 1 + (ms > 1500) + (Math.random() < 0.4);
-          if (ctx && ctx.state === 'running') synth.noise(ctx.currentTime, 0.14, 3200, 900, 0.16 + Math.min(0.2, ms / 9000));
+          let dir = 0, px = 0.5, steepAny = false;
           for (let i = 0; i < n; i++) {
-            const steep = Math.random() < 0.25;
-            slash(steep ? (Math.random() < 0.5 ? 1 : -1) * R(60, 80) : R(-28, 28), W * R(0.15, 0.85), H * R(0.15, 0.85), W * R(1.25, 1.9), R(2, 5), 460);
+            const steep = Math.random() < 0.25, deg = steep ? (Math.random() < 0.5 ? 1 : -1) * R(60, 80) : R(-28, 28), x = W * R(0.15, 0.85);
+            slash(deg, x, H * R(0.15, 0.85), W * R(1.25, 1.9), R(2, 5), 460);
+            dir = deg; px = x / W; steepAny = steepAny || steep;
           }
-          shk = Math.max(shk, 8 + ms / 200);
+          // whoosh follows the slash: steep = lower and heavier, flat = higher, panned by where it lands
+          if (ctx && ctx.state === 'running') synth.noise(ctx.currentTime, 0.14, 3200, 900, 0.16 + Math.min(0.2, ms / 9000));
+          shk = Math.max(shk, 8 + ms / 200); shDir = (dir + 90) * Math.PI / 180;
         });
         gap = Math.max(45, gap * 0.9); t += gap;
       }
@@ -310,17 +368,20 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
         const W = cv.clientWidth, H = cv.clientHeight;
         slash(-24, W / 2, H / 2, W * 2.1, 14, 760, { core: '#0a0a0a', out: '#fff' });
         setTimeout(() => slash(24, W / 2, H / 2, W * 2.1, 14, 760, { core: '#e0102c', out: '#0a0a0a' }), 90);
-        shk = 34;
+        shk = 34; shDir = null; rgbSplit(20);
       });
       at(T.hits, () => {
-        st.dataset.lb = '0'; shrRef.current.className = 'de-shr de-out'; st.classList.remove('de-open');
+        ovEl.dataset.lb = '0'; shrRef.current.className = 'de-shr de-out'; st.classList.remove('de-open');
+        const ir = document.createElement('div'); ir.className = 'de-iris';   // closing ring contracts toward the caster
+        st.parentNode.insertBefore(ir, st); setTimeout(() => ir.remove(), 1000);
         setHits(deltas.map((d, k) => {
           const el = document.querySelector(`[data-team-id="${d.teamId}"]`);
           if (!el) return null;
           const r = el.getBoundingClientRect();
-          return { id: d.teamId, delta: d.delta, k, x: r.left + r.width / 2, y: r.top, l: r.left, t: r.top, w: r.width, h: r.height, crack: crackPath() };
+          const ab = (v) => Math.abs(parseFloat(String(v).replace(/[^\d.-]/g, '')) || 0), mx = Math.max(1, ...deltas.map((q) => ab(q.delta)));
+          return { id: d.teamId, delta: d.delta, k, x: r.left + r.width / 2, y: r.top, sc: 0.85 + 0.75 * ab(d.delta) / mx };
         }).filter(Boolean));
-        for (let k = 0; k < nHit; k++) at(k * T.hitGap, () => { shk = Math.max(shk, 10); });
+        for (let k = 0; k < nHit; k++) at(k * T.hitGap, () => { shk = Math.max(shk, 10); shDir = null; });
       });
     });
     at(FADE_AT, () => setFading(true));
@@ -349,7 +410,15 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
           <feTurbulence ref={turbRef} type="turbulence" baseFrequency="0.01 0.02" numOctaves="1" seed="3" result="n" />
           <feDisplacementMap ref={dispRef} in="SourceGraphic" in2="n" scale="0" />
         </filter>
+        <filter id="de-rgb" x="-5%" y="-5%" width="110%" height="110%" colorInterpolationFilters="sRGB">
+          <feColorMatrix in="SourceGraphic" type="matrix" values="1 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1 0" result="r" />
+          <feColorMatrix in="SourceGraphic" type="matrix" values="0 0 0 0 0 0 1 0 0 0 0 0 1 0 0 0 0 0 1 0" result="c" />
+          <feOffset ref={rgbRRef} in="r" dx="0" dy="0" result="ro" />
+          <feOffset ref={rgbCRef} in="c" dx="0" dy="0" result="co" />
+          <feBlend in="ro" in2="co" mode="screen" />
+        </filter>
       </svg>
+      <div ref={bkRef} className="de-bk" />
       <div ref={stRef} className="de-stage">
         <div ref={shrRef} className="de-shr"><img alt="" src={shrineImg} /></div>
         <div ref={hARef} className="de-half de-hA"><Scene embers={embers} caster={casterName} /></div>
@@ -359,16 +428,12 @@ export default function DomainExpansion({ onDone, deltas = [], casterName, caste
         </svg>
         <canvas ref={cvRef} className="de-cv" />
         <div ref={fxRef} className="de-fx" />
-        <div className="de-lb" aria-hidden="true"><i /><i /></div>
         <div ref={impRef} className="de-imp" />
       </div>
+      {/* letterbox bars live outside the shaking stage, so they always cover the screen edges */}
+      <div className="de-lb" aria-hidden="true"><i /><i /></div>
       {hits.map((d) => (
-        <React.Fragment key={d.id}>
-          <div className="de-scar" style={{ left: d.l, top: d.t, width: d.w, height: d.h, '--dl': `${d.k * T.hitGap}ms` }}>
-            <svg viewBox="0 0 100 60" preserveAspectRatio="none"><path d={d.crack} pathLength="1" /></svg>
-          </div>
-          <div className="de-dmg" style={{ left: d.x, top: d.y, '--dl': `${d.k * T.hitGap}ms` }}>{d.delta}</div>
-        </React.Fragment>
+        <div key={d.id} className="de-dmg" style={{ left: d.x, top: d.y, '--dl': `${d.k * T.hitGap}ms`, '--sc': d.sc }}>{d.delta}</div>
       ))}
     </div>
   );

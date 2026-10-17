@@ -3072,6 +3072,13 @@ button.btn.btn-end-game:hover{
   cursor: pointer;
 }
 
+.bgm-playback-error {
+  margin-top: 8px;
+  color: #ff8d8d;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
 #teamsWrap .team-card:not(.is-editing){
   min-width: 100px;
   max-width: none;

@@ -96,7 +96,7 @@ const seedItems = [
   {
     id: 'skill_domain_expansion',
     name: 'Domain Expansion',
-    description: 'Unleash a slash attack, every other team loses 20% of its score (max 1000). 10% chance per spin. One use per win.',
+    description: 'Unleash a slash attack, every other team loses 20% of its score (max 1000). 10% chance per spin.',
     price: 2000,
     type: 'skill',
     data: JSON.stringify({ effect: 'cleave', preview: 'domain_expansion', grantChance: 1 }),

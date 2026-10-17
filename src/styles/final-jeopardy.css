@@ -66,7 +66,8 @@
 .final-category-input {
   background: transparent;
   border: none;
-  border-bottom: 2px dashed var(--gold-dim);
+  border: 2px dashed var(--gold-dim);
+  border-radius: 10px;
   text-align: center;
   font-family: var(--font-display);
   font-size: clamp(20px, 3vw, 30px);
@@ -177,8 +178,11 @@
 
 .final-category-input:focus {
   outline: none;
-  border-bottom-style: solid;
+  border: solid;
   border-color: var(--gold);
+}
+.final-category-input:disabled {
+  border: none;
 }
 .final-category-input::placeholder {
   color: var(--text-dim);
@@ -1682,7 +1686,6 @@
 }
 .pv-final-reveal-card.is-my-turn,
 .pv-final-reveal-batch.is-my-turn {
-  border-color: var(--gold);
   animation: fjWinnerGlow 1.6s ease-in-out infinite;
 }
 .pv-final-reveal-card.is-flash,
@@ -2160,4 +2163,362 @@
 .final-reveal-lowest-btn:hover {
   background: rgba(240, 185, 66, 0.22);
   border-color: var(--gold);
+}
+
+/* ==========================================================================
+   COMPACT + WIDE CLUE LAYOUT (player and host)
+   Keeps the clue, image, timer and answer box on one screen. The image
+   height follows the window height, and the answer box stays reachable.
+   ========================================================================== */
+
+/* Player: slim progress bar (replaces the six labelled circles) */
+.pv-final-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.pv-final-progress-track {
+  display: flex;
+  gap: 4px;
+  flex: 1 1 auto;
+}
+.pv-final-progress-seg {
+  flex: 1 1 0;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(240, 185, 66, 0.18);
+}
+.pv-final-progress-seg.is-done { background: rgba(47, 214, 184, 0.6); }
+.pv-final-progress-seg.is-active {
+  background: var(--gold);
+  box-shadow: 0 0 8px rgba(240, 185, 66, 0.55);
+}
+.pv-final-progress-text {
+  flex: none;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gold);
+  white-space: nowrap;
+}
+
+/* Player: clue / answer panel */
+.pv-final-panel--clue {
+  --fj-media-max: min(340px, 30vh);
+  max-width: 560px;
+  gap: 10px;
+  padding: 14px;
+}
+@supports (height: 1dvh) {
+  .pv-final-panel--clue { --fj-media-max: min(340px, 30dvh); }
+}
+.pv-final-clue-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  width: 100%;
+}
+.pv-final-clue-head .pv-final-category {
+  min-width: 0;
+  font-size: 16px;
+  text-align: left;
+  overflow-wrap: anywhere;
+}
+.pv-final-clue-head .pv-final-timer {
+  flex: none;
+  min-width: 64px;
+  padding: 2px 12px;
+  font-size: 22px;
+}
+.pv-final-clue-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+}
+.pv-final-panel--clue .pv-final-clue-text {
+  margin: 0;
+  font-size: clamp(16px, 4.2vw, 19px);
+  line-height: 1.4;
+  padding: 12px 14px;
+}
+.pv-final-clue-main .pv-clue-media {
+  margin-bottom: 0;
+  gap: 8px;
+}
+.pv-final-clue-main .pv-clue-media img,
+.pv-final-clue-main .pv-clue-media .player-video-el {
+  max-height: var(--fj-media-max);
+}
+.pv-final-clue-side {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding-top: 8px;
+  background: linear-gradient(180deg, rgba(10, 14, 51, 0), #0a0e33 24%);
+}
+.pv-final-clue-side .pv-final-form {
+  max-width: none;
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+.pv-final-clue-side .pv-final-label {
+  flex: 1 0 100%;
+  text-align: left;
+}
+.pv-final-clue-side .pv-final-form input {
+  flex: 1 1 140px;
+  width: auto;
+  min-width: 0;
+}
+.pv-final-clue-side .pv-final-form .pv-btn { flex: 0 0 auto; }
+
+/* Player: wide windows get clue + image on the left, answer on the right */
+@media (min-width: 820px) {
+  .pv-final-panel--clue {
+    --fj-media-max: min(480px, 56vh);
+    max-width: min(1040px, 100%);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 300px;
+    grid-template-areas:
+      "progress progress"
+      "head head"
+      "main side";
+    column-gap: 20px;
+    row-gap: 10px;
+    align-items: start;
+    padding: 18px 22px;
+  }
+  .pv-final-panel--clue > .pv-final-progress { grid-area: progress; }
+  .pv-final-panel--clue > .pv-final-clue-head { grid-area: head; }
+  .pv-final-panel--clue > .pv-final-clue-main { grid-area: main; }
+  .pv-final-panel--clue > .pv-final-clue-side {
+    grid-area: side;
+    position: sticky;
+    top: 12px;
+    bottom: auto;
+    padding-top: 0;
+    background: none;
+  }
+  .pv-final-panel--clue .pv-final-clue-text { font-size: clamp(20px, 2.2vw, 26px); }
+  .pv-final-clue-side .pv-final-form {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .pv-final-clue-side .pv-final-label { text-align: center; }
+  .pv-final-clue-side .pv-final-form input { flex: none; width: 100%; }
+}
+@supports (height: 1dvh) {
+  @media (min-width: 820px) {
+    .pv-final-panel--clue { --fj-media-max: min(480px, 56dvh); }
+  }
+}
+
+/* Host: compact header + two columns while the clue is showing */
+.final-clue-main {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-width: 0;
+}
+.final-clue-side {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.final-jeopardy-board--clue {
+  --fj-media-max: min(340px, 32vh);
+  max-width: min(980px, 100%);
+  gap: 10px;
+  padding: 18px 24px;
+}
+@supports (height: 1dvh) {
+  .final-jeopardy-board--clue { --fj-media-max: min(340px, 32dvh); }
+}
+.final-jeopardy-board--clue .final-eyebrow { margin: 0; font-size: 11px; }
+.final-jeopardy-board--clue .final-progress-step-label { display: none; }
+.final-jeopardy-board--clue .final-progress-stepper { margin: 0 auto; }
+.final-jeopardy-board--clue .final-progress-connector { margin-top: 0; }
+.final-jeopardy-board--clue .final-clue-reveal { gap: 12px; }
+.final-jeopardy-board--clue .final-clue-text {
+  margin: 0;
+  font-size: clamp(18px, 2.2vw, 24px);
+  padding: 16px 18px;
+}
+.final-jeopardy-board--clue .final-clue-main .clue-media {
+  margin-bottom: 0;
+  gap: 8px;
+}
+.final-jeopardy-board--clue .final-clue-main .clue-media img {
+  max-height: var(--fj-media-max);
+}
+@media (min-width: 860px) {
+  .final-jeopardy-board--clue { --fj-media-max: min(460px, 52vh); }
+  .final-jeopardy-board--clue .final-clue-reveal {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 260px;
+    column-gap: 22px;
+    align-items: start;
+  }
+  .final-jeopardy-board--clue .final-clue-side {
+    position: sticky;
+    top: 12px;
+  }
+}
+@supports (height: 1dvh) {
+  @media (min-width: 860px) {
+    .final-jeopardy-board--clue { --fj-media-max: min(460px, 52dvh); }
+  }
+}
+
+/* ==========================================================================
+   HOST REVEAL: simple + compact
+   Clue becomes a small context strip, the correct answer is a slim bar,
+   and team tiles are compact so the judging controls stay in view.
+   ========================================================================== */
+.final-jeopardy-board--reveal {
+  gap: 10px;
+  padding: 18px 24px;
+}
+.final-jeopardy-board--reveal .final-eyebrow { margin: 0; font-size: 11px; }
+.final-jeopardy-board--reveal .final-progress-step-label { display: none; }
+.final-jeopardy-board--reveal .final-progress-stepper { margin: 0 auto; }
+.final-jeopardy-board--reveal .final-progress-connector { margin-top: 0; }
+.final-jeopardy-board--reveal .final-phase-panel { gap: 10px; }
+
+.final-reveal-batch {
+  gap: 8px;
+  padding: 0;
+}
+.final-reveal-kicker {
+  align-self: flex-start;
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--gold-dim);
+}
+.final-reveal-context {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  text-align: left;
+}
+.final-reveal-context-media {
+  flex: 0 1 190px;
+  min-width: 0;
+}
+.final-reveal-context-media:empty { display: none; }
+.final-reveal-context-media .clue-media {
+  margin: 0;
+  gap: 0;
+}
+.final-reveal-context-media .clue-media img {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  max-height: 88px;
+  margin: 0;
+  border-radius: 6px;
+}
+.final-reveal-batch .final-reveal-context .final-clue-text {
+  flex: 1 1 0;
+  min-width: 0;
+  margin: 0;
+  font-size: 14px;
+  line-height: 1.4;
+  text-align: left;
+}
+.final-reveal-batch .clue-media { margin-bottom: 0; }
+
+.final-reveal-batch .final-correct-answer-box {
+  flex-direction: row;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: center;
+  gap: 2px 12px;
+  padding: 8px 14px;
+  box-shadow: none;
+}
+.final-reveal-batch .final-correct-answer-label {
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.final-reveal-batch .final-correct-answer-text { font-size: 18px; }
+.final-reveal-batch .final-correct-answer-box .final-answer-media { flex: 1 0 100%; }
+
+.final-reveal-batch .final-reveal-grid {
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+  gap: 8px;
+}
+.final-reveal-batch .final-reveal-tile {
+  flex-direction: row;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 10px;
+}
+.final-reveal-batch .final-reveal-tile .final-reveal-avatar-stack { margin-bottom: 0; }
+.final-reveal-batch .final-reveal-tile .final-reveal-avatar,
+.final-reveal-batch .final-reveal-tile .final-reveal-avatar-fallback {
+  width: 32px;
+  height: 32px;
+  font-size: 14px;
+}
+.final-reveal-batch .final-reveal-tile .final-team-name {
+  font-size: 15px;
+  text-shadow: none;
+}
+.final-reveal-batch .final-reveal-tile > p,
+.final-reveal-batch .final-reveal-tile > .final-judge-preset-row,
+.final-reveal-batch .final-reveal-tile > .final-judge-buttons {
+  flex: 1 0 100%;
+  margin: 0;
+  text-align: center;
+}
+.final-reveal-batch .final-reveal-tile .final-wager-text {
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+.final-reveal-batch .final-judge-buttons-tile { margin-top: 2px; }
+
+.final-reveal-history { gap: 4px; margin-top: 2px; }
+.final-reveal-history-title {
+  margin: 2px 0;
+  font-size: 12px;
+  letter-spacing: 0;
+  text-transform: none;
+  text-align: left;
+}
+.final-reveal-history-row { padding: 5px 10px; }
+
+/* ==========================================================================
+   PLAYER REVEAL: no glow around the outer reveal box
+   (your own team's tile keeps its gold highlight)
+   ========================================================================== */
+.pv-final-reveal-card.is-my-turn,
+.pv-final-reveal-batch.is-my-turn {
+  animation: none;
+  box-shadow: none;
+}
+.pv-final-reveal-card.is-flash,
+.pv-final-reveal-batch.is-flash {
+  animation: none;
 }
