@@ -1,20 +1,6 @@
 import { useState, useEffect } from "react";
 import { SessionStore, migrateClueSchemaIfNeeded } from "../storage";
 
-/* =========================================================================
-   useSessionManager
-   Owns session-LIST operations: init/load/switch/create/rename/duplicate/
-   delete, and the sessions-modal open state. Session state itself
-   (session/sessionRef/touch/persist/flushPersist/saveMsg) lives in
-   usePersistence and is passed in as `persistence` — this hook does not
-   create its own copy of it.
-
-   Takes `ensureClueGrid`/`performFlip` (from useBoardGrid) and `initBgm`
-   (from useBgmSettings) as plain arguments rather than importing those
-   hooks itself, so there's no circular dependency between "sessions" and
-   "board"/"bgm". The orchestrator is the only place that wires them
-   together.
-   ========================================================================= */
 export function useSessionManager({ persistence, ensureClueGrid, performFlip, initBgm, onSwitched, appConfirm }) {
   const { session, setSession, sessionRef, touch, persist, flushPersist, saveMsg } = persistence;
 
@@ -22,7 +8,7 @@ export function useSessionManager({ persistence, ensureClueGrid, performFlip, in
   const [sessionsModalOpen, setSessionsModalOpen] = useState(false);
   const [sessionIndex, setSessionIndex] = useState([]);
 
-  /* ---------------- INIT ---------------- */
+  // INIT
   useEffect(() => {
     (async () => {
       let index = await SessionStore.getIndex();
@@ -41,7 +27,7 @@ export function useSessionManager({ persistence, ensureClueGrid, performFlip, in
       ensureClueGrid(loaded.data);
       setSession(loaded);
 
-      // Load the GLOBAL bgm settings — independent of whichever session just loaded.
+      // Load the GLOBAL bgm settings
       await initBgm(loaded.data);
 
       setReady(true);
@@ -49,11 +35,7 @@ export function useSessionManager({ persistence, ensureClueGrid, performFlip, in
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  /* ---------------- SESSION SWITCHING ---------------- */
-  // Same per-cell stagger ripple used for round switching (see useBoardGrid's
-  // performFlip): the CURRENT board flips out, then — once both the flip-out
-  // animation and the (async) session load have finished — the new board is
-  // swapped in and flips back to idle with the same wave.
+  // SESSION SWITCHING
   async function switchToSession(id) {
     if (!sessionRef.current) return;
     await flushPersist();
@@ -100,7 +82,7 @@ export function useSessionManager({ persistence, ensureClueGrid, performFlip, in
     setSessionsModalOpen(true);
   }
 
-  /* ---------------- SESSIONS MODAL HANDLERS ---------------- */
+  // SESSIONS MODAL HANDLERS
   async function handleRenameSessionCommit(meta, newName) {
     const full = await SessionStore.loadSession(meta.id);
     if (full) {

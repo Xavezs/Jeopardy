@@ -93,7 +93,7 @@ start.bat                     Windows launcher for the local services
    On Windows, `start.bat` can also be used to launch the same services in
    separate terminals.
 
-The Vite development server runs on `http://localhost:5173` and proxies API
+The Vite development server runs on `http://localhost:5180` and proxies API
 and Socket.IO requests to the bot server on port `4001`.
 
 ## Environment variables
@@ -117,7 +117,7 @@ CLIENT_ID=
 DISCORD_CLIENT_SECRET=
 DISCORD_REDIRECT_URI=
 SESSION_SECRET=
-FRONTEND_URL=http://localhost:5173
+FRONTEND_URL=http://localhost:5180
 SUPABASE_URL=
 SUPABASE_SERVICE_ROLE_KEY=
 SUPABASE_BUCKET=jeopardy-media

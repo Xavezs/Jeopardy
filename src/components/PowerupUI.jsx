@@ -3,32 +3,25 @@ import { createPortal } from "react-dom";
 import { POWERUP_INFO, powerupBlockedReason } from "../lib/powerups";
 import "../styles/skill.css";
 
-/* =========================================================================
-   PowerupTray — the player's own granted power-ups as tappable buttons.
-   Rendered both on the board screen and INSIDE the clue view (the clue overlay
-   covers everything else), so a power-up can be fired mid-clue.
-   Domain Expansion is NOT handled here — it has its own button and is blocked
-   while a clue is open.
-   ========================================================================= */
+// PowerupTray
 export function PowerupTray({
-  items,            // labels this player holds, e.g. ["2x Points", "Freeze"]
-  armed,            // public armed list from the server
-  frozenTeams,      // { [teamId]: { live } }
-  teams,            // all teams (for the Freeze picker)
+  items,
+  armed,
+  frozenTeams,
+  teams,
   myTeamId,
   inClue,
   buzzerLive,
   isFinal,
   hasControl,
-  hint,             // { label, hint } | null — private to this player
-  onUse,            // (label, targetTeamId?) => Promise<{ ok } | { error }>
-  inline = false,   // true inside the clue sidebar, false = floating on the board
+  hint,
+  onUse,
+  inline = false,
 }) {
   const [picking, setPicking] = useState(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
-  // Drop stale error/picker when the holdings change or the clue closes.
   useEffect(() => { setPicking(null); }, [items?.length, inClue]);
   useEffect(() => {
     if (!error) return undefined;
@@ -108,9 +101,7 @@ export function PowerupTray({
   );
 }
 
-/* =========================================================================
-   PowerupNotice — short banner on every client when someone fires a power-up.
-   ========================================================================= */
+// PowerupNotice
 const NOTICE_MS = 4200;
 
 function noticeText(n) {
@@ -119,7 +110,7 @@ function noticeText(n) {
     case "double": return `${who} activated 2x Points — their next correct answer counts double!`;
     case "shield": return `${who} raised a Shield — their next wrong answer costs nothing.`;
     case "steal":  return `${who} stole board control!`;
-    case "freeze": return `${who} froze ${n.targetTeamName || "a team"} — no buzzing!`;
+    case "freeze": return `${who} used Freeze on ${n.targetTeamName || "a team"} — their buzz is delayed by 5 seconds!`;
     case "hint":   return `${who} used a Hint.`;
     case "rebuzz": return `${who} used Re-Buzz and jumped the queue!`;
     default:       return `${who} used ${n.label}.`;
@@ -136,7 +127,6 @@ export function PowerupNotice({ notice, onDone }) {
   if (!notice) return null;
   return createPortal(
     <div className="pu-notice" role="status" aria-live="polite" onClick={() => onDone?.()}>
-      <span className="pu-notice-icon" aria-hidden="true">{POWERUP_INFO[notice.label]?.icon || "⚡"}</span>
       <span className="pu-notice-text">{noticeText(notice)}</span>
     </div>,
     document.body

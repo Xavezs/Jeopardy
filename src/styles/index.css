@@ -1,6 +1,6 @@
 html, body { margin: 0; padding: 0; } body { background: #060815; }
 
-/* ── Shop widget button — used on all screens (player, host, role-select) ── */
+/* Shop widget button */
 :root {
   --gold: #f0b942;
   --bg-deep: #060815;
@@ -28,5 +28,4 @@ html, body { margin: 0; padding: 0; } body { background: #060815; }
 }
 .shop-widget-btn:hover {
   border-color: #f0b942;
-  box-shadow: 0 0 0 2px rgba(240,185,66,0.25), 0 4px 14px rgba(0,0,0,0.4);
 }

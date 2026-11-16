@@ -3,21 +3,13 @@ import '../styles/player.css';
 import { createPortal } from 'react-dom';
 import { fetchCatalog, buyItem, equipItem } from '../lib/api/shop';
 import '../styles/skill.css';
-import { getSharedAudioCtx, withRunningCtx } from '../lib/sfx';
+import { getSharedAudioCtx, getSfxOutput, withRunningCtx, playSfxAudio } from '../lib/sfx';
+import { getBuzzSoundUrl } from '../lib/buzzSounds';
 import DomainExpansion from './DomainExpansion';
 
-/* =========================================================================
-   ShopModal
-   Cosmetics shop + loadout manager for players. Opens from the room bar
-   in PlayerView. Two tabs:
-     Shop    — browse and buy items with earned coins
-     Loadout — equip / unequip owned items
+// ShopModal
 
-   Custom buzz sounds are previewed here using the same synth-or-file
-   pattern as boardSfx.js — no extra infrastructure needed.
-   ========================================================================= */
-
-// ── Synth preview for items that have synthParams ─────────────────────────
+// Synth preview for items that have synthParams
 function playSynthPreview(params) {
   try {
     const ctx = getSharedAudioCtx();
@@ -34,7 +26,7 @@ function playSynthPreview(params) {
       gain.gain.exponentialRampToValueAtTime(volume, t0 + 0.01);
       gain.gain.exponentialRampToValueAtTime(0.0001, t0 + durationMs / 1000);
       osc.connect(gain);
-      gain.connect(ctx.destination);
+      gain.connect(getSfxOutput(ctx));
       osc.onended = () => { osc.disconnect(); gain.disconnect(); };
       osc.start(t0);
       osc.stop(t0 + durationMs / 1000 + 0.05);
@@ -49,15 +41,13 @@ function previewItem(item) {
     return;
   }
   if (item.data.asset) {
-    try {
-      const audio = new Audio(`/api/shop/sfx/${item.data.asset}`);
-      audio.volume = 0.3;
-      audio.play().catch(() => {});
-    } catch (_) { /* best effort */ }
+    const url = getBuzzSoundUrl(item);
+    if (!url) return;
+    playSfxAudio(url, 0.3);
   }
 }
 
-// ── Single item card ───────────────────────────────────────────────────────
+// Single item card
 function ItemCard({ item, coins, onBuy, onEquip, onUnequip, buying, equipping, onPreviewSkill }) {
   const canAfford = coins >= item.price;
   const statusLabel = item.equipped ? 'Equipped' : item.owned ? 'Owned' : null;
@@ -104,7 +94,7 @@ function ItemCard({ item, coins, onBuy, onEquip, onUnequip, buying, equipping, o
   );
 }
 
-// ── Main modal ─────────────────────────────────────────────────────────────
+// Main modal
 export default function ShopModal({ onClose, discordUserId, onChanged }) {
   const [tab, setTab] = useState('buzzer'); // 'buzzer' | 'power' | 'inventory'
   const [catalog, setCatalog] = useState(null);
@@ -142,7 +132,6 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
     try {
       const result = await buyItem(item.id);
       setCoins(result.coins);
-      // Skills auto-equip on purchase (server unequips any other skill).
       setCatalog((prev) =>
         prev.map((i) => {
           if (i.id === item.id) return { ...i, owned: true, equipped: !!result.equipped };
@@ -163,7 +152,6 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
     try {
       await equipItem(item.id, true);
       onChanged?.();
-      // Unequip all others of same type, equip this one
       setCatalog((prev) =>
         prev.map((i) => {
           if (i.type === item.type) return { ...i, equipped: i.id === item.id };
@@ -202,7 +190,7 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
 
         {/* Header */}
         <div className="shop-modal-header">
-          <div className="shop-modal-title">Shop (WIP)</div>
+          <div className="shop-modal-title">Shop</div>
           <div className="shop-coins-badge">
             <span className="shop-coins-icon">C</span>
             <span className="shop-coins-value">{coins.toLocaleString()}</span>
@@ -262,11 +250,6 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
 
         {!loading && !error && tab === 'power' && (
           <>
-            <p className="power-tab-intro">
-              Unlock a power here and it's equipped automatically. In a game, the host spins the Power-ups
-              tab of the Randomizer: every player with a power equipped rolls a 10% chance to win it on the
-              slot machine, and once won you can use it once per game.
-            </p>
             {powerItems.length === 0
               ? <p className="shop-empty">You've unlocked every power. Check your Inventory.</p>
               : (
@@ -300,7 +283,7 @@ export default function ShopModal({ onClose, discordUserId, onChanged }) {
         )}
       </div>
 
-      {/* Skill preview cutscene — portaled so it escapes the modal's overflow */}
+      {/* Skill preview cutscene */}
       {previewSkill?.data?.preview === 'domain_expansion' &&
         createPortal(
           <DomainExpansion onDone={() => setPreviewSkill(null)} />,

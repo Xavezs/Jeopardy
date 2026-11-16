@@ -11,9 +11,6 @@ export default function CustomVideoPlayer({
   currentTime: externalCurrentTime,
   disablePlayPause = false,
   disableSeeking = false,
-  // Per-clue "stop after N seconds" cutoff (see useClueEditor.js's
-  // mediaClipSeconds/answerMediaClipSeconds) — undefined/null/0 means play
-  // in full. Built for "1-second music round"-style clues.
   clipSeconds = null,
 }) {
   const videoRef = useRef(null);
@@ -25,18 +22,7 @@ export default function CustomVideoPlayer({
   const [isMuted, setIsMuted] = useState(false);
   const [prevVolume, setPrevVolume] = useState(0.8);
   const [isFullscreen, setIsFullscreen] = useState(false);
-  // True when the browser's autoplay policy rejected a programmatic play()
-  // call (common for <video> with audio unless it follows a fresh click on
-  // this element). We surface a tap-to-unlock overlay rather than silently
-  // leaving the video stalled while currentTime keeps getting synced.
   const [autoplayBlocked, setAutoplayBlocked] = useState(false);
-  // Discord's Activity proxy (/.proxy/...) doesn't reliably forward the
-  // Range-request streaming a <video> element does while buffering larger
-  // files — small clips load fine, bigger ones cut out mid-playback. So
-  // instead of pointing <video src> at the proxied URL directly, we fetch
-  // it once as a single request, convert it to a blob, and play from that
-  // local blob URL — one clean download, no ranged requests for the proxy
-  // to mishandle.
   const { resolvedSrc, prefetching, prefetchError, retry } = useMediaSource(src, {
     label: 'Video',
     logPrefix: '[CustomVideoPlayer]',
@@ -45,7 +31,6 @@ export default function CustomVideoPlayer({
   const isPlaying = externalIsPlaying !== undefined ? externalIsPlaying : internalIsPlaying;
   const clipCutoff = useClipCutoff(clipSeconds, isPlaying, videoRef);
 
-  // Keep video volume in sync with React state
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.volume = isMuted ? 0 : toPerceptualVolume(volume);
@@ -66,16 +51,10 @@ export default function CustomVideoPlayer({
       videoRef.current.pause();
       setAutoplayBlocked(false);
     }
-    // Keep the internal toggle-button state lined up with whatever the
-    // parent just forced (e.g. auto-pausing on a buzz-in). Without this,
-    // internalIsPlaying goes stale after an external override, and the
-    // play/pause button's own click handler (which only reads
-    // internalIsPlaying, not the external prop) ends up doing nothing —
-    // or the opposite of what the icon shows — on the next click.
     setInternalIsPlaying(externalIsPlaying);
   }, [externalIsPlaying, resolvedSrc]);
 
-  // Sync external currentTime from host (corrects drift > 0.5s)
+  // Sync external currentTime from host
   useEffect(() => {
     if (!videoRef.current || !resolvedSrc || externalCurrentTime === undefined) return;
     if (Math.abs(videoRef.current.currentTime - externalCurrentTime) > 0.5) {
@@ -114,9 +93,6 @@ export default function CustomVideoPlayer({
     }
   };
 
-  // Heartbeat: periodically re-broadcast current position while playing, so
-  // late-joining or drifted players get corrected without needing a fresh
-  // play/pause/seek event to happen first.
   useEffect(() => {
     if (!isPlaying || !onPlayStateChange) return;
     const id = setInterval(() => {
@@ -129,10 +105,7 @@ export default function CustomVideoPlayer({
 
   const handleTimeUpdate = () => {
     if (!videoRef.current) return;
-    // Clip cutoff — same reasoning as CustomAudioPlayer's handleTimeUpdate:
-    // checked before the normal state update so a cut clip never briefly
-    // shows a currentTime past the limit, and handled explicitly since the
-    // native `ended` event never fires for a manual cutoff.
+    // Clip cutoff
     if (clipCutoff.hasReachedCutoff(videoRef.current.currentTime)) {
       handleClipEnd();
       return;
@@ -140,12 +113,6 @@ export default function CustomVideoPlayer({
     setCurrentTime(videoRef.current.currentTime);
   };
 
-  // Same externally-visible effect as handleEnded below (pause, notify
-  // parent) but for a clip hitting its configured limit rather than the
-  // media's own natural end. Unlike handleEnded, this rewinds to where
-  // the clip *started* (clipCutoff.clipStartTime()) rather than to 0, so
-  // replaying the clue replays the same clip instead of the start of the
-  // whole file.
   const handleClipEnd = () => {
     const startTime = clipCutoff.clipStartTime();
     videoRef.current.pause();
@@ -218,10 +185,6 @@ export default function CustomVideoPlayer({
     onPlayStateChange && onPlayStateChange(false, 0);
   };
 
-  // Runs on a direct click from the player themselves, which counts as the
-  // "user gesture" browsers require before allowing audible playback. Used
-  // to unstick a play() call that the sync effect above already tried (and
-  // failed) to make programmatically.
   const handleUnlockClick = (e) => {
     e.stopPropagation();
     if (!videoRef.current) return;
@@ -295,10 +258,6 @@ export default function CustomVideoPlayer({
           </div>
         )}
 
-        {/* Controls overlay, YouTube-style, pinned to the bottom of the video
-            frame instead of taking up a separate row underneath it. Stops
-            propagation so tapping a control doesn't also trigger the frame's
-            togglePlay click-through. */}
         <div className="custom-video-controls" onClick={(e) => e.stopPropagation()}>
           {/* Play/Pause Button */}
           <button 

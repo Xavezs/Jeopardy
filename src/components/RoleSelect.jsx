@@ -12,7 +12,6 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
         <p className="role-select-subtitle">Choose how you want to enter this session</p>
       </div>
 
-      {/* Horizontal split card: Host on the left, Join on the right */}
       <div className="role-select-card">        {/* Host panel */}
         <div className="role-select-panel host">
           <div>
@@ -26,7 +25,7 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
           </button>
         </div>
 
-        {/* Divider — vertical on desktop, horizontal on mobile, with an OR pill */}
+        {/* Divider */}
         <div className="role-select-divider">
           <div className="role-select-divider-line" />
           <span className="role-select-divider-badge">OR</span>
@@ -84,7 +83,7 @@ export default function RoleSelect({ onSelectHost, onSelectPlayer, defaultTeamNa
         </div>
       </div>
 
-      {/* Shop widget — bottom-left, same corner pattern as the BGM widget */}
+      {/* Shop widget */}
       <ShopWidget discordUserId={null} />
     </div>
   );

@@ -1,18 +1,7 @@
 import { useState, useRef } from "react";
 
-/**
- * Promise-based confirm/alert dialog, decoupled from any particular UI —
- * pairs with <ConfirmDialog dialog={dialog} onResolve={resolveDialog} />.
- * Fully self-contained: no session data involved, just dialog visibility
- * and a pending-promise resolver.
- *
- * Usage:
- *   const { dialog, appConfirm, appAlert, resolveDialog } = useConfirmDialog();
- *   if (await appConfirm("Delete this?")) { ... }
- *   <ConfirmDialog dialog={dialog} onResolve={resolveDialog} />
- */
 export function useConfirmDialog() {
-  const [dialog, setDialog] = useState(null); // {title, message, okLabel, showCancel}
+  const [dialog, setDialog] = useState(null);
   const dialogResolveRef = useRef(null);
 
   function showDialog({ title, message, okLabel, showCancel }) {

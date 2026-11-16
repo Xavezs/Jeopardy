@@ -1,24 +1,11 @@
-// src/components/LoginGate.jsx
 import { useEffect, useState } from "react";
 import { discordSdk, getDiscordIdentity } from "../discordSdk";
-import { API_BASE } from "../lib/api";
+import { api, API_BASE } from "../lib/api";
+import { isDiscordActivity } from "../lib/environment";
 import { DiscordContext } from "./DiscordContext";
 
-// Tracks "a reload-retry was already attempted for this failure" across the
-// actual page reload the Retry button now does (a plain useState/useRef
-// wouldn't survive that — the whole app remounts fresh). sessionStorage is
-// scoped to this tab/webview, same pattern as discordSdk.js's fake-player
-// identity cache.
-//
-// Why this exists: a plain reload only fixes a WEDGED IFRAME DOCUMENT — it
-// can't fix a wedged RPC SESSION on Discord's own side (see discordSdk.js's
-// resetDiscordSdk() comment). If the first reload-retry didn't clear the
-// error, a second click is very unlikely to either, and just loops the user
-// through the same failure. Once we know a retry already happened, the
-// error screen switches to telling them to close and reopen the Activity
-// panel instead of offering another Retry click.
 const RETRY_FLAG_KEY = "jeopardy_discord_retry_attempted_at";
-const RETRY_FLAG_TTL_MS = 2 * 60 * 1000; // stale after 2 min — treat as a fresh failure
+const RETRY_FLAG_TTL_MS = 2 * 60 * 1000;
 
 function hasRecentRetryAttempt() {
   const raw = sessionStorage.getItem(RETRY_FLAG_KEY);
@@ -46,27 +33,7 @@ export default function LoginGate({ children }) {
 
     async function setupDiscordActivity() {
       if (isDiscordIframe) {
-        // --- 1. RUNNING INSIDE DISCORD ACTIVITY IFRAME ---
-        // Reuses the shared, page-lifetime-cached getDiscordIdentity()
-        // flow from discordSdk.js instead of calling
-        // discordSdk.ready()/commands.authorize() directly here.
-        //
-        // This used to be a separate, uncached implementation. In React
-        // StrictMode (and on any double-mount) that fired a second
-        // authorize() while the first was still in flight, which Discord's
-        // SDK rejects with "Already authing" — the failed call's promise
-        // never resolved status to "in" or "error" cleanly, leaving the
-        // screen stuck on "Loading Discord Activity..." forever. That
-        // failure mode only showed up here (Host) because the Join flow
-        // in App.jsx already went through getDiscordIdentity()'s shared
-        // setupPromise/identityPromise cache; this path didn't.
-        //
-        // getDiscordIdentity() internally calls discordSdk.ready(),
-        // commands.authorize() (scope: ['identify', 'rpc.voice.read'] —
-        // see discordSdk.js for why 'guilds' was dropped), exchanges the
-        // code via POST /api/auth/token, and calls
-        // discordSdk.commands.authenticate() with the resulting
-        // access_token. It returns { id, username, avatarUrl } or null.
+        // 1. RUNNING INSIDE DISCORD ACTIVITY IFRAME
         if (!discordSdk) {
           console.error("Discord SDK unavailable: missing VITE_DISCORD_CLIENT_ID or SDK construction failed.");
           setStatusIfActive("error");
@@ -92,8 +59,20 @@ export default function LoginGate({ children }) {
           setStatusIfActive("error");
         }
       } else {
-        // --- 2. RUNNING IN STANDALONE BROWSER MODE ---
-        console.log("Running in local browser mode (Outside Discord iframe)");
+        // 2. RUNNING IN A NORMAL BROWSER
+        // Hosting needs a real Discord account. Players never pass through LoginGate: PlayerView gives them a guest session.
+        try {
+          const { user } = await api("/api/auth/me");
+          if (user && !user.guest) {
+            if (!cancelled) {
+              setAuthData({ sdk: null, user, guildId: null, channelId: null, instanceId: null });
+              setStatus("in");
+            }
+            return;
+          }
+        } catch (err) {
+          console.warn("Could not check web session:", err.message);
+        }
 
         if (import.meta.env.DEV) {
           try {
@@ -101,31 +80,26 @@ export default function LoginGate({ children }) {
               method: "POST",
               credentials: "include",
             });
-
-            if (!res.ok) {
-              throw new Error(`Auth endpoint returned status ${res.status}`);
-            }
-
-            const data = await res.json();
-
-            if (!cancelled) {
-              setAuthData({
-                sdk: null,
-                user: data.user,
-                guildId: "mock_guild",
-                channelId: "mock_channel",
-                instanceId: "mock_instance",
-              });
-              setStatus("in");
+            if (res.ok) {
+              const data = await res.json();
+              if (!cancelled) {
+                setAuthData({
+                  sdk: null,
+                  user: data.user,
+                  guildId: "mock_guild",
+                  channelId: "mock_channel",
+                  instanceId: "mock_instance",
+                });
+                setStatus("in");
+              }
+              return;
             }
           } catch (err) {
-            console.error("Dev authentication failed:", err);
-            setStatusIfActive("error");
+            console.warn("Dev login unavailable:", err.message);
           }
-          return;
         }
 
-        setStatusIfActive("error");
+        setStatusIfActive("login");
       }
     }
 
@@ -139,7 +113,33 @@ export default function LoginGate({ children }) {
   if (status === "initializing") {
     return (
       <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff", background: "#070a20" }}>
-        <h3>Loading Discord Activity…</h3>
+        <h3>{isDiscordActivity ? "Loading Discord Activity…" : "Loading…"}</h3>
+      </main>
+    );
+  }
+
+  if (status === "login") {
+    return (
+      <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#fff", flexDirection: "column", gap: "12px", background: "#070a20", textAlign: "center", padding: "0 24px" }}>
+        <h3>Log in to host</h3>
+        <p style={{ maxWidth: "420px", color: "#ddd" }}>
+          Hosting and editing boards on the web needs a Discord account. Players can join a room without logging in.
+        </p>
+        <a
+          href={`${API_BASE}/api/auth/discord`}
+          style={{ padding: "8px 20px", borderRadius: "6px", background: "#5865F2", color: "#fff", textDecoration: "none", fontSize: "14px" }}
+        >
+          Log in with Discord
+        </a>
+        <button
+          onClick={() => {
+            sessionStorage.removeItem("jeopardy:active-host-mode");
+            window.location.reload();
+          }}
+          style={{ marginTop: "4px", padding: "4px 12px", borderRadius: "6px", border: "1px solid #444", background: "transparent", color: "#999", cursor: "pointer", fontSize: "12px" }}
+        >
+          Back
+        </button>
       </main>
     );
   }
@@ -148,12 +148,7 @@ export default function LoginGate({ children }) {
     const alreadyRetried = hasRecentRetryAttempt();
 
     if (alreadyRetried) {
-      // A reload-retry already happened and STILL failed — that means the
-      // problem is Discord's own RPC session for this iframe, not
-      // something a page reload (or another one) can reach. Only closing
-      // the Activity panel and relaunching it forces Discord to hand out a
-      // genuinely new session, so tell people that directly instead of
-      // handing them a Retry button that's already shown it won't help.
+      // A reload-retry already happened and STILL failed
       return (
         <main style={{ display: "flex", height: "100vh", alignItems: "center", justifyContent: "center", color: "#ff4d4d", flexDirection: "column", gap: "12px", background: "#070a20", textAlign: "center", padding: "0 24px" }}>
           <h3>Still can't connect to Discord</h3>
@@ -182,23 +177,6 @@ export default function LoginGate({ children }) {
         <p>Make sure this app is running inside Discord as an Activity or backend server is active.</p>
         <button
           onClick={() => {
-            // resetDiscordSdk() alone only rebuilds JS-side SDK state — it
-            // can't fix a "ready handshake timeout" / "No identity
-            // returned", because that means Discord's own RPC channel to
-            // THIS iframe is wedged (see learnings: Discord frequently
-            // suspends/hides the Activity iframe instead of destroying it,
-            // and the RPC transport doesn't reconnect on its own). A full
-            // reload navigates the iframe's document, which is the closest
-            // thing to "close and reopen the panel" a Retry click can do —
-            // window.location.reload() preserves the exact current URL, so
-            // frame_id/channel_id/instance_id (read once at module load in
-            // discordSdk.js) survive intact; nothing is lost since nothing
-            // past this gate has rendered yet.
-            //
-            // Marks the retry attempt BEFORE reloading (sessionStorage
-            // survives the reload) so that if this same error is still
-            // showing after the reload, the branch above takes over instead
-            // of offering a Retry that's already been shown not to help.
             sessionStorage.setItem(RETRY_FLAG_KEY, String(Date.now()));
             window.location.reload();
           }}

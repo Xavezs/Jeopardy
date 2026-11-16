@@ -3,16 +3,6 @@ import { getYoutubeVideoId, loadYoutubeIframeApi } from "../lib/youtube";
 
 let instanceCounter = 0;
 
-// Drop-in replacement for the plain YouTube <iframe> that was previously used
-// in ClueModal. A static iframe has no way to report or receive play state,
-// so a YouTube clue played independently on the host and on every player —
-// no sync at all. This wraps the YouTube IFrame Player API so the component
-// exposes the SAME props/callbacks as CustomVideoPlayer:
-//   - onPlayStateChange(isPlaying, currentTime) -> host reports state up
-//   - isPlaying / currentTime (external)         -> players get driven by host
-//   - disablePlayPause / disableSeeking          -> players can't fight the host
-// This lets it plug into your existing onDuckMusic / onMediaStateChange wiring
-// with zero changes to that side of the pipeline.
 export default function YoutubePlayer({
   src,
   onError,
@@ -41,7 +31,7 @@ export default function YoutubePlayer({
       : null;
   }, [clipSeconds]);
 
-  // Create the player once per videoId.
+  // Create the player once per videoId
   useEffect(() => {
     if (!videoId) return;
     let destroyed = false;
@@ -49,19 +39,13 @@ export default function YoutubePlayer({
     loadYoutubeIframeApi()
       .then((YT) => {
         if (destroyed) return;
-        // Direct the YT.Player constructor to load the iframe directly from
-        // https://www.youtube.com. Proxying the entire iframe document under our same-origin
-        // domain (via /youtube-embed) breaks YouTube's root-relative asset requests
-        // (like /s/player/...), causing 404s and a black video player.
-        // As long as youtube.com is configured as an allowed frame origin in the Discord
-        // Developer Portal, Discord's CSP will permit framing it directly.
         playerRef.current = new YT.Player(elementIdRef.current, {
           videoId,
           host: "https://www.youtube.com",
           playerVars: {
             rel: 0,
             playsinline: 1,
-            controls: 0, // we render our own controls, same as CustomVideoPlayer
+            controls: 0,
             modestbranding: 1,
             origin: window.location.origin,
           },
@@ -74,7 +58,6 @@ export default function YoutubePlayer({
             },
             onStateChange: (e) => {
               if (destroyed) return;
-              // YT.PlayerState: -1 unstarted, 0 ended, 1 playing, 2 paused, 3 buffering, 5 cued
               if (e.data === 1) {
                 setInternalIsPlaying(true);
                 onPlayStateChange && onPlayStateChange(true, e.target.getCurrentTime());
@@ -111,8 +94,6 @@ export default function YoutubePlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId]);
 
-  // The IFrame API has no timeupdate event, so poll while mounted to keep
-  // the seek bar and clock moving.
   useEffect(() => {
     if (!ready) return;
     const id = setInterval(() => {
@@ -123,9 +104,7 @@ export default function YoutubePlayer({
     return () => clearInterval(id);
   }, [ready]);
 
-  // Heartbeat: same pattern as CustomVideoPlayer — periodically re-broadcast
-  // position while playing so late-joining or drifted players self-correct
-  // without waiting on a fresh play/pause/seek event.
+  // Heartbeat: same pattern as CustomVideoPlayer
   useEffect(() => {
     if (!ready || !isPlaying || !onPlayStateChange) return;
     const id = setInterval(() => {
@@ -136,7 +115,6 @@ export default function YoutubePlayer({
     return () => clearInterval(id);
   }, [ready, isPlaying, onPlayStateChange]);
 
-  // Sync external isPlaying (player clients being driven by the host's state).
   useEffect(() => {
     if (!ready || !playerRef.current || externalIsPlaying === undefined) return;
     if (externalIsPlaying) {
@@ -147,8 +125,7 @@ export default function YoutubePlayer({
     }
   }, [externalIsPlaying, ready]);
 
-  // Sync external currentTime. YouTube seeks are coarser/slower than <video>,
-  // so a wider drift threshold (1s) avoids constant micro-seeking/stutter.
+  // Sync external currentTime
   useEffect(() => {
     if (!ready || !playerRef.current || externalCurrentTime === undefined) return;
     const current = playerRef.current.getCurrentTime ? playerRef.current.getCurrentTime() : 0;

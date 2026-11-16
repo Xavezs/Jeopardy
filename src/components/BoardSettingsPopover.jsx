@@ -1,11 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 
-/* =========================================================================
-   BoardSettingsPopover
-   Gear button → popover with on/off toggle switches for board settings.
-   ========================================================================= */
+// BoardSettingsPopover
 
-// Reusable toggle-switch row: label on the left, switch on the right.
 function SettingRow({ label, checked, onChange, title }) {
   return (
     <div className="bsp-row" title={title}>
@@ -80,7 +76,7 @@ export default function BoardSettingsPopover({
       {open && (
         <div className="board-settings-popover" role="dialog" aria-label="Board settings">
 
-          {/* ── Answer Timer ───────────────────────────────── */}
+          {/* Answer Timer */}
           <div className="bsp-group-label">Answer Timer</div>
 
           <SettingRow
@@ -107,7 +103,7 @@ export default function BoardSettingsPopover({
 
           <div className="bsp-divider" />
 
-          {/* ── Daily Double Rules ─────────────────────────── */}
+          {/* Daily Double Rules */}
           <div className="bsp-group-label">Daily Double Rules</div>
 
           {onToggleDdBuzzerEnabled && (

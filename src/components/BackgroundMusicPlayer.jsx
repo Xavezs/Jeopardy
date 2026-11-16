@@ -1,65 +1,23 @@
 import React, { useState, useEffect, useRef } from "react";
 import { createPortal } from "react-dom";
-import { getMediaUrl } from "../lib/storage";
+import { getBgmMediaUrl } from "../lib/storage";
 import { isSoundCloudUrl } from "../lib/soundcloud";
 import { subscribeSfxDucking } from "../lib/boardSfx";
+import SfxVolumeControl from "./SfxVolumeControl";
 
-/* =========================================================================
-   BACKGROUND MUSIC PLAYER
-   A small floating widget (bottom-right corner) that stays out of the way
-   of the board. Collapsed, it's just a round note button; clicking it
-   opens a compact panel with upload / play / volume / loop controls.
-
-   Track source: an uploaded file (stored in MediaStore) OR a direct
-   http(s) audio link — both play through a plain <audio> element.
-
-   NOTE: SoundCloud embedding was removed. Their widget needs several
-   cross-origin scripts (widget.sndcdn.com, dwt.soundcloud.com, etc.)
-   that Discord's Activity CSP blocks no matter how many URL Mappings are
-   added, since those domains are hardcoded as absolute URLs inside
-   SoundCloud's own HTML — not something Discord's simple prefix-based
-   proxy can rewrite. See lib/soundcloud.js for the full story. A pasted
-   SoundCloud link is now just rejected with a clear message instead of
-   silently failing.
-   ========================================================================= */
-// How much quieter the track gets while ducked (Daily Double, Final
-// Standings celebration, Final Jeopardy media, clue video/audio, etc.)
-// — 0 means fully silent. Was 0.15 (still faintly audible under
-// whatever triggered the duck); changed to a hard mute since that's
-// what "duck the BGM" was actually meant to mean here — e.g. Final
-// Standings is supposed to be the celebration sound alone, not the
-// celebration mixed with a quiet BGM bed. The transition itself is
-// still smooth (see fadeVolumeTo below) — only the target changed, not
-// how it gets there.
+// BACKGROUND MUSIC PLAYER
 const DUCK_LEVEL = 0;
 const DUCK_FADE_MS = 700;
-// Master ceiling for the BGM source itself — even at slider max, actual
-// gain never exceeds this. Keep in sync with PlayerBgmWidget.jsx so the
-// track is equally quiet overall for host and players alike.
+// Master ceiling for the BGM source itself
 const MASTER_BGM_GAIN = 0.6;
-// How long the fade-in takes whenever playback actually starts, so it
-// doesn't snap straight to full gain. Keep in sync with PlayerBgmWidget.jsx.
 const FADE_IN_MS = 900;
-// How long the OLD track fades out before a round switch (perRound mode)
-// swaps the <audio> src to the new round's track. Kept shorter than
-// FADE_IN_MS so a round change reads as "duck out, then bloom back in"
-// rather than two equally-long fades blurring into one long crossfade.
-// Keep in sync with PlayerBgmWidget.jsx.
 const ROUND_FADE_OUT_MS = 500;
 
-// Human hearing perceives loudness roughly logarithmically, while
-// <audio>.volume is linear — squaring the slider value (a common taper
-// approximation) makes the low end of the slider actually feel quiet.
-// Mirrors calcGain() in PlayerBgmWidget.jsx so host and players behave
-// the same way for the same slider position.
 function calcGain(sliderVolume) {
   return sliderVolume * sliderVolume * MASTER_BGM_GAIN;
 }
 
 export default function BackgroundMusicPlayer({
-  // `track` is the currently ACTIVE track — either the universal track or
-  // the current round's track, already resolved by useBgmSettings based
-  // on `mode`. `volume` stays separate/global (see bgmStore.js).
   track,
   volume,
   mode = "universal",
@@ -75,24 +33,9 @@ export default function BackgroundMusicPlayer({
   finalStandingsVolume = 1,
   onFinalStandingsVolumeChange,
 }) {
-  // Merge the caller's own ducking signal (clue video/audio play state,
-  // wired in from JeopardyBoard/useClueEditor) with boardSfx's shared bus
-  // (Daily Double sting, Final Standings celebration, Final Jeopardy
-  // media) — either source is enough to duck. Previously this component
-  // only ever looked at the prop, so the bus's signal never actually
-  // reached the host's own BGM despite PlayerBgmWidget already listening
-  // to it on the player side.
   const [busDucking, setBusDucking] = useState(false);
   useEffect(() => subscribeSfxDucking(setBusDucking), []);
   const ducking = duckingProp || busDucking;
-  // Effects below that intentionally exclude `ducking`/`volume` from
-  // their dependency array (round-transition fade-in, mainly) still
-  // need the *current* value at the moment they actually act, not
-  // whatever was captured when the effect was set up — the async gap
-  // between "effect starts" (old track fading out, new URL resolving)
-  // and "fade-in actually happens" is exactly the kind of window
-  // ducking can flip during. Mirrored via refs kept in sync every
-  // render instead.
   const duckingRef = useRef(ducking);
   const volumeRef = useRef(volume);
   useEffect(() => {
@@ -106,12 +49,9 @@ export default function BackgroundMusicPlayer({
   const [urlMode, setUrlMode] = useState(false);
   const [urlInput, setUrlInput] = useState("");
   const [urlError, setUrlError] = useState("");
+  const [mediaError, setMediaError] = useState("");
   const audioRef = useRef(null);
   const fadeRafRef = useRef(null);
-  // Tracks whether we were mid-playback right before `track` changed, so
-  // that switching rounds in "perRound" mode can carry playback straight
-  // into the new track instead of forcing the host to hit play again
-  // every round switch.
   const wasPlayingRef = useRef(false);
   useEffect(() => {
     wasPlayingRef.current = playing;
@@ -148,27 +88,29 @@ export default function BackgroundMusicPlayer({
     fadeRafRef.current = requestAnimationFrame(step);
   }
 
-  // Resolve the current track's fileRef into a playable URL. Old saved
-  // settings from before SoundCloud was removed might still have
-  // source: "soundcloud" lying around — just ignore that and fall back
-  // to fileRef (or nothing) rather than trying to handle it.
-  //
-  // If we were already playing right before `track` changed (typically:
-  // host switched rounds while music was playing in "perRound" mode),
-  // carry playback straight into the new track instead of leaving it
-  // paused — that's the whole point of having different music per round.
   useEffect(() => {
     let cancelled = false;
     let urlToRevoke = "";
     const shouldResume = wasPlayingRef.current;
 
     async function resolve() {
+      setMediaError("");
       if (!track.fileRef) {
         setMediaUrl("");
         setPlaying(false);
         return;
       }
-      const url = await getMediaUrl(track.fileRef);
+      let url;
+      try {
+        url = await getBgmMediaUrl(track.fileRef);
+      } catch (error) {
+        if (!cancelled) {
+          setMediaUrl("");
+          setPlaying(false);
+          setMediaError(error.message || "Could not load background music.");
+        }
+        return;
+      }
       if (cancelled) {
         if (url && url.startsWith("blob:")) URL.revokeObjectURL(url);
         return;
@@ -179,8 +121,6 @@ export default function BackgroundMusicPlayer({
         setPlaying(false);
         return;
       }
-      // Wait a tick so the <audio> element actually picks up the new src
-      // before we try to play it.
       requestAnimationFrame(() => {
         if (cancelled) return;
         const audio = audioRef.current;
@@ -192,19 +132,14 @@ export default function BackgroundMusicPlayer({
             setPlaying(true);
             fadeVolumeTo(calcGain(duckingRef.current ? volumeRef.current * DUCK_LEVEL : volumeRef.current), FADE_IN_MS);
           })
-          .catch(() => setPlaying(false));
+          .catch((error) => {
+            setPlaying(false);
+            setMediaError(error.message || "The browser could not play this background track.");
+          });
       });
     }
 
     async function run() {
-      // If a track was already playing right before this switch (a
-      // round change in "perRound" mode is the only way `track` changes
-      // while music is live), fade it out first instead of just letting
-      // React swap the <audio> src out from under it — without this,
-      // switching rounds hard-cut the old track dead silent the instant
-      // the src attribute changed, then hard-started the new one at full
-      // volume a tick later. This makes it read as a proper "duck out,
-      // swap, bloom in" transition instead.
       const audio = audioRef.current;
       if (shouldResume && audio && !audio.paused) {
         await new Promise((res) => {
@@ -274,7 +209,10 @@ export default function BackgroundMusicPlayer({
           setPlaying(true);
           fadeVolumeTo(calcGain(ducking ? volume * DUCK_LEVEL : volume), FADE_IN_MS);
         })
-        .catch(() => setPlaying(false));
+        .catch((error) => {
+          setPlaying(false);
+          setMediaError(error.message || "The browser could not play this background track.");
+        });
     }
   }
 
@@ -293,6 +231,7 @@ export default function BackgroundMusicPlayer({
     }
     const name = trimmed.split("/").pop().split(/[?#]/)[0] || "External track";
     onSetDirectUrl(trimmed, decodeURIComponent(name));
+    setMediaError("");
     setUrlInput("");
     setUrlError("");
     setUrlMode(false);
@@ -417,6 +356,7 @@ export default function BackgroundMusicPlayer({
               </svg>
             </button>
           </div>
+          {mediaError && <div className="bgm-playback-error" role="alert">{mediaError}</div>}
 
           {onFinalStandingsVolumeChange && (
             <div className="bgm-fs-volume-row">
@@ -445,6 +385,7 @@ export default function BackgroundMusicPlayer({
               />
             </div>
           )}
+          <SfxVolumeControl />
         </div>
       )}
 
@@ -468,6 +409,7 @@ export default function BackgroundMusicPlayer({
           onEnded={() => {
             if (!track.loop) setPlaying(false);
           }}
+          onError={() => setMediaError("The browser could not decode or play this background track. Use a direct link to an audio file.") }
         />
       )}
     </div>,

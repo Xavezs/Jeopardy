@@ -1,14 +1,7 @@
 import React, { useState, useRef, useEffect } from "react";
 import { OPEN_CONTROL } from "../lib/hooks/useControlSync";
 
-// Manual "who gets to pick next" override. Only players with a resolved
-// discordUserId are assignable — that's the same key hostSetControl and
-// the rest of the control-sync system use (see useControlSync.js), so
-// anyone without one (e.g. testing outside Discord) can't be targeted.
-// Deliberately NOT filtered to `connected === true`: the main reason a
-// host reaches for this is exactly because someone disconnected mid-game
-// and control needs to move off them — hiding disconnected players would
-// remove the one option a host needs in that moment.
+// Manual "who gets to pick next" override
 function ControlAssign({ players, teams, controlDiscordUserId, onHostSetControl }) {
   const assignable = (players || []).filter((p) => p.discordUserId);
   if (assignable.length === 0) return null;
@@ -56,13 +49,6 @@ export default function Toolbar({
 }) {
   const [copyState, setCopyState] = useState("idle"); // "idle" | "copied" | "error"
   const [rotatingRoomCode, setRotatingRoomCode] = useState(false);
-  // The "⋯" menu holding the setup/rare-use actions (Edit Board, Sessions,
-  // Reset Round, New Code) — kept out of the main row so the buttons a
-  // host actually taps mid-game (Randomize Order, End Game, the room
-  // code) aren't competing for attention with ones only used once per
-  // session. Closes on an outside click or Escape, same as the app's
-  // modals, so it doesn't linger open once the host has picked something
-  // or clicked elsewhere on the board.
   const [overflowOpen, setOverflowOpen] = useState(false);
   const overflowRef = useRef(null);
 
@@ -102,9 +88,7 @@ export default function Toolbar({
 
     let success = false;
 
-    // Preferred path: async Clipboard API. This can silently be missing or
-    // throw inside the Discord Activity iframe (no clipboard-write
-    // permission), so we can't rely on it alone.
+    // Preferred path: async Clipboard API
     try {
       const clipboardAllowed = navigator.permissions
         ? await navigator.permissions.query({ name: "clipboard-write" }).then((permission) => permission.state !== "denied")
@@ -118,8 +102,6 @@ export default function Toolbar({
       success = false;
     }
 
-    // Fallback: hidden textarea + execCommand, works in more restrictive
-    // embedded contexts than the async Clipboard API.
     if (!success) {
       try {
         const textarea = document.createElement("textarea");
